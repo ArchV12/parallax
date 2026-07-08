@@ -1,0 +1,269 @@
+class_name PlanetGenerator
+extends RefCounted
+
+# Procedural planet builder — deterministic: the same PlanetParams always
+# yields the same planet. Owned by no scene; the Cosmic Forge drives it today
+# and the game's system generator will drive it later.
+#
+# Output is a Node3D containing:
+#   - "Terrain": icosphere displaced by seeded FBM noise, vertex-colored by
+#     height band (seabed → beach → lowland → highland → mountain → snow)
+#   - "Ocean" (if ocean_level > 0): translucent sphere at sea level
+
+# FBM output rarely reaches ±1; treat this as the practical height range.
+const NOISE_MAX := 0.75
+
+const ATMO_SHADER := preload("res://shaders/atmosphere.gdshader")
+
+static func generate(params: PlanetParams) -> Node3D:
+	# Zero relief would make the terrain and ocean spheres coincident and
+	# z-fight (dot shimmer) — the generator guards it rather than trusting
+	# every future caller's UI to.
+	params.terrain_height = maxf(params.terrain_height, 0.01)
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = params.seed
+	var palette := _make_palette(rng)
+
+	var noise := FastNoiseLite.new()
+	noise.seed = params.seed
+	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	noise.fractal_type = FastNoiseLite.FRACTAL_FBM
+	noise.fractal_octaves = 5
+	noise.fractal_gain = params.roughness
+	noise.frequency = 0.9 * params.continent_scale
+
+	var sea: float = lerpf(-NOISE_MAX, NOISE_MAX, params.ocean_level)
+
+	var root := Node3D.new()
+	root.name = "Planet"
+	root.add_child(_build_terrain(params, noise, sea, palette))
+	if params.ocean_level > 0.01:
+		root.add_child(_build_ocean(params, sea, palette))
+	if params.atmosphere > 0.01:
+		root.add_child(_build_atmosphere(params, palette))
+	return root
+
+
+# --- Terrain ---
+
+static func _build_terrain(params: PlanetParams, noise: FastNoiseLite,
+		sea: float, palette: Dictionary) -> MeshInstance3D:
+	var sphere := _icosphere(params.detail)
+	var verts: PackedVector3Array = sphere[0]
+	var indices: PackedInt32Array = sphere[1]
+
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for unit in verts:
+		var h := noise.get_noise_3dv(unit)
+		st.set_color(_height_color(h, sea, unit, palette))
+		st.add_vertex(unit * params.radius * (1.0 + h * params.terrain_height))
+	for idx in indices:
+		st.add_index(idx)
+	st.generate_normals()
+
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.95
+
+	var mi := MeshInstance3D.new()
+	mi.name = "Terrain"
+	mi.mesh = st.commit()
+	mi.material_override = mat
+	return mi
+
+
+static func _build_ocean(params: PlanetParams, sea: float, palette: Dictionary) -> MeshInstance3D:
+	var sea_r: float = params.radius * (1.0 + sea * params.terrain_height)
+	var mesh := SphereMesh.new()
+	mesh.radius = sea_r
+	mesh.height = sea_r * 2.0
+	mesh.radial_segments = 96
+	mesh.rings = 48
+
+	var mat := StandardMaterial3D.new()
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = palette["ocean_surface"]
+	# A perfectly smooth sphere reads as a glass marble — real ocean glint is
+	# "sun glitter": wave facets smearing the highlight into a broad soft
+	# patch. Moderate roughness spreads it; a seeded noise normal map breaks
+	# it up so it shimmers instead of gleaming.
+	mat.roughness = 0.28
+	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	var wave_noise := FastNoiseLite.new()
+	wave_noise.seed = params.seed
+	wave_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	wave_noise.frequency = 0.03
+	var wave_tex := NoiseTexture2D.new()
+	wave_tex.noise = wave_noise
+	wave_tex.seamless = true
+	wave_tex.as_normal_map = true
+	wave_tex.bump_strength = 4.0
+	mat.normal_enabled = true
+	mat.normal_texture = wave_tex
+	mat.normal_scale = 0.25
+	mat.uv1_scale = Vector3(6, 3, 1)
+
+	var mi := MeshInstance3D.new()
+	mi.name = "Ocean"
+	mi.mesh = mesh
+	mi.material_override = mat
+	return mi
+
+
+static func _build_atmosphere(params: PlanetParams, palette: Dictionary) -> MeshInstance3D:
+	# Shell sits just above the tallest possible terrain, swelling with
+	# density. Generous headroom — the shader's path-length falloff reaches
+	# zero at the shell edge, so the mesh boundary is invisible.
+	var surface_r: float = params.radius * (1.0 + params.terrain_height * NOISE_MAX)
+	var r: float = surface_r + params.radius * (0.04 + 0.10 * params.atmosphere)
+	var mesh := SphereMesh.new()
+	mesh.radius = r
+	mesh.height = r * 2.0
+	mesh.radial_segments = 96
+	mesh.rings = 48
+
+	var mat := ShaderMaterial.new()
+	mat.shader = ATMO_SHADER
+	mat.set_shader_parameter("atmo_color", palette["atmo"])
+	mat.set_shader_parameter("density", params.atmosphere)
+	mat.set_shader_parameter("falloff", params.atmo_falloff)
+	mat.set_shader_parameter("planet_radius", params.radius)
+	mat.set_shader_parameter("shell_radius", r)
+	# Draw after the ocean so the additive glow layers over the water at the limb.
+	mat.render_priority = 1
+
+	var mi := MeshInstance3D.new()
+	mi.name = "Atmosphere"
+	mi.mesh = mesh
+	mi.material_override = mat
+	return mi
+
+
+# --- Height → color ---
+
+static func _height_color(h: float, sea: float, unit: Vector3, palette: Dictionary) -> Color:
+	var col: Color
+	if h < sea:
+		# Underwater terrain — visible through the translucent ocean.
+		var depth := clampf((sea - h) / (sea + NOISE_MAX + 0.001), 0.0, 1.0)
+		col = (palette["shallow"] as Color).lerp(palette["deep"] as Color, sqrt(depth))
+	elif h < sea + 0.03:
+		col = palette["beach"]
+	else:
+		var t := clampf((h - sea) / maxf(NOISE_MAX - sea, 0.001), 0.0, 1.0)
+		col = (palette["lowland"] as Color).lerp(palette["highland"] as Color, smoothstep(0.0, 0.75, t))
+		if t > 0.6:
+			col = col.lerp(palette["mountain"] as Color, smoothstep(0.6, 1.0, t))
+
+	# Polar caps: latitude pushed poleward by altitude so snow creeps down
+	# mountains before it reaches lowlands.
+	if palette["has_caps"]:
+		var lat: float = absf(unit.y) + maxf(h - sea, 0.0) * 0.35
+		var cap_start: float = palette["cap_start"]
+		if lat > cap_start and h >= sea:
+			col = col.lerp(palette["snow"] as Color, smoothstep(cap_start, cap_start + 0.12, lat))
+	return col
+
+
+# Seed-derived color scheme. Mostly earthlike ranges with a chance of going
+# fully alien — variety is the point while we hone the generator.
+static func _make_palette(rng: RandomNumberGenerator) -> Dictionary:
+	var alien := rng.randf() < 0.35
+
+	var land_hue := rng.randf() if alien else rng.randf_range(0.07, 0.38)
+	var land_sat := rng.randf_range(0.25, 0.55)
+	var lowland := Color.from_hsv(land_hue, land_sat, rng.randf_range(0.35, 0.55))
+	var highland := Color.from_hsv(
+		fposmod(land_hue + rng.randf_range(-0.06, 0.06), 1.0),
+		land_sat * rng.randf_range(0.5, 0.9),
+		lowland.v * rng.randf_range(0.55, 0.8))
+	var mountain := Color.from_hsv(land_hue, land_sat * 0.2, rng.randf_range(0.3, 0.45))
+
+	var ocean_hue := rng.randf() if (alien and rng.randf() < 0.5) else rng.randf_range(0.5, 0.68)
+	var ocean_sat := rng.randf_range(0.5, 0.8)
+
+	var atmo_hue := rng.randf() if (alien and rng.randf() < 0.5) else rng.randf_range(0.52, 0.62)
+	var atmo := Color.from_hsv(atmo_hue, rng.randf_range(0.45, 0.7), rng.randf_range(0.85, 1.0))
+	var shallow := Color.from_hsv(ocean_hue, ocean_sat * 0.8, rng.randf_range(0.4, 0.6))
+	var deep := Color.from_hsv(ocean_hue, ocean_sat, rng.randf_range(0.10, 0.22))
+	var surface := Color.from_hsv(ocean_hue, ocean_sat * 0.9, rng.randf_range(0.35, 0.55), 0.72)
+
+	return {
+		"lowland":  lowland,
+		"highland": highland,
+		"mountain": mountain,
+		"beach":    Color.from_hsv(fposmod(land_hue + 0.03, 1.0), land_sat * 0.6, rng.randf_range(0.55, 0.75)),
+		"shallow":  shallow,
+		"deep":     deep,
+		"ocean_surface": surface,
+		"atmo":      atmo,
+		"has_caps":  rng.randf() < 0.65,
+		"cap_start": rng.randf_range(0.72, 0.9),
+		"snow":      Color(0.92, 0.93, 0.96),
+	}
+
+
+# --- Icosphere ---
+# Subdivided icosahedron with fully shared vertices — no UV seams, and
+# SurfaceTool.generate_normals() on the indexed mesh gives smooth shading
+# with no visible pole/meridian artifacts (unlike a displaced SphereMesh).
+
+static func _icosphere(subdivisions: int) -> Array:
+	var t := (1.0 + sqrt(5.0)) / 2.0
+	var verts: Array[Vector3] = []
+	for v: Vector3 in [
+		Vector3(-1, t, 0), Vector3(1, t, 0), Vector3(-1, -t, 0), Vector3(1, -t, 0),
+		Vector3(0, -1, t), Vector3(0, 1, t), Vector3(0, -1, -t), Vector3(0, 1, -t),
+		Vector3(t, 0, -1), Vector3(t, 0, 1), Vector3(-t, 0, -1), Vector3(-t, 0, 1),
+	]:
+		verts.append(v.normalized())
+
+	var faces: Array = [
+		[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
+		[1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
+		[3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
+		[4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
+	]
+
+	for level in subdivisions:
+		var midpoint_cache: Dictionary = {}
+		var new_faces: Array = []
+		for face: Array in faces:
+			var a: int = face[0]
+			var b: int = face[1]
+			var c: int = face[2]
+			var ab := _midpoint(a, b, verts, midpoint_cache)
+			var bc := _midpoint(b, c, verts, midpoint_cache)
+			var ca := _midpoint(c, a, verts, midpoint_cache)
+			new_faces.append([a, ab, ca])
+			new_faces.append([b, bc, ab])
+			new_faces.append([c, ca, bc])
+			new_faces.append([ab, bc, ca])
+		faces = new_faces
+
+	var packed_verts := PackedVector3Array(verts)
+	var indices := PackedInt32Array()
+	indices.resize(faces.size() * 3)
+	var i := 0
+	# The classic icosahedron face table is counter-clockwise (OpenGL front);
+	# Godot front faces are clockwise — emit each triangle flipped, otherwise
+	# the planet renders inside-out (near side culled, far side interior
+	# visible) and normals point inward.
+	for face: Array in faces:
+		indices[i] = face[0]
+		indices[i + 1] = face[2]
+		indices[i + 2] = face[1]
+		i += 3
+	return [packed_verts, indices]
+
+
+static func _midpoint(a: int, b: int, verts: Array[Vector3], cache: Dictionary) -> int:
+	var key: int = (mini(a, b) << 32) | maxi(a, b)
+	if cache.has(key):
+		return cache[key]
+	var idx := verts.size()
+	verts.append(((verts[a] + verts[b]) * 0.5).normalized())
+	cache[key] = idx
+	return idx
