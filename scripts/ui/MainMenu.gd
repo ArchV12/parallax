@@ -2,9 +2,7 @@ extends Control
 
 const VERSION := "0.1.0"
 
-const COLOR_ACCENT_BG  := Color(0.10, 0.13, 0.20)  # "New Game" primary-action highlight — kept fixed
-const COLOR_ACCENT_HOV := Color(0.15, 0.20, 0.30)
-const COLOR_ERROR      := Color(0.80, 0.30, 0.25)
+const COLOR_ERROR := Color(0.80, 0.30, 0.25)
 
 const BUTTON_MIN_SIZE := Vector2(280, 48)
 const FONT_SIZE_TITLE := 64
@@ -121,34 +119,25 @@ func _add_title(parent: Control) -> void:
 	parent.add_child(subtitle)
 
 
-func _add_button(parent: Control, label: String, callback: Callable,
-		accent: bool = false, dim: bool = false) -> Button:
-	var btn := Button.new()
+func _add_button(parent: Control, label: String, callback: Callable, accent: bool = false) -> UIButton:
+	var btn := UIButton.new()
 	btn.text = label
+	btn.accent = accent
 	btn.custom_minimum_size = BUTTON_MIN_SIZE
 	btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	btn.add_theme_font_size_override("font_size", FONT_SIZE_BTN)
-
-	if accent:
-		btn.add_theme_color_override("font_color", UITheme.accent)
-		UITheme.style_button(btn, COLOR_ACCENT_BG, COLOR_ACCENT_HOV, UITheme.accent)
-	else:
-		btn.add_theme_color_override("font_color", UITheme.dim if dim else UITheme.text)
-		UITheme.style_button(btn, UITheme.button, UITheme.button_hov, UITheme.border)
-
 	btn.pressed.connect(callback)
 	parent.add_child(btn)
 	return btn
 
 
-func _add_icon_btn(parent: Control, label: String, callback: Callable) -> Button:
-	var btn := Button.new()
+func _add_icon_btn(parent: Control, label: String, callback: Callable) -> UIButton:
+	var btn := UIButton.new()
 	btn.text = label
+	btn.dim = true
 	btn.custom_minimum_size = Vector2(70, 32)
 	btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	btn.add_theme_font_size_override("font_size", FONT_SIZE_SMALL)
-	btn.add_theme_color_override("font_color", UITheme.dim)
-	UITheme.style_button(btn, UITheme.button, UITheme.button_hov, UITheme.border, 5)
 	btn.pressed.connect(callback)
 	parent.add_child(btn)
 	return btn
@@ -163,7 +152,7 @@ func _add_spacer(parent: Control, height: int) -> void:
 # --- Handlers ---
 
 func _on_new_game() -> void:
-	get_tree().change_scene_to_file("res://scenes/game_placeholder.tscn")
+	get_tree().change_scene_to_file("res://scenes/commander_briefing.tscn")
 
 
 func _on_forge() -> void:

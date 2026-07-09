@@ -7,6 +7,7 @@ var _music_slider:   HSlider
 var _sfx_slider:     HSlider
 var _ambient_slider: HSlider
 var _theme_option:   OptionButton
+var _panel:          UIPanel
 
 # Set true for an in-game pause Options panel. Persistent in-game panels are
 # built once at session start and never pick up a live flavor switch, so the
@@ -24,9 +25,12 @@ func _ready() -> void:
 
 func open() -> void:
 	visible = true
+	_panel.open_animated()
 
 
 func close() -> void:
+	_panel.close_animated()
+	await get_tree().create_timer(UIPanel.ANIM_TIME).timeout
 	visible = false
 
 
@@ -41,23 +45,13 @@ func _build() -> void:
 	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(center)
 
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(320, 0)
-	var style := StyleBoxFlat.new()
-	style.bg_color = UITheme.panel
-	style.border_color = UITheme.border
-	style.set_border_width_all(2)
-	style.set_corner_radius_all(6)
-	style.content_margin_left   = 28
-	style.content_margin_right  = 28
-	style.content_margin_top    = 20
-	style.content_margin_bottom = 20
-	panel.add_theme_stylebox_override("panel", style)
-	center.add_child(panel)
+	_panel = UIPanel.new()
+	_panel.custom_minimum_size = Vector2(320, 0)
+	center.add_child(_panel)
 
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 14)
-	panel.add_child(vbox)
+	_panel.add_child(vbox)
 
 	var title := Label.new()
 	title.text = "OPTIONS"
@@ -123,12 +117,10 @@ func _build() -> void:
 
 	vbox.add_child(HSeparator.new())
 
-	var close_btn := Button.new()
+	var close_btn := UIButton.new()
 	close_btn.text = "Back"
 	close_btn.custom_minimum_size = Vector2(0, 36)
 	close_btn.add_theme_font_size_override("font_size", 14)
-	close_btn.add_theme_color_override("font_color", UITheme.text)
-	UITheme.style_button(close_btn, UITheme.button, UITheme.button_hov, UITheme.border)
 	close_btn.pressed.connect(close)
 	vbox.add_child(close_btn)
 

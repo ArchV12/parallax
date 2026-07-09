@@ -5,7 +5,7 @@ extends RefCounted
 # the eventual game will derive them from system-generation data. Same seed +
 # same knobs must always produce the same planet.
 
-var seed: int = 0
+var seed_value: int = 0  # named to avoid shadowing the built-in seed() function
 var radius: float = 1.0            # display units
 var continent_scale: float = 1.0   # noise frequency multiplier — higher = more, smaller landmasses
 var terrain_height: float = 0.06   # max displacement as a fraction of radius

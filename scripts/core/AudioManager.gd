@@ -5,10 +5,11 @@ extends Node
 
 # Pool size — max simultaneous overlapping sounds.
 const POOL_SIZE := 12
-const SFX_BASE := "res://assets/sfx/"
+const SFX_BASE := "res://Assets/sfx/"
 
 var _pool: Array[AudioStreamPlayer] = []
 var _cache: Dictionary = {}  # path -> AudioStream
+var _warned: Dictionary = {}  # path -> true — a missing sfx only warns once, not on every call
 
 func _ready() -> void:
 	for i in POOL_SIZE:
@@ -22,7 +23,9 @@ func _ready() -> void:
 func play(sfx_path: String, volume_db: float = 0.0, pitch: float = 1.0) -> void:
 	var stream := _load(sfx_path)
 	if stream == null:
-		push_warning("AudioManager: sfx not found — %s" % sfx_path)
+		if not _warned.has(sfx_path):
+			_warned[sfx_path] = true
+			push_warning("AudioManager: sfx not found — %s" % sfx_path)
 		return
 	var player := _get_free_player()
 	if player == null:
@@ -31,6 +34,32 @@ func play(sfx_path: String, volume_db: float = 0.0, pitch: float = 1.0) -> void:
 	player.volume_db = volume_db
 	player.pitch_scale = pitch
 	player.play()
+
+
+# --- UI semantic sounds ---
+# Every UIButton/UIPanel routes through these instead of hardcoding a path —
+# sound design changes happen in one place. No files exist yet; play()
+# no-ops gracefully on missing assets, so these are safe to call now and
+# start working the day the sfx land in Assets/sfx/ui/.
+
+func ui_hover() -> void:
+	play("ui/hover", -6.0)
+
+
+func ui_confirm() -> void:
+	play("ui/confirm")
+
+
+func ui_deny() -> void:
+	play("ui/deny")
+
+
+func ui_panel_open() -> void:
+	play("ui/panel_open")
+
+
+func ui_panel_close() -> void:
+	play("ui/panel_close")
 
 
 # Stops any currently-playing instance of this sfx — for repeating/interruptible

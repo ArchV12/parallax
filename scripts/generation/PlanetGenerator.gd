@@ -22,11 +22,11 @@ static func generate(params: PlanetParams) -> Node3D:
 	params.terrain_height = maxf(params.terrain_height, 0.01)
 
 	var rng := RandomNumberGenerator.new()
-	rng.seed = params.seed
+	rng.seed = params.seed_value
 	var palette := _make_palette(rng)
 
 	var noise := FastNoiseLite.new()
-	noise.seed = params.seed
+	noise.seed = params.seed_value
 	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
 	noise.fractal_type = FastNoiseLite.FRACTAL_FBM
 	noise.fractal_octaves = 5
@@ -49,7 +49,7 @@ static func generate(params: PlanetParams) -> Node3D:
 
 static func _build_terrain(params: PlanetParams, noise: FastNoiseLite,
 		sea: float, palette: Dictionary) -> MeshInstance3D:
-	var sphere := _icosphere(params.detail)
+	var sphere := Icosphere.build(params.detail)
 	var verts: PackedVector3Array = sphere[0]
 	var indices: PackedInt32Array = sphere[1]
 
@@ -92,7 +92,7 @@ static func _build_ocean(params: PlanetParams, sea: float, palette: Dictionary) 
 	mat.roughness = 0.28
 	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
 	var wave_noise := FastNoiseLite.new()
-	wave_noise.seed = params.seed
+	wave_noise.seed = params.seed_value
 	wave_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
 	wave_noise.frequency = 0.03
 	var wave_tex := NoiseTexture2D.new()
@@ -203,67 +203,3 @@ static func _make_palette(rng: RandomNumberGenerator) -> Dictionary:
 		"cap_start": rng.randf_range(0.72, 0.9),
 		"snow":      Color(0.92, 0.93, 0.96),
 	}
-
-
-# --- Icosphere ---
-# Subdivided icosahedron with fully shared vertices — no UV seams, and
-# SurfaceTool.generate_normals() on the indexed mesh gives smooth shading
-# with no visible pole/meridian artifacts (unlike a displaced SphereMesh).
-
-static func _icosphere(subdivisions: int) -> Array:
-	var t := (1.0 + sqrt(5.0)) / 2.0
-	var verts: Array[Vector3] = []
-	for v: Vector3 in [
-		Vector3(-1, t, 0), Vector3(1, t, 0), Vector3(-1, -t, 0), Vector3(1, -t, 0),
-		Vector3(0, -1, t), Vector3(0, 1, t), Vector3(0, -1, -t), Vector3(0, 1, -t),
-		Vector3(t, 0, -1), Vector3(t, 0, 1), Vector3(-t, 0, -1), Vector3(-t, 0, 1),
-	]:
-		verts.append(v.normalized())
-
-	var faces: Array = [
-		[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
-		[1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
-		[3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
-		[4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
-	]
-
-	for level in subdivisions:
-		var midpoint_cache: Dictionary = {}
-		var new_faces: Array = []
-		for face: Array in faces:
-			var a: int = face[0]
-			var b: int = face[1]
-			var c: int = face[2]
-			var ab := _midpoint(a, b, verts, midpoint_cache)
-			var bc := _midpoint(b, c, verts, midpoint_cache)
-			var ca := _midpoint(c, a, verts, midpoint_cache)
-			new_faces.append([a, ab, ca])
-			new_faces.append([b, bc, ab])
-			new_faces.append([c, ca, bc])
-			new_faces.append([ab, bc, ca])
-		faces = new_faces
-
-	var packed_verts := PackedVector3Array(verts)
-	var indices := PackedInt32Array()
-	indices.resize(faces.size() * 3)
-	var i := 0
-	# The classic icosahedron face table is counter-clockwise (OpenGL front);
-	# Godot front faces are clockwise — emit each triangle flipped, otherwise
-	# the planet renders inside-out (near side culled, far side interior
-	# visible) and normals point inward.
-	for face: Array in faces:
-		indices[i] = face[0]
-		indices[i + 1] = face[2]
-		indices[i + 2] = face[1]
-		i += 3
-	return [packed_verts, indices]
-
-
-static func _midpoint(a: int, b: int, verts: Array[Vector3], cache: Dictionary) -> int:
-	var key: int = (mini(a, b) << 32) | maxi(a, b)
-	if cache.has(key):
-		return cache[key]
-	var idx := verts.size()
-	verts.append(((verts[a] + verts[b]) * 0.5).normalized())
-	cache[key] = idx
-	return idx

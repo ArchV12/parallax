@@ -1,0 +1,19 @@
+[remap]
+
+importer="oggvorbisstr"
+type="AudioStreamOggVorbis"
+uid="uid://ju3qfvi2fl82"
+path="res://.godot/imported/Cosmic Forge.ogg-e23e6c9b0413991b7f96b55e2516b2aa.oggvorbisstr"
+
+[deps]
+
+source_file="res://Assets/music/Cosmic Forge.ogg"
+dest_files=["res://.godot/imported/Cosmic Forge.ogg-e23e6c9b0413991b7f96b55e2516b2aa.oggvorbisstr"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

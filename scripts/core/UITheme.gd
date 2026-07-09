@@ -13,7 +13,7 @@ const PREFS_PATH := "user://prefs.json"
 enum Flavor {
 	AMBER, SLATE, VERDANT, CRIMSON,
 	OBSIDIAN, BLOOD_MOON, MIDNIGHT_OIL, DRIFTWOOD, AMETHYST, EMBER,
-	COTTON_CANDY, SAKURA,
+	COTTON_CANDY, SAKURA, ELECTRIC_BLUE,
 }
 
 const DEFAULT_FLAVOR := Flavor.MIDNIGHT_OIL
@@ -162,6 +162,18 @@ const FLAVORS := {
 		"accent":      Color(0.88, 0.62, 0.68),
 		"button":      Color(0.19, 0.14, 0.15),
 		"button_hov":  Color(0.28, 0.20, 0.22),
+	},
+	Flavor.ELECTRIC_BLUE: {
+		"name":        "Electric Blue",
+		"bg":          Color(0.015, 0.03, 0.06, 0.85),
+		"panel":       Color(0.02, 0.05, 0.09),
+		"slot":        Color(0.03, 0.08, 0.14),
+		"border":      Color(0.10, 0.35, 0.55),
+		"text":        Color(0.80, 0.92, 1.00),
+		"dim":         Color(0.28, 0.45, 0.58),
+		"accent":      Color(0.10, 0.75, 1.00),
+		"button":      Color(0.02, 0.07, 0.12),
+		"button_hov":  Color(0.04, 0.14, 0.22),
 	},
 }
 

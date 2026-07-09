@@ -5,7 +5,7 @@ extends Node
 # call now and starts working the day a track lands in assets/music/.
 
 const FADE_TIME  := 2.0
-const MUSIC_BASE := "res://assets/music/"
+const MUSIC_BASE := "res://Assets/music/"
 
 var _player_a: AudioStreamPlayer
 var _player_b: AudioStreamPlayer
@@ -62,7 +62,11 @@ func _process(delta: float) -> void:
 # --- Public API ---
 
 func play_menu() -> void:
-	_play_from("Menu")
+	_play_from("The Parallax Initiative")
+
+
+func play_cosmic_forge() -> void:
+	_play_from("Cosmic Forge")
 
 
 func stop(fade: bool = true) -> void:

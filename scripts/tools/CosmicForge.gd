@@ -3,17 +3,140 @@ extends Node3D
 # The Cosmic Forge — dev tool for honing the celestial body generators
 # (GDD §15, "The Galactic Forge"). Pick a body type, tweak generation knobs,
 # and hit Generate to roll new random bodies. Slider changes re-sculpt the
-# CURRENT seed live, so one planet can be tuned and compared; Generate (or R)
+# CURRENT seed live, so one body can be tuned and compared; Generate (or R)
 # rolls a fresh seed.
+#
+# Body Type is a flat list of sibling kinds (Rocky Planet, Water World, Gas
+# Giant, Ice Giant, Moon, Asteroid, Star) rather than a "Planet" category
+# with sub-types — a gas giant is no more "a planet" than a moon is, so each
+# entry gets its own knob set and generator. Rocky Planet and Water World
+# happen to share PlanetGenerator (Water World is really just a wetter
+# preset of the same pipeline); Gas Giant and Ice Giant share
+# GasGiantGenerator; Moon and Asteroid each get their own generator but share
+# cratering logic (CraterField) — an asteroid additionally deforms its base
+# shape, since real ones are too small for gravity to round them out. Star is
+# self-luminous, unshaded, no day/night side at all.
+#
+# Comet exists as a full generator (CometGenerator/CometParams,
+# shaders/comet_tail.gdshader) but is pulled out of BODY_TYPE_NAMES below, so
+# it's unreachable from the picker — a static tapered-cone mesh reads as "a
+# cone stuck on a sphere," not gas. A convincing tail needs particles, which
+# is real additional work; the generator, the Tail/Atmosphere dispatch below,
+# and the nucleus-only idle-spin case in _process() are all left intact so
+# re-adding "Comet" to BODY_TYPE_NAMES is enough to bring it back once that's
+# built (or to leave it out for good — the game may not need comets at all).
 
 const FONT_SIZE_SMALL := 14
 
 const ZOOM_STEP := 0.9
-const MIN_DISTANCE := 1.2
+# Low enough to get nose-to-surface on the smallest asteroids/moons for
+# close crater/shape inspection.
+const MIN_DISTANCE := 0.3
 const MAX_DISTANCE := 40.0
 const ORBIT_SENSITIVITY := 0.008
 const PAN_SENSITIVITY := 0.0012
-const PLANET_SPIN := 0.05  # rad/s — slow idle rotation
+const BODY_SPIN := 0.05  # rad/s — slow idle rotation
+
+enum BodyType { ROCKY_PLANET, WATER_WORLD, GAS_GIANT, ICE_GIANT, MOON, ASTEROID, STAR, COMET }
+
+# Comet intentionally omitted — see the class-level comment above.
+const BODY_TYPE_NAMES := ["Rocky Planet", "Water World", "Gas Giant", "Ice Giant", "Moon", "Asteroid", "Star"]
+
+# name: [label, min, max, default, is_int]
+const ROCKY_KNOBS: Array = [
+	["radius",          ["Radius",          0.4, 2.5,  1.0,  false]],
+	["continent_scale", ["Continent Scale", 0.4, 3.0,  1.0,  false]],
+	["terrain_height",  ["Terrain Height",  0.01, 0.15, 0.06, false]],
+	["roughness",       ["Roughness",       0.3, 0.7,  0.5,  false]],
+	["ocean_level",     ["Ocean Level",     0.0, 1.0,  0.35, false]],
+	["atmosphere",      ["Atmosphere",      0.0, 1.0,  0.35, false]],
+	["atmo_falloff",    ["Atmo Falloff",    0.5, 3.0,  1.5,  false]],
+	["detail",          ["Mesh Detail",     3.0, 6.0,  5.0,  true]],
+]
+
+# Same pipeline as Rocky, just wetter by default — and Ocean Level can't be
+# dialed down into a dry rock while labeled Water World.
+const WATER_WORLD_KNOBS: Array = [
+	["radius",          ["Radius",          0.4, 2.5,  1.0,  false]],
+	["continent_scale", ["Continent Scale", 0.4, 3.0,  0.7,  false]],
+	["terrain_height",  ["Terrain Height",  0.01, 0.15, 0.05, false]],
+	["roughness",       ["Roughness",       0.3, 0.7,  0.5,  false]],
+	["ocean_level",     ["Ocean Level",     0.6, 1.0,  0.85, false]],
+	["atmosphere",      ["Atmosphere",      0.0, 1.0,  0.45, false]],
+	["atmo_falloff",    ["Atmo Falloff",    0.5, 3.0,  1.5,  false]],
+	["detail",          ["Mesh Detail",     3.0, 6.0,  5.0,  true]],
+]
+
+# Jupiter/Saturn — strong banding by default.
+const GAS_GIANT_KNOBS: Array = [
+	["radius",         ["Radius",         0.8, 3.0, 1.6,  false]],
+	["band_scale",     ["Band Scale",     0.5, 3.0, 1.2,  false]],
+	["turbulence",     ["Turbulence",     0.0, 1.0, 0.4,  false]],
+	["storminess",     ["Storminess",     0.0, 1.0, 0.35, false]],
+	["band_contrast",  ["Band Contrast",  0.0, 1.0, 1.0,  false]],
+	["atmosphere",     ["Atmosphere",     0.0, 1.0, 0.15, false]],
+	["atmo_falloff",   ["Atmo Falloff",   0.5, 3.0, 1.2,  false]],
+	["rings",          ["Rings",          0.0, 1.0, 0.0,  false]],
+]
+
+# Uranus/Neptune — calmer and nearly featureless by default; Band Contrast
+# starts low but is still draggable up to a full Jupiter-style look.
+const ICE_GIANT_KNOBS: Array = [
+	["radius",         ["Radius",         0.8, 3.0, 1.6,  false]],
+	["band_scale",     ["Band Scale",     0.5, 3.0, 1.2,  false]],
+	["turbulence",     ["Turbulence",     0.0, 1.0, 0.2,  false]],
+	["storminess",     ["Storminess",     0.0, 1.0, 0.1,  false]],
+	["band_contrast",  ["Band Contrast",  0.0, 1.0, 0.12, false]],
+	["atmosphere",     ["Atmosphere",     0.0, 1.0, 0.15, false]],
+	["atmo_falloff",   ["Atmo Falloff",   0.5, 3.0, 1.2,  false]],
+	["rings",          ["Rings",          0.0, 1.0, 0.0,  false]],
+]
+
+# Airless, cratered — no atmosphere or ocean concept applies at all.
+const MOON_KNOBS: Array = [
+	["radius",            ["Radius",            0.15, 1.0,  0.35, false]],
+	["surface_roughness", ["Surface Roughness", 0.0,  0.08, 0.02, false]],
+	["crater_density",    ["Crater Density",    0.0,  1.0,  0.5,  false]],
+	["crater_size",       ["Crater Size",       0.05, 0.35, 0.18, false]],
+	["crater_depth",      ["Crater Depth",      0.01, 0.15, 0.05, false]],
+	["detail",            ["Mesh Detail",       3.0,  6.0,  4.0,  true]],
+]
+
+# Irregular base shape (not a bumped sphere) plus the same cratering as Moon.
+const ASTEROID_KNOBS: Array = [
+	["radius",         ["Radius",         0.03, 0.3,  0.12, false]],
+	["irregularity",   ["Irregularity",   0.0,  1.2,  0.5,  false]],
+	["elongation",     ["Elongation",     0.0,  1.5,  0.3,  false]],
+	["crater_density", ["Crater Density", 0.0,  1.0,  0.5,  false]],
+	["crater_size",    ["Crater Size",    0.05, 0.4,  0.22, false]],
+	["crater_depth",   ["Crater Depth",   0.01, 0.15, 0.08, false]],
+	["detail",         ["Mesh Detail",    3.0,  6.0,  4.0,  true]],
+]
+
+# Self-luminous — no terrain/ocean/atmosphere-day-side concepts apply.
+# Temperature is Kelvin, driving color from red dwarf through blue-white.
+const STAR_KNOBS: Array = [
+	["radius",          ["Radius",          0.6,    3.0,     1.4,    false]],
+	["temperature",     ["Temperature (K)", 3000.0, 30000.0, 5800.0, true]],
+	["turbulence",      ["Turbulence",      0.0,    1.0,     0.4,    false]],
+	["spot_activity",   ["Spot Activity",   0.0,    1.0,     0.15,   false]],
+	["corona",          ["Corona",          0.0,    1.0,     0.5,    false]],
+	["corona_falloff",  ["Corona Falloff",  0.5,    3.0,     1.5,    false]],
+]
+
+# Icy irregular nucleus (same deformation technique as Asteroid) + coma +
+# tail. Tail direction is patched in by _regenerate(), not this knob set.
+const COMET_KNOBS: Array = [
+	["radius",         ["Radius",         0.03, 0.3,  0.1,  false]],
+	["irregularity",   ["Irregularity",   0.0,  1.2,  0.6,  false]],
+	["crater_density", ["Crater Density", 0.0,  1.0,  0.3,  false]],
+	["crater_size",    ["Crater Size",    0.05, 0.4,  0.2,  false]],
+	["crater_depth",   ["Crater Depth",   0.01, 0.15, 0.06, false]],
+	["coma_size",      ["Coma Size",      0.0,  1.0,  0.6,  false]],
+	["tail_length",    ["Tail Length",    0.0,  1.0,  0.6,  false]],
+	["tail_width",     ["Tail Width",     0.0,  1.0,  0.4,  false]],
+	["detail",         ["Mesh Detail",    3.0,  6.0,  4.0,  true]],
+]
 
 var _pivot: Node3D
 var _camera: Camera3D
@@ -23,24 +146,15 @@ var _distance := 4.0
 var _orbiting := false
 var _panning := false
 
-var _planet: Node3D
+var _body: Node3D
 var _sun: DirectionalLight3D
+var _env: Environment
+var _body_type: BodyType = BodyType.ROCKY_PLANET
 var _seed: int
 var _seed_label: Label
+var _knob_container: VBoxContainer
 var _sliders: Dictionary = {}  # knob name -> HSlider
 var _regen_timer: Timer
-
-# name: [label, min, max, default, is_int]
-const KNOBS: Array = [
-	["radius",          ["Radius",          0.4, 2.5,  1.0,  false]],
-	["continent_scale", ["Continent Scale", 0.4, 3.0,  1.0,  false]],
-	["terrain_height",  ["Terrain Height",  0.01, 0.15, 0.06, false]],
-	["roughness",       ["Roughness",       0.3, 0.7,  0.5,  false]],
-	["ocean_level",     ["Ocean Level",     0.0, 1.0,  0.5,  false]],
-	["atmosphere",      ["Atmosphere",      0.0, 1.0,  0.35, false]],
-	["atmo_falloff",    ["Atmo Falloff",    0.5, 3.0,  1.5,  false]],
-	["detail",          ["Mesh Detail",     3.0, 6.0,  5.0,  true]],
-]
 
 
 func _ready() -> void:
@@ -53,14 +167,58 @@ func _ready() -> void:
 	_build_camera()
 	_build_ui()
 	_roll_new_seed()
+	MusicManager.play_cosmic_forge()
 
 
 func _process(delta: float) -> void:
-	if _planet != null:
-		_planet.rotate_y(PLANET_SPIN * delta)
+	if _body == null:
+		return
+	if _body_type == BodyType.COMET:
+		# Spin only the nucleus — the coma/tail must stay oriented away from
+		# the star regardless of how the nucleus tumbles.
+		var nucleus := _body.get_node_or_null("Body")
+		if nucleus != null:
+			nucleus.rotate_y(BODY_SPIN * delta)
+	else:
+		_body.rotate_y(BODY_SPIN * delta)
 
 
 # --- Generation ---
+
+func _knobs_for_type(t: BodyType) -> Array:
+	match t:
+		BodyType.WATER_WORLD:
+			return WATER_WORLD_KNOBS
+		BodyType.GAS_GIANT:
+			return GAS_GIANT_KNOBS
+		BodyType.ICE_GIANT:
+			return ICE_GIANT_KNOBS
+		BodyType.MOON:
+			return MOON_KNOBS
+		BodyType.ASTEROID:
+			return ASTEROID_KNOBS
+		BodyType.STAR:
+			return STAR_KNOBS
+		BodyType.COMET:
+			return COMET_KNOBS
+		_:
+			return ROCKY_KNOBS
+
+
+func _on_body_type_selected(idx: int) -> void:
+	_body_type = idx as BodyType
+	_env.glow_enabled = (_body_type == BodyType.STAR)
+	_rebuild_knobs()
+	_roll_new_seed()
+
+
+func _rebuild_knobs() -> void:
+	for child in _knob_container.get_children():
+		child.queue_free()
+	_sliders.clear()
+	for knob: Array in _knobs_for_type(_body_type):
+		_add_knob_row(_knob_container, knob[0] as String, knob[1] as Array)
+
 
 func _roll_new_seed() -> void:
 	_seed = randi()
@@ -68,9 +226,10 @@ func _roll_new_seed() -> void:
 	_regenerate()
 
 
-# Random button: scatter every slider across its range, then roll a new seed.
+# Random button: scatter every slider relevant to the current type across
+# its range, then roll a new seed.
 func _randomize_all() -> void:
-	for knob: Array in KNOBS:
+	for knob: Array in _knobs_for_type(_body_type):
 		var spec: Array = knob[1]
 		var slider: HSlider = _sliders[knob[0]]
 		slider.value = randf_range(spec[1] as float, spec[2] as float)
@@ -78,29 +237,114 @@ func _randomize_all() -> void:
 
 
 func _regenerate() -> void:
-	var params := PlanetParams.new()
-	params.seed = _seed
-	params.radius = _sliders["radius"].value
-	params.continent_scale = _sliders["continent_scale"].value
-	params.terrain_height = _sliders["terrain_height"].value
-	params.roughness = _sliders["roughness"].value
-	params.ocean_level = _sliders["ocean_level"].value
-	params.atmosphere = _sliders["atmosphere"].value
-	params.atmo_falloff = _sliders["atmo_falloff"].value
-	params.detail = int(_sliders["detail"].value)
+	if _body != null:
+		_body.queue_free()
+		_body = null
 
-	if _planet != null:
-		_planet.queue_free()
-	_planet = PlanetGenerator.generate(params)
-	add_child(_planet)
+	match _body_type:
+		BodyType.GAS_GIANT, BodyType.ICE_GIANT:
+			var params := GasGiantParams.new()
+			params.seed_value = _seed
+			params.radius = _sliders["radius"].value
+			params.band_scale = _sliders["band_scale"].value
+			params.turbulence = _sliders["turbulence"].value
+			params.storminess = _sliders["storminess"].value
+			params.band_contrast = _sliders["band_contrast"].value
+			params.atmosphere = _sliders["atmosphere"].value
+			params.atmo_falloff = _sliders["atmo_falloff"].value
+			params.rings = _sliders["rings"].value
+			params.ice = (_body_type == BodyType.ICE_GIANT)
+			_body = GasGiantGenerator.generate(params)
+		BodyType.MOON:
+			var params := MoonParams.new()
+			params.seed_value = _seed
+			params.radius = _sliders["radius"].value
+			params.surface_roughness = _sliders["surface_roughness"].value
+			params.crater_density = _sliders["crater_density"].value
+			params.crater_size = _sliders["crater_size"].value
+			params.crater_depth = _sliders["crater_depth"].value
+			params.detail = int(_sliders["detail"].value)
+			_body = MoonGenerator.generate(params)
+		BodyType.ASTEROID:
+			var params := AsteroidParams.new()
+			params.seed_value = _seed
+			params.radius = _sliders["radius"].value
+			params.irregularity = _sliders["irregularity"].value
+			params.elongation = _sliders["elongation"].value
+			params.crater_density = _sliders["crater_density"].value
+			params.crater_size = _sliders["crater_size"].value
+			params.crater_depth = _sliders["crater_depth"].value
+			params.detail = int(_sliders["detail"].value)
+			_body = AsteroidGenerator.generate(params)
+		BodyType.STAR:
+			var params := StarParams.new()
+			params.seed_value = _seed
+			params.radius = _sliders["radius"].value
+			params.temperature = _sliders["temperature"].value
+			params.turbulence = _sliders["turbulence"].value
+			params.spot_activity = _sliders["spot_activity"].value
+			params.corona = _sliders["corona"].value
+			params.corona_falloff = _sliders["corona_falloff"].value
+			_body = StarGenerator.generate(params)
+		BodyType.COMET:
+			var params := CometParams.new()
+			params.seed_value = _seed
+			params.radius = _sliders["radius"].value
+			params.irregularity = _sliders["irregularity"].value
+			params.crater_density = _sliders["crater_density"].value
+			params.crater_size = _sliders["crater_size"].value
+			params.crater_depth = _sliders["crater_depth"].value
+			params.coma_size = _sliders["coma_size"].value
+			params.tail_length = _sliders["tail_length"].value
+			params.tail_width = _sliders["tail_width"].value
+			params.detail = int(_sliders["detail"].value)
+			_body = CometGenerator.generate(params)
+		_:
+			var params := PlanetParams.new()
+			params.seed_value = _seed
+			params.radius = _sliders["radius"].value
+			params.continent_scale = _sliders["continent_scale"].value
+			params.terrain_height = _sliders["terrain_height"].value
+			params.roughness = _sliders["roughness"].value
+			params.ocean_level = _sliders["ocean_level"].value
+			params.atmosphere = _sliders["atmosphere"].value
+			params.atmo_falloff = _sliders["atmo_falloff"].value
+			params.detail = int(_sliders["detail"].value)
+			_body = PlanetGenerator.generate(params)
+
+	add_child(_body)
 	_seed_label.text = "Seed: %d" % _seed
 
 	# Point the atmosphere's day-side glow at this scene's sun. (A light's rays
 	# travel along -Z of its basis, so +Z is the direction back toward the sun.)
-	var atmo := _planet.get_node_or_null("Atmosphere") as MeshInstance3D
+	var atmo := _body.get_node_or_null("Atmosphere") as MeshInstance3D
 	if atmo != null:
 		(atmo.material_override as ShaderMaterial).set_shader_parameter(
 				"sun_dir", _sun.global_basis.z)
+
+	# Comet tails always point away from the star — a scene-relative fact the
+	# generator has no way to know, so the Forge orients it here the same way
+	# it patches sun_dir onto Atmosphere above.
+	var tail := _body.get_node_or_null("Tail") as MeshInstance3D
+	if tail != null:
+		_orient_tail(tail, _sun.global_basis.z)
+
+
+# Aligns a Tail mesh (built centered at the origin, unrotated, extending
+# ±height/2 along its local Y) so its narrow end sits at the nucleus and it
+# flares away from the star. sun_dir points FROM the body TOWARD the star
+# (same convention atmosphere shaders use); aligning local +Y to it puts the
+# narrow "top" end on the sunward side, so translating by -sun_dir*(h/2)
+# lands that end exactly at the origin, with the wide "bottom" end trailing
+# out in the away-from-star direction.
+func _orient_tail(tail: MeshInstance3D, sun_dir: Vector3) -> void:
+	var y_axis := sun_dir.normalized()
+	var arbitrary := Vector3.RIGHT if absf(y_axis.dot(Vector3.RIGHT)) < 0.9 else Vector3.FORWARD
+	var x_axis := arbitrary.cross(y_axis).normalized()
+	var z_axis := y_axis.cross(x_axis).normalized()
+	tail.transform.basis = Basis(x_axis, y_axis, z_axis)
+	var h: float = (tail.mesh as CylinderMesh).height
+	tail.position = -y_axis * (h * 0.5)
 
 
 # --- 3D setup ---
@@ -111,15 +355,21 @@ func _build_environment() -> void:
 	var sky := Sky.new()
 	sky.sky_material = sky_mat
 
-	var env := Environment.new()
-	env.background_mode = Environment.BG_SKY
-	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.10, 0.12, 0.18)
-	env.ambient_light_energy = 0.6
+	_env = Environment.new()
+	_env.background_mode = Environment.BG_SKY
+	_env.sky = sky
+	_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	_env.ambient_light_color = Color(0.10, 0.12, 0.18)
+	_env.ambient_light_energy = 0.6
+	# Glow stays off except for Star, where it's what makes the emissive
+	# surface actually bloom instead of just looking like a flat bright disc.
+	_env.glow_enabled = false
+	_env.glow_intensity = 0.9
+	_env.glow_bloom = 0.25
+	_env.glow_hdr_threshold = 1.0
 
 	var we := WorldEnvironment.new()
-	we.environment = env
+	we.environment = _env
 	add_child(we)
 
 	# Angled to light the hemisphere facing the default camera (yaw 0.6),
@@ -218,23 +468,13 @@ func _build_ui() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
 
-	var panel := PanelContainer.new()
+	var panel := UIPanel.new()
 	panel.set_anchors_and_offsets_preset(Control.PRESET_LEFT_WIDE)
 	panel.offset_left = 16
 	panel.offset_top = 16
 	panel.offset_bottom = -16
 	panel.custom_minimum_size = Vector2(280, 0)
 	panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(UITheme.panel.r, UITheme.panel.g, UITheme.panel.b, 0.92)
-	style.border_color = UITheme.border
-	style.set_border_width_all(1)
-	style.set_corner_radius_all(6)
-	style.content_margin_left = 20
-	style.content_margin_right = 20
-	style.content_margin_top = 16
-	style.content_margin_bottom = 16
-	panel.add_theme_stylebox_override("panel", style)
 	layer.add_child(panel)
 
 	var vbox := VBoxContainer.new()
@@ -250,7 +490,9 @@ func _build_ui() -> void:
 
 	vbox.add_child(HSeparator.new())
 
-	# Body type dropdown — Planet only for now; stars/moons/asteroids later.
+	# Flat list of sibling body kinds — not "Planet" with sub-types. Moon,
+	# Asteroid, and Star will join this same list later, each with their own
+	# knob set and generator.
 	var type_row := HBoxContainer.new()
 	type_row.add_theme_constant_override("separation", 8)
 	vbox.add_child(type_row)
@@ -261,33 +503,34 @@ func _build_ui() -> void:
 	type_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	type_row.add_child(type_lbl)
 	var type_opt := OptionButton.new()
-	type_opt.add_item("Planet")
+	for type_name in BODY_TYPE_NAMES:
+		type_opt.add_item(type_name)
 	type_opt.selected = 0
+	type_opt.item_selected.connect(_on_body_type_selected)
 	type_row.add_child(type_opt)
 
 	vbox.add_child(HSeparator.new())
 
-	for knob: Array in KNOBS:
-		_add_knob_row(vbox, knob[0] as String, knob[1] as Array)
+	_knob_container = VBoxContainer.new()
+	_knob_container.add_theme_constant_override("separation", 10)
+	vbox.add_child(_knob_container)
+	_rebuild_knobs()
 
 	vbox.add_child(HSeparator.new())
 
-	var gen_btn := Button.new()
+	var gen_btn := UIButton.new()
 	gen_btn.text = "Generate  (R)"
+	gen_btn.accent = true
 	gen_btn.custom_minimum_size = Vector2(0, 44)
 	gen_btn.add_theme_font_size_override("font_size", 16)
-	gen_btn.add_theme_color_override("font_color", UITheme.accent)
-	UITheme.style_button(gen_btn, UITheme.button, UITheme.button_hov, UITheme.accent)
 	gen_btn.pressed.connect(_roll_new_seed)
 	vbox.add_child(gen_btn)
 
-	var rand_btn := Button.new()
+	var rand_btn := UIButton.new()
 	rand_btn.text = "Random"
 	rand_btn.custom_minimum_size = Vector2(0, 36)
 	rand_btn.tooltip_text = "Randomize all sliders and generate"
 	rand_btn.add_theme_font_size_override("font_size", 14)
-	rand_btn.add_theme_color_override("font_color", UITheme.text)
-	UITheme.style_button(rand_btn, UITheme.button, UITheme.button_hov, UITheme.border)
 	rand_btn.pressed.connect(_randomize_all)
 	vbox.add_child(rand_btn)
 
@@ -312,12 +555,11 @@ func _build_ui() -> void:
 	icon_row.offset_right = -16
 	icon_row.offset_bottom = -16
 	layer.add_child(icon_row)
-	var back_btn := Button.new()
+	var back_btn := UIButton.new()
 	back_btn.text = "Menu"
+	back_btn.dim = true
 	back_btn.custom_minimum_size = Vector2(70, 32)
 	back_btn.add_theme_font_size_override("font_size", FONT_SIZE_SMALL)
-	back_btn.add_theme_color_override("font_color", UITheme.dim)
-	UITheme.style_button(back_btn, UITheme.button, UITheme.button_hov, UITheme.border, 5)
 	back_btn.pressed.connect(_back_to_menu)
 	icon_row.add_child(back_btn)
 

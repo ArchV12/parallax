@@ -1,7 +1,9 @@
-// Atmosphere shell driven by view-ray path length: for each pixel, how much
-// shell does the ray traverse (minus what the planet blocks)? This yields the
-// physical limb profile — faint haze over the disc, a bright band at the limb,
-// and a smooth fade to nothing at the shell's outer edge (no hard circle).
+// Atmosphere/corona shell driven by view-ray path length: for each pixel, how
+// much shell does the ray traverse (minus what the planet blocks)? This
+// yields the physical limb profile — faint haze over the disc, a bright band
+// at the limb, and a smooth fade to nothing at the shell's outer edge (no
+// hard circle). Also doubles as a star's corona: self_luminous skips the
+// day-side dimming, since a star has no dark side — it IS the light source.
 shader_type spatial;
 render_mode blend_add, unshaded, cull_back, depth_draw_never;
 
@@ -11,8 +13,10 @@ uniform float density : hint_range(0.0, 1.0) = 0.5;
 uniform float falloff : hint_range(0.5, 3.0) = 1.5;
 uniform float planet_radius = 1.0;
 uniform float shell_radius = 1.1;
-// World-space direction from the planet toward the sun.
+// World-space direction from the planet toward the sun. Unused when
+// self_luminous is true.
 uniform vec3 sun_dir = vec3(0.4, 0.3, 0.85);
+uniform bool self_luminous = false;
 
 void fragment() {
 	vec3 frag_world = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
@@ -33,9 +37,13 @@ void fragment() {
 	float glow = pow(path / max_path, falloff);
 
 	// Day-side factor with a soft wrap past the terminator, based on where
-	// the ray passes the planet, so it works beyond the limb too.
-	vec3 n = normalize(closest - NODE_POSITION_WORLD);
-	float day = clamp(dot(n, normalize(sun_dir)) * 0.6 + 0.45, 0.05, 1.0);
+	// the ray passes the planet, so it works beyond the limb too. A star's
+	// corona has no day side — it glows uniformly from every angle.
+	float day = 1.0;
+	if (!self_luminous) {
+		vec3 n = normalize(closest - NODE_POSITION_WORLD);
+		day = clamp(dot(n, normalize(sun_dir)) * 0.6 + 0.45, 0.05, 1.0);
+	}
 
 	ALBEDO = atmo_color.rgb * glow * density * 1.4 * day;
 }
