@@ -69,6 +69,16 @@ func play_cosmic_forge() -> void:
 	_play_from("Cosmic Forge")
 
 
+func play_earth_orbit() -> void:
+	_play_from("Earth Orbit")
+
+
+func play_boot() -> void:
+	# Plays once, not looped — the track is timed to end right as the intro's
+	# final "You are its commander" beat lands in silence.
+	_play_from("Boot Sequence", false)
+
+
 func stop(fade: bool = true) -> void:
 	_current_track = ""
 	if fade:
@@ -85,10 +95,10 @@ func set_volume(volume_db: float) -> void:
 
 # --- Internal ---
 
-func _play_from(track_name: String) -> void:
+func _play_from(track_name: String, loop: bool = true) -> void:
 	if _current_track == track_name:
 		return
-	var stream := _load_track(track_name)
+	var stream := _load_track(track_name, loop)
 	if stream == null:
 		return
 	_current_track = track_name
@@ -96,15 +106,15 @@ func _play_from(track_name: String) -> void:
 
 
 # Tries ogg → wav → mp3 for res://assets/music/<name>.<ext>
-func _load_track(track_name: String) -> AudioStream:
+func _load_track(track_name: String, loop: bool = true) -> AudioStream:
 	for ext: String in ["ogg", "wav", "mp3"]:
 		var path := MUSIC_BASE + track_name + "." + ext
 		if ResourceLoader.exists(path):
 			var stream: AudioStream = ResourceLoader.load(path)
 			if stream is AudioStreamOggVorbis:
-				(stream as AudioStreamOggVorbis).loop = true
+				(stream as AudioStreamOggVorbis).loop = loop
 			elif stream is AudioStreamWAV:
-				(stream as AudioStreamWAV).loop_mode = AudioStreamWAV.LOOP_FORWARD
+				(stream as AudioStreamWAV).loop_mode = AudioStreamWAV.LOOP_FORWARD if loop else AudioStreamWAV.LOOP_DISABLED
 			return stream
 	return null
 

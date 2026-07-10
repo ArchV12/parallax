@@ -152,7 +152,8 @@ func _add_spacer(parent: Control, height: int) -> void:
 # --- Handlers ---
 
 func _on_new_game() -> void:
-	get_tree().change_scene_to_file("res://scenes/commander_briefing.tscn")
+	MusicManager.stop()
+	get_tree().change_scene_to_file("res://scenes/boot_sequence.tscn")
 
 
 func _on_forge() -> void:

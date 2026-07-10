@@ -36,12 +36,22 @@ void fragment() {
 	float max_path = 2.0 * sqrt(max(shell_radius * shell_radius - planet_radius * planet_radius, 0.0001));
 	float glow = pow(path / max_path, falloff);
 
-	// Day-side factor with a soft wrap past the terminator, based on where
-	// the ray passes the planet, so it works beyond the limb too. A star's
-	// corona has no day side — it glows uniformly from every angle.
+	// Day-side factor with a soft wrap past the terminator. Rays that miss
+	// the planet use their closest-approach point (so the glow works beyond
+	// the limb too); rays that hit it must use the actual front-surface
+	// intersection instead — for the pixel looking straight through the
+	// planet's centre, closest ≈ centre, and normalize(~0) is garbage that
+	// smeared a pinched V-shaped light/dark wedge across the middle of the
+	// disc. The two agree exactly at the limb (inner_half = 0 there), so
+	// there's no seam. A star's corona has no day side at all — it glows
+	// uniformly from every angle.
 	float day = 1.0;
 	if (!self_luminous) {
-		vec3 n = normalize(closest - NODE_POSITION_WORLD);
+		vec3 sample_pos = closest;
+		if (b < planet_radius) {
+			sample_pos = CAMERA_POSITION_WORLD + rd * (dot(to_center, rd) - inner_half);
+		}
+		vec3 n = normalize(sample_pos - NODE_POSITION_WORLD);
 		day = clamp(dot(n, normalize(sun_dir)) * 0.6 + 0.45, 0.05, 1.0);
 	}
 

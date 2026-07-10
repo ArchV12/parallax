@@ -25,6 +25,12 @@ extends Node3D
 # and the nucleus-only idle-spin case in _process() are all left intact so
 # re-adding "Comet" to BODY_TYPE_NAMES is enough to bring it back once that's
 # built (or to leave it out for good — the game may not need comets at all).
+#
+# Mercury/Venus/Earth/Mars/Luna/Jupiter/Saturn/Uranus/Neptune/Pluto are a
+# different kind of sibling entry: known/canonical bodies, not rolled ones —
+# CanonicalBodyGenerator maps a real texture onto a UV sphere instead of
+# sculpting terrain from noise. Any further real body follows the same
+# pattern: a BodyType + knob set + _build_canonical_params(...) call.
 
 const FONT_SIZE_SMALL := 14
 
@@ -37,10 +43,21 @@ const ORBIT_SENSITIVITY := 0.008
 const PAN_SENSITIVITY := 0.0012
 const BODY_SPIN := 0.05  # rad/s — slow idle rotation
 
-enum BodyType { ROCKY_PLANET, WATER_WORLD, GAS_GIANT, ICE_GIANT, MOON, ASTEROID, STAR, COMET }
+enum BodyType {
+	ROCKY_PLANET, WATER_WORLD, GAS_GIANT, ICE_GIANT, MOON, ASTEROID, STAR,
+	SOL, MERCURY, VENUS, EARTH, MARS, LUNA, JUPITER, SATURN, URANUS, NEPTUNE, PLUTO,
+	COMET,
+}
 
-# Comet intentionally omitted — see the class-level comment above.
-const BODY_TYPE_NAMES := ["Rocky Planet", "Water World", "Gas Giant", "Ice Giant", "Moon", "Asteroid", "Star"]
+# Comet intentionally omitted — see the class-level comment above. Luna is
+# labeled by its proper name, not "Moon" — that label is already taken by
+# the generic procedural moon generator above, and the picker would be
+# ambiguous with two entries both called "Moon". Sol is likewise its proper
+# name, not "Star" — that label is already the procedural self-luminous type.
+const BODY_TYPE_NAMES := [
+	"Rocky Planet", "Water World", "Gas Giant", "Ice Giant", "Moon", "Asteroid", "Star",
+	"Sol", "Mercury", "Venus", "Earth", "Mars", "Luna", "Jupiter", "Saturn", "Uranus", "Neptune", "Pluto",
+]
 
 # name: [label, min, max, default, is_int]
 const ROCKY_KNOBS: Array = [
@@ -124,6 +141,90 @@ const STAR_KNOBS: Array = [
 	["corona_falloff",  ["Corona Falloff",  0.5,    3.0,     1.5,    false]],
 ]
 
+# Canonical/known bodies are curated, not rolled — no seed-driven knobs.
+# Only framing (size on screen, atmosphere thickness) is adjustable; the
+# surface itself is a real texture (see CanonicalBodyGenerator). Radius
+# defaults are real Earth-relative ratios (Earth = 1.0); atmosphere defaults
+# reflect each body's real atmosphere, from Venus' thick haze to airless
+# Mercury/Luna/Pluto.
+
+# Sol is self-luminous (see CanonicalBodyGenerator) — "Atmosphere" here is
+# really the corona, same range/defaults as the procedural Star's corona
+# knobs. Real Sol is ~109x Earth's radius, far past every other body's
+# range here; kept in Star's viewing-friendly range instead of to scale.
+const SOL_KNOBS: Array = [
+	["radius",       ["Radius",       0.6, 3.0, 1.4, false]],
+	["atmosphere",   ["Corona",       0.0, 1.0, 0.5, false]],
+	["atmo_falloff", ["Corona Falloff", 0.5, 3.0, 1.5, false]],
+]
+
+const MERCURY_KNOBS: Array = [
+	["radius",       ["Radius",       0.1, 1.0, 0.38, false]],
+	["atmosphere",   ["Atmosphere",   0.0, 1.0, 0.0,  false]],
+	["atmo_falloff", ["Atmo Falloff", 0.5, 3.0, 1.5,  false]],
+]
+
+const VENUS_KNOBS: Array = [
+	["radius",       ["Radius",       0.4, 1.5, 0.95, false]],
+	["atmosphere",   ["Atmosphere",   0.0, 1.0, 0.9,  false]],
+	["atmo_falloff", ["Atmo Falloff", 0.5, 3.0, 1.5,  false]],
+]
+
+const EARTH_KNOBS: Array = [
+	["radius",       ["Radius",       0.4, 2.5, 1.0,  false]],
+	["atmosphere",   ["Atmosphere",   0.0, 1.0, 0.35, false]],
+	["atmo_falloff", ["Atmo Falloff", 0.5, 3.0, 1.5,  false]],
+]
+
+# Mars' real atmosphere is ~0.6% the density of Earth's — default stays low
+# and dusty rather than reusing Earth's thick-haze default.
+const MARS_KNOBS: Array = [
+	["radius",       ["Radius",       0.4, 2.5, 0.53, false]],
+	["atmosphere",   ["Atmosphere",   0.0, 1.0, 0.08, false]],
+	["atmo_falloff", ["Atmo Falloff", 0.5, 3.0, 1.5,  false]],
+]
+
+const LUNA_KNOBS: Array = [
+	["radius",       ["Radius",       0.1, 0.6, 0.27, false]],
+	["atmosphere",   ["Atmosphere",   0.0, 1.0, 0.0,  false]],
+	["atmo_falloff", ["Atmo Falloff", 0.5, 3.0, 1.5,  false]],
+]
+
+const JUPITER_KNOBS: Array = [
+	["radius",       ["Radius",       5.0, 15.0, 10.97, false]],
+	["atmosphere",   ["Atmosphere",   0.0, 1.0,  0.25,  false]],
+	["atmo_falloff", ["Atmo Falloff", 0.5, 3.0,  1.2,   false]],
+]
+
+# The rings are the whole point, so they default on, not at 0 like
+# GasGiantParams.rings does — this is Saturn, not "a gas giant that could
+# optionally have rings."
+const SATURN_KNOBS: Array = [
+	["radius",       ["Radius",       4.0, 14.0, 9.14, false]],
+	["atmosphere",   ["Atmosphere",   0.0, 1.0,  0.25, false]],
+	["atmo_falloff", ["Atmo Falloff", 0.5, 3.0,  1.2,  false]],
+	["rings",        ["Rings",        0.0, 1.0,  0.75, false]],
+]
+
+const URANUS_KNOBS: Array = [
+	["radius",       ["Radius",       2.0, 6.0, 3.98, false]],
+	["atmosphere",   ["Atmosphere",   0.0, 1.0, 0.2,  false]],
+	["atmo_falloff", ["Atmo Falloff", 0.5, 3.0, 1.2,  false]],
+]
+
+const NEPTUNE_KNOBS: Array = [
+	["radius",       ["Radius",       2.0, 6.0, 3.86, false]],
+	["atmosphere",   ["Atmosphere",   0.0, 1.0, 0.2,  false]],
+	["atmo_falloff", ["Atmo Falloff", 0.5, 3.0, 1.2,  false]],
+]
+
+# Pluto's atmosphere is so thin it's negligible at this scale.
+const PLUTO_KNOBS: Array = [
+	["radius",       ["Radius",       0.05, 0.4, 0.19, false]],
+	["atmosphere",   ["Atmosphere",   0.0,  1.0, 0.0,  false]],
+	["atmo_falloff", ["Atmo Falloff", 0.5,  3.0, 1.5,  false]],
+]
+
 # Icy irregular nucleus (same deformation technique as Asteroid) + coma +
 # tail. Tail direction is patched in by _regenerate(), not this knob set.
 const COMET_KNOBS: Array = [
@@ -201,13 +302,37 @@ func _knobs_for_type(t: BodyType) -> Array:
 			return STAR_KNOBS
 		BodyType.COMET:
 			return COMET_KNOBS
+		BodyType.SOL:
+			return SOL_KNOBS
+		BodyType.MERCURY:
+			return MERCURY_KNOBS
+		BodyType.VENUS:
+			return VENUS_KNOBS
+		BodyType.EARTH:
+			return EARTH_KNOBS
+		BodyType.MARS:
+			return MARS_KNOBS
+		BodyType.LUNA:
+			return LUNA_KNOBS
+		BodyType.JUPITER:
+			return JUPITER_KNOBS
+		BodyType.SATURN:
+			return SATURN_KNOBS
+		BodyType.URANUS:
+			return URANUS_KNOBS
+		BodyType.NEPTUNE:
+			return NEPTUNE_KNOBS
+		BodyType.PLUTO:
+			return PLUTO_KNOBS
 		_:
 			return ROCKY_KNOBS
 
 
 func _on_body_type_selected(idx: int) -> void:
 	_body_type = idx as BodyType
-	_env.glow_enabled = (_body_type == BodyType.STAR)
+	# Glow/bloom is only meaningful for self-luminous bodies (the emissive
+	# surface needs it to actually bloom instead of reading as flat-bright).
+	_env.glow_enabled = (_body_type == BodyType.STAR or _body_type == BodyType.SOL)
 	_rebuild_knobs()
 	_roll_new_seed()
 
@@ -299,6 +424,44 @@ func _regenerate() -> void:
 			params.tail_width = _sliders["tail_width"].value
 			params.detail = int(_sliders["detail"].value)
 			_body = CometGenerator.generate(params)
+		BodyType.SOL:
+			var params := _build_canonical_params(
+					"Sol", "sol", Color(1.0, 0.85, 0.55), Color(1.0, 0.75, 0.35))
+			params.self_luminous = true
+			_body = CanonicalBodyGenerator.generate(params)
+		BodyType.MERCURY:
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
+					"Mercury", "mercury", Color(0.55, 0.52, 0.48), Color(0.6, 0.6, 0.6)))
+		BodyType.VENUS:
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
+					"Venus", "venus", Color(0.80, 0.70, 0.45), Color(0.95, 0.85, 0.55)))
+		BodyType.EARTH:
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
+					"Earth", "earth", Color(0.25, 0.35, 0.55), Color(0.55, 0.75, 1.0)))
+		BodyType.MARS:
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
+					"Mars", "mars", Color(0.60, 0.35, 0.25), Color(0.85, 0.60, 0.45)))
+		BodyType.LUNA:
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
+					"Luna", "moon", Color(0.55, 0.55, 0.58), Color(0.6, 0.6, 0.6)))
+		BodyType.JUPITER:
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
+					"Jupiter", "jupiter", Color(0.80, 0.65, 0.45), Color(0.85, 0.75, 0.55)))
+		BodyType.SATURN:
+			var params := _build_canonical_params(
+					"Saturn", "saturn", Color(0.85, 0.72, 0.48), Color(0.90, 0.80, 0.55))
+			params.rings = _sliders["rings"].value
+			params.ring_tint = Color(0.80, 0.72, 0.58)
+			_body = CanonicalBodyGenerator.generate(params)
+		BodyType.URANUS:
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
+					"Uranus", "uranus", Color(0.55, 0.80, 0.85), Color(0.60, 0.85, 0.90)))
+		BodyType.NEPTUNE:
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
+					"Neptune", "neptune", Color(0.25, 0.35, 0.75), Color(0.35, 0.45, 0.90)))
+		BodyType.PLUTO:
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
+					"Pluto", "pluto", Color(0.75, 0.68, 0.60), Color(0.75, 0.70, 0.65)))
 		_:
 			var params := PlanetParams.new()
 			params.seed_value = _seed
@@ -328,6 +491,24 @@ func _regenerate() -> void:
 	var tail := _body.get_node_or_null("Tail") as MeshInstance3D
 	if tail != null:
 		_orient_tail(tail, _sun.global_basis.z)
+
+
+# Shared by every canonical-body case above — same three sliders (radius,
+# atmosphere, atmo_falloff) feed every known body, just with a different
+# texture and color grading per body. atmo_color still gets set even for
+# airless bodies (Mercury/Luna/Pluto) in case their Atmosphere slider is
+# ever dragged up for fun despite the real body having none.
+func _build_canonical_params(body_name: String, texture_subdir: String,
+		fallback_color: Color, atmo_color: Color) -> CanonicalBodyParams:
+	var params := CanonicalBodyParams.new()
+	params.body_name = body_name
+	params.albedo_texture_path = "res://Assets/textures/%s/albedo.png" % texture_subdir
+	params.fallback_color = fallback_color
+	params.atmo_color = atmo_color
+	params.radius = _sliders["radius"].value
+	params.atmosphere = _sliders["atmosphere"].value
+	params.atmo_falloff = _sliders["atmo_falloff"].value
+	return params
 
 
 # Aligns a Tail mesh (built centered at the origin, unrotated, extending

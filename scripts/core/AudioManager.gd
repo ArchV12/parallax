@@ -62,6 +62,23 @@ func ui_panel_close() -> void:
 	play("ui/panel_close")
 
 
+# --- Boot sequence sounds ---
+
+func boot_tone() -> void:
+	play("boot/tone", -8.0)
+
+
+func boot_confirm() -> void:
+	play("access_granted")
+
+
+# Terminal-style typing click, meant to be retriggered rapidly as text types
+# on — a little pitch wobble keeps a fast run of clicks from sounding like
+# one clip stuttering.
+func type_char() -> void:
+	play("type_char", -10.0, randf_range(0.92, 1.08))
+
+
 # Stops any currently-playing instance of this sfx — for repeating/interruptible
 # sounds that need to cut off immediately rather than ring out to their
 # natural end.

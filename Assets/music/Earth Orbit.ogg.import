@@ -1,0 +1,19 @@
+[remap]
+
+importer="oggvorbisstr"
+type="AudioStreamOggVorbis"
+uid="uid://dmi622xnrvo2x"
+path="res://.godot/imported/Earth Orbit.ogg-9cf003b5f8a8a9caa1b3ba66e32d343f.oggvorbisstr"
+
+[deps]
+
+source_file="res://Assets/music/Earth Orbit.ogg"
+dest_files=["res://.godot/imported/Earth Orbit.ogg-9cf003b5f8a8a9caa1b3ba66e32d343f.oggvorbisstr"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

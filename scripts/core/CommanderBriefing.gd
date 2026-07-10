@@ -9,6 +9,7 @@ extends Control
 const PANEL_DELAY := 0.3
 const TYPE_CHARS_PER_SEC := 35.0
 const TYPE_MIN_TIME := 0.06
+const TYPE_CLICK_STRIDE := 3  # click every Nth typed char — several short fields in a row, so lighter than Boot Sequence's stride
 
 var _panel: UIPanel
 var _type_labels: Array[Label] = []
@@ -88,10 +89,32 @@ func _ready() -> void:
 # terminal-style. Labels/headers around them are chrome, not data, so they
 # just appear immediately with the panel rather than typing too.
 func _start_typing() -> void:
-	var tw := create_tween()
+	_type_sequence()
+
+
+func _type_sequence() -> void:
 	for lbl in _type_labels:
-		var dur := maxf(lbl.text.length() / TYPE_CHARS_PER_SEC, TYPE_MIN_TIME)
-		tw.tween_property(lbl, "visible_ratio", 1.0, dur)
+		await _type_label(lbl)
+
+
+# Steps one character at a time rather than a single tween, so a click sfx
+# can fire in lockstep with each character — same total duration as before,
+# just with clicks along the way.
+func _type_label(lbl: Label) -> void:
+	var total_len := lbl.text.length()
+	if total_len == 0:
+		return
+	var dur := maxf(total_len / TYPE_CHARS_PER_SEC, TYPE_MIN_TIME)
+	var char_time := dur / total_len
+	var clickable_count := 0
+	for i in range(total_len):
+		lbl.visible_ratio = float(i + 1) / float(total_len)
+		var ch := lbl.text[i]
+		if ch != " " and ch != "\n":
+			clickable_count += 1
+			if clickable_count % TYPE_CLICK_STRIDE == 1:
+				AudioManager.type_char()
+		await get_tree().create_timer(char_time).timeout
 
 
 func _register_typed(lbl: Label) -> void:
@@ -143,7 +166,7 @@ func _add_destination(parent: VBoxContainer, dest_name: String) -> void:
 
 
 func _on_begin() -> void:
-	get_tree().change_scene_to_file("res://scenes/game_placeholder.tscn")
+	get_tree().change_scene_to_file("res://scenes/cockpit.tscn")
 
 
 func _unhandled_input(event: InputEvent) -> void:
