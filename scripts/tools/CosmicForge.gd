@@ -29,8 +29,11 @@ extends Node3D
 # Mercury/Venus/Earth/Mars/Luna/Jupiter/Saturn/Uranus/Neptune/Pluto are a
 # different kind of sibling entry: known/canonical bodies, not rolled ones —
 # CanonicalBodyGenerator maps a real texture onto a UV sphere instead of
-# sculpting terrain from noise. Any further real body follows the same
-# pattern: a BodyType + knob set + _build_canonical_params(...) call.
+# sculpting terrain from noise. Their fixed facts (texture, colors, rings,
+# axial tilt) live in the KnownBodies catalog, shared with Cockpit and
+# System view, rather than being copied here. Any further real body follows
+# the same pattern: a KnownBodies entry + a BodyType + knob set +
+# _build_canonical_params(...) call.
 
 const FONT_SIZE_SMALL := 14
 
@@ -273,6 +276,7 @@ func _ready() -> void:
 	_build_ui()
 	_roll_new_seed()
 	MusicManager.play_cosmic_forge()
+	HUD.hide_hud()
 
 
 func _process(delta: float) -> void:
@@ -451,56 +455,27 @@ func _regenerate() -> void:
 			params.detail = int(_sliders["detail"].value)
 			_body = CometGenerator.generate(params)
 		BodyType.SOL:
-			var params := _build_canonical_params(
-					"Sol", "sol", Color(1.0, 0.85, 0.55), Color(1.0, 0.75, 0.35))
-			params.self_luminous = true
-			_body = CanonicalBodyGenerator.generate(params)
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params("Sol"))
 		BodyType.MERCURY:
-			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
-					"Mercury", "mercury", Color(0.55, 0.52, 0.48), Color(0.6, 0.6, 0.6)))
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params("Mercury"))
 		BodyType.VENUS:
-			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
-					"Venus", "venus", Color(0.80, 0.70, 0.45), Color(0.95, 0.85, 0.55)))
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params("Venus"))
 		BodyType.EARTH:
-			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
-					"Earth", "earth", Color(0.25, 0.35, 0.55), Color(0.55, 0.75, 1.0)))
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params("Earth"))
 		BodyType.MARS:
-			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
-					"Mars", "mars", Color(0.60, 0.35, 0.25), Color(0.85, 0.60, 0.45)))
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params("Mars"))
 		BodyType.LUNA:
-			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
-					"Luna", "moon", Color(0.55, 0.55, 0.58), Color(0.6, 0.6, 0.6)))
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params("Luna"))
 		BodyType.JUPITER:
-			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
-					"Jupiter", "jupiter", Color(0.80, 0.65, 0.45), Color(0.85, 0.75, 0.55)))
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params("Jupiter"))
 		BodyType.SATURN:
-			var params := _build_canonical_params(
-					"Saturn", "saturn", Color(0.85, 0.72, 0.48), Color(0.90, 0.80, 0.55))
-			# Fixed, not user-tunable — Saturn's rings are a known fact, not
-			# something to dial in, including the real ~26.7° axial tilt.
-			params.rings = 0.7
-			params.ring_tracks = 1
-			params.ring_tint = Color(0.80, 0.72, 0.58)
-			params.ring_tilt_degrees = 26.7
-			_body = CanonicalBodyGenerator.generate(params)
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params("Saturn"))
 		BodyType.URANUS:
-			var params := _build_canonical_params(
-					"Uranus", "uranus", Color(0.55, 0.80, 0.85), Color(0.60, 0.85, 0.90))
-			# Fixed, not user-tunable — Uranus is essentially tipped onto its
-			# side (real axial tilt ~97.8°), which is exactly why its thin
-			# rings read as nearly vertical rather than a flat disc like
-			# every other ringed body here.
-			params.rings = 0.03
-			params.ring_tracks = 1
-			params.ring_tint = Color(0.75, 0.80, 0.82)
-			params.ring_tilt_degrees = 97.8
-			_body = CanonicalBodyGenerator.generate(params)
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params("Uranus"))
 		BodyType.NEPTUNE:
-			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
-					"Neptune", "neptune", Color(0.25, 0.35, 0.75), Color(0.35, 0.45, 0.90)))
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params("Neptune"))
 		BodyType.PLUTO:
-			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
-					"Pluto", "pluto", Color(0.75, 0.68, 0.60), Color(0.75, 0.70, 0.65)))
+			_body = CanonicalBodyGenerator.generate(_build_canonical_params("Pluto"))
 		_:
 			var params := PlanetParams.new()
 			params.seed_value = _seed
@@ -532,19 +507,13 @@ func _regenerate() -> void:
 		_orient_tail(tail, _sun.global_basis.z)
 
 
-# Shared by every canonical-body case above — same three sliders (radius,
-# atmosphere, atmo_falloff) feed every known body, just with a different
-# texture and color grading per body. atmo_color still gets set even for
-# airless bodies (Mercury/Luna/Pluto) in case their Atmosphere slider is
-# ever dragged up for fun despite the real body having none.
-func _build_canonical_params(body_name: String, texture_subdir: String,
-		fallback_color: Color, atmo_color: Color) -> CanonicalBodyParams:
-	var params := CanonicalBodyParams.new()
-	params.body_name = body_name
-	params.albedo_texture_path = "res://Assets/textures/%s/albedo.png" % texture_subdir
-	params.fallback_color = fallback_color
-	params.atmo_color = atmo_color
-	params.radius = _sliders["radius"].value
+# Shared by every canonical-body case above — pulls the fixed facts (texture,
+# colors, rings, axial tilt) from the KnownBodies catalog, then overrides
+# with whatever the Forge's own radius/atmosphere/atmo_falloff sliders say,
+# since those are legitimately tunable-per-context rather than fixed facts.
+func _build_canonical_params(body_name: String) -> CanonicalBodyParams:
+	var entry := KnownBodies.get_entry(body_name)
+	var params := entry.to_params(_sliders["radius"].value)
 	params.atmosphere = _sliders["atmosphere"].value
 	params.atmo_falloff = _sliders["atmo_falloff"].value
 	return params
@@ -571,7 +540,7 @@ func _orient_tail(tail: MeshInstance3D, sun_dir: Vector3) -> void:
 
 func _build_environment() -> void:
 	var sky_mat := PanoramaSkyMaterial.new()
-	sky_mat.panorama = _make_starfield_texture()
+	sky_mat.panorama = StarfieldSky.build_texture()
 	var sky := Sky.new()
 	sky.sky_material = sky_mat
 
@@ -606,27 +575,6 @@ func _build_environment() -> void:
 	fill.light_energy = 0.12
 	fill.rotation_degrees = Vector3(15, -120, 0)
 	add_child(fill)
-
-
-# Star-scatter panorama generated at runtime — no assets needed.
-func _make_starfield_texture() -> ImageTexture:
-	var img := Image.create(2048, 1024, false, Image.FORMAT_RGB8)
-	img.fill(Color(0.005, 0.007, 0.012))
-	var rng := RandomNumberGenerator.new()
-	rng.randomize()
-	for i in 1400:
-		var x := rng.randi_range(0, 2047)
-		var y := rng.randi_range(0, 1023)
-		var b := rng.randf_range(0.2, 1.0)
-		var col := Color(b, b, b * rng.randf_range(0.85, 1.0))
-		img.set_pixel(x, y, col)
-		if b > 0.8:  # brightest stars get a tiny cross of neighbors
-			for off: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-				var px := x + off.x
-				var py := y + off.y
-				if px >= 0 and px < 2048 and py >= 0 and py < 1024:
-					img.set_pixel(px, py, col * 0.4)
-	return ImageTexture.create_from_image(img)
 
 
 func _build_camera() -> void:

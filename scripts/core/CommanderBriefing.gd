@@ -17,6 +17,7 @@ var _type_labels: Array[Label] = []
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	HUD.hide_hud()
 
 	var bg := ColorRect.new()
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)

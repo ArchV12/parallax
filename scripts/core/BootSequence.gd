@@ -80,6 +80,7 @@ func _ready() -> void:
 	_skip_hint.text = "Press any key to skip"
 	_skip_hint.visible = true
 
+	HUD.hide_hud()
 	_run_sequence()
 
 

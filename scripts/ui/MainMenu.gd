@@ -18,6 +18,7 @@ func _ready() -> void:
 	_build()
 	MusicManager.play_menu()
 	UITheme.theme_changed.connect(_on_theme_changed)
+	HUD.hide_hud()
 
 
 # The main menu is built once and sits there — switching flavors via Options
