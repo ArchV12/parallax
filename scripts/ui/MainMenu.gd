@@ -46,9 +46,12 @@ func _rebuild() -> void:
 
 
 func _build(existing_starfield: Node = null) -> void:
+	# True space-black, not the theme's bg color — Starfield draws on top of
+	# this and only the black shows through between stars, so a theme-tinted
+	# fill here reads as a full-screen color wash over the whole backdrop.
 	var bg := ColorRect.new()
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	bg.color = Color(UITheme.bg, 1.0)
+	bg.color = Color.BLACK
 	add_child(bg)
 
 	if existing_starfield != null and is_instance_valid(existing_starfield):

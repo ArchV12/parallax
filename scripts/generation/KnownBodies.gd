@@ -34,6 +34,47 @@ class Entry:
 	var ring_tint: Color = Color(0.85, 0.75, 0.55)
 	var ring_tilt_degrees: float = -1.0
 
+	# --- Data-panel facts (2026-07-10) ---
+	# Real astronomical values, for BodyInfoPanel.gd's readout — separate
+	# from the rendering fields above, which are tuned for how a body LOOKS
+	# rather than what it factually IS. Deliberately basic (no gameplay-
+	# relevant properties like resources/biodiversity yet) — see the
+	# planet-data-panel conversation in parallax-core-design-decisions memory.
+	var body_type: String = ""      # "Terrestrial Planet", "Gas Giant", "Ice Giant", "Dwarf Planet", "Moon", "Star"
+	var real_radius_km: float = 0.0
+	# Orbital period in days — around Sol for a planet, around its parent for
+	# a moon. 0 for Sol itself (doesn't orbit anything here).
+	var orbital_period_days: float = 0.0
+	var has_atmosphere: bool = false
+	# Gas/ice giants (and Sol) have no solid surface at all, so "surface
+	# pressure" isn't a meaningful number to show — distinct from a body that
+	# genuinely has ~0 atm (Mercury, Luna), which IS meaningful.
+	var has_solid_surface: bool = true
+	var surface_pressure_atm: float = 0.0
+	# Real moon counts run into the dozens for the gas/ice giants — not
+	# practical to list or ever visit all of them. moon_count is already the
+	# CURATED number to display (the full real total for most bodies, but a
+	# capped "major moons only" figure for the giants); moon_count_is_capped
+	# says which label the panel should use ("Moons" vs "Major Moons") so the
+	# cap reads as a deliberate disclaimer, not an error. Only meaningful for
+	# planets/dwarf planets (parent == "") — moons don't have their own moons.
+	var moon_count: int = 0
+	var moon_count_is_capped: bool = false
+	# Star-only facts (body_type == "Star") — spectral classification and
+	# photosphere temperature. Unused/blank for anything else.
+	var spectral_type: String = ""
+	var surface_temp_k: float = 0.0
+	# true (default) = this entry has a real photographic texture and
+	# to_params()/CanonicalBodyGenerator renders it, same as every planet.
+	# false = PlanetarySystemView.gd instead builds this body procedurally
+	# via MoonGenerator, seeded off body_name so it looks the same every
+	# visit — used for every real moon here except Luna, which keeps its
+	# specific canonical art (see the planetary-system-view conversation in
+	# parallax-core-design-decisions memory). The facts above (radius,
+	# orbital period, atmosphere, ...) are real either way — this flag is
+	# purely about which renderer draws the body, not what's true about it.
+	var use_canonical_art: bool = true
+
 	# Builds a ready-to-generate CanonicalBodyParams at the given display
 	# radius — every caller lives at a different scale (Cosmic Forge's dev
 	# viewer, Cockpit's close-up, System view's compressed map), so radius
@@ -80,6 +121,42 @@ static func sol() -> Entry:
 	return get_entry("Sol")
 
 
+# All catalogued moons of the given planet, closest to farthest (by real
+# orbital period around that planet, not around Sol) — what
+# PlanetarySystemView.gd iterates over. Not every catalogued moon is
+# necessarily this planet's FULL real moon count (see moon_count/
+# moon_count_is_capped on Entry) — only the ones actually curated here.
+static func moons_of(planet_name: String) -> Array[Entry]:
+	_ensure_built()
+	var result: Array[Entry] = []
+	for entry: Entry in _catalog.values():
+		if entry.parent == planet_name:
+			result.append(entry)
+	result.sort_custom(func(a: Entry, b: Entry) -> bool: return a.orbital_period_days < b.orbital_period_days)
+	return result
+
+
+# Compact constructor for a real moon whose ART is procedurally generated
+# (MoonGenerator, seeded off its name) rather than a real texture — the
+# facts themselves (radius, period, atmosphere) are still real. Most moons
+# have no meaningful atmosphere; the two real exceptions (Titan, Triton)
+# pass has_atmo/pressure explicitly.
+static func _make_moon(moon_name: String, parent_name: String, radius_km: float, period_days: float,
+		has_atmo: bool = false, pressure_atm: float = 0.0) -> Entry:
+	var m := Entry.new()
+	m.body_name = moon_name
+	m.parent = parent_name
+	m.body_type = "Moon"
+	m.real_radius_km = radius_km
+	m.radius_ratio = radius_km / 6371.0  # Earth-relative, same reference every other entry uses
+	m.orbital_period_days = period_days
+	m.has_atmosphere = has_atmo
+	m.has_solid_surface = true
+	m.surface_pressure_atm = pressure_atm
+	m.use_canonical_art = false
+	return m
+
+
 static func _ensure_built() -> void:
 	if not _catalog.is_empty():
 		return
@@ -95,6 +172,11 @@ static func _ensure_built() -> void:
 	sol.atmo_falloff = 1.5
 	sol.self_luminous = true
 	sol.emission_energy = 1.5
+	sol.body_type = "Star"
+	sol.real_radius_km = 695700.0
+	sol.has_solid_surface = false
+	sol.spectral_type = "G2V"
+	sol.surface_temp_k = 5778.0
 	_catalog[sol.body_name] = sol
 
 	var mercury := Entry.new()
@@ -106,6 +188,12 @@ static func _ensure_built() -> void:
 	mercury.au_distance = 0.39
 	mercury.atmosphere = 0.0
 	mercury.atmo_falloff = 1.5
+	mercury.body_type = "Terrestrial Planet"
+	mercury.real_radius_km = 2439.7
+	mercury.orbital_period_days = 88.0
+	mercury.has_atmosphere = false
+	mercury.surface_pressure_atm = 0.0
+	mercury.moon_count = 0
 	_catalog[mercury.body_name] = mercury
 
 	var venus := Entry.new()
@@ -117,6 +205,12 @@ static func _ensure_built() -> void:
 	venus.au_distance = 0.72
 	venus.atmosphere = 0.9
 	venus.atmo_falloff = 1.5
+	venus.body_type = "Terrestrial Planet"
+	venus.real_radius_km = 6051.8
+	venus.orbital_period_days = 224.7
+	venus.has_atmosphere = true
+	venus.surface_pressure_atm = 92.0
+	venus.moon_count = 0
 	_catalog[venus.body_name] = venus
 
 	var earth := Entry.new()
@@ -128,6 +222,12 @@ static func _ensure_built() -> void:
 	earth.au_distance = 1.00
 	earth.atmosphere = 0.35
 	earth.atmo_falloff = 1.5
+	earth.body_type = "Terrestrial Planet"
+	earth.real_radius_km = 6371.0
+	earth.orbital_period_days = 365.25
+	earth.has_atmosphere = true
+	earth.surface_pressure_atm = 1.0
+	earth.moon_count = 1
 	_catalog[earth.body_name] = earth
 
 	# Mars' real atmosphere is ~0.6% the density of Earth's — default stays
@@ -141,6 +241,12 @@ static func _ensure_built() -> void:
 	mars.au_distance = 1.52
 	mars.atmosphere = 0.08
 	mars.atmo_falloff = 1.5
+	mars.body_type = "Terrestrial Planet"
+	mars.real_radius_km = 3389.5
+	mars.orbital_period_days = 687.0
+	mars.has_atmosphere = true
+	mars.surface_pressure_atm = 0.006
+	mars.moon_count = 2
 	_catalog[mars.body_name] = mars
 
 	var luna := Entry.new()
@@ -152,6 +258,11 @@ static func _ensure_built() -> void:
 	luna.parent = "Earth"
 	luna.atmosphere = 0.0
 	luna.atmo_falloff = 1.5
+	luna.body_type = "Moon"
+	luna.real_radius_km = 1737.4
+	luna.orbital_period_days = 27.3  # around Earth, not Sol
+	luna.has_atmosphere = false
+	luna.surface_pressure_atm = 0.0
 	_catalog[luna.body_name] = luna
 
 	var jupiter := Entry.new()
@@ -163,6 +274,13 @@ static func _ensure_built() -> void:
 	jupiter.au_distance = 5.20
 	jupiter.atmosphere = 0.25
 	jupiter.atmo_falloff = 1.2
+	jupiter.body_type = "Gas Giant"
+	jupiter.real_radius_km = 69911.0
+	jupiter.orbital_period_days = 4331.0
+	jupiter.has_atmosphere = true
+	jupiter.has_solid_surface = false
+	jupiter.moon_count = 4  # the Galilean moons — real total is ~95
+	jupiter.moon_count_is_capped = true
 	_catalog[jupiter.body_name] = jupiter
 
 	# Fixed rings, not a slider-driven maybe — Saturn's rings (and its real
@@ -180,6 +298,13 @@ static func _ensure_built() -> void:
 	saturn.ring_tracks = 1
 	saturn.ring_tint = Color(0.80, 0.72, 0.58)
 	saturn.ring_tilt_degrees = 26.7
+	saturn.body_type = "Gas Giant"
+	saturn.real_radius_km = 58232.0
+	saturn.orbital_period_days = 10747.0
+	saturn.has_atmosphere = true
+	saturn.has_solid_surface = false
+	saturn.moon_count = 7  # the classical round moons — real total is ~146
+	saturn.moon_count_is_capped = true
 	_catalog[saturn.body_name] = saturn
 
 	# Uranus is essentially tipped onto its side (real axial tilt ~97.8°),
@@ -198,6 +323,13 @@ static func _ensure_built() -> void:
 	uranus.ring_tracks = 1
 	uranus.ring_tint = Color(0.75, 0.80, 0.82)
 	uranus.ring_tilt_degrees = 97.8
+	uranus.body_type = "Ice Giant"
+	uranus.real_radius_km = 25362.0
+	uranus.orbital_period_days = 30589.0
+	uranus.has_atmosphere = true
+	uranus.has_solid_surface = false
+	uranus.moon_count = 5  # the major moons — real total is 27
+	uranus.moon_count_is_capped = true
 	_catalog[uranus.body_name] = uranus
 
 	var neptune := Entry.new()
@@ -209,6 +341,13 @@ static func _ensure_built() -> void:
 	neptune.au_distance = 30.05
 	neptune.atmosphere = 0.2
 	neptune.atmo_falloff = 1.2
+	neptune.body_type = "Ice Giant"
+	neptune.real_radius_km = 24622.0
+	neptune.orbital_period_days = 59800.0
+	neptune.has_atmosphere = true
+	neptune.has_solid_surface = false
+	neptune.moon_count = 1  # Triton, overwhelmingly dominant — real total is 14
+	neptune.moon_count_is_capped = true
 	_catalog[neptune.body_name] = neptune
 
 	# Pluto's atmosphere is so thin it's negligible at this scale.
@@ -221,4 +360,48 @@ static func _ensure_built() -> void:
 	pluto.au_distance = 39.5
 	pluto.atmosphere = 0.0
 	pluto.atmo_falloff = 1.5
+	pluto.body_type = "Dwarf Planet"
+	pluto.real_radius_km = 1188.3
+	pluto.orbital_period_days = 90560.0
+	pluto.has_atmosphere = true  # trace, seasonal nitrogen atmosphere
+	pluto.surface_pressure_atm = 0.00001
+	pluto.moon_count = 5  # Charon + Styx, Nix, Kerberos, Hydra — the full known total
 	_catalog[pluto.body_name] = pluto
+
+	# --- Real moons, procedurally-generated art (2026-07-10) ---
+	# Facts are real; the ART is generated (see Entry.use_canonical_art) —
+	# see the planetary-system-view conversation in parallax-core-design-
+	# decisions memory. Matches each planet's moon_count above exactly, in
+	# real closest-to-farthest order (moons_of() sorts by orbital period).
+	# Titan and Triton are the two real exceptions with a genuine atmosphere;
+	# every other moon here has none worth showing.
+	_catalog["Phobos"] = _make_moon("Phobos", "Mars", 11.1, 0.32)
+	_catalog["Deimos"] = _make_moon("Deimos", "Mars", 6.2, 1.26)
+
+	_catalog["Io"] = _make_moon("Io", "Jupiter", 1821.6, 1.77)
+	_catalog["Europa"] = _make_moon("Europa", "Jupiter", 1560.8, 3.55)
+	_catalog["Ganymede"] = _make_moon("Ganymede", "Jupiter", 2634.1, 7.15)
+	_catalog["Callisto"] = _make_moon("Callisto", "Jupiter", 2410.3, 16.69)
+
+	_catalog["Mimas"] = _make_moon("Mimas", "Saturn", 198.2, 0.94)
+	_catalog["Enceladus"] = _make_moon("Enceladus", "Saturn", 252.1, 1.37)
+	_catalog["Tethys"] = _make_moon("Tethys", "Saturn", 531.1, 1.89)
+	_catalog["Dione"] = _make_moon("Dione", "Saturn", 561.4, 2.74)
+	_catalog["Rhea"] = _make_moon("Rhea", "Saturn", 763.8, 4.52)
+	# Titan's surface pressure is real — genuinely thicker than Earth's.
+	_catalog["Titan"] = _make_moon("Titan", "Saturn", 2574.7, 15.95, true, 1.45)
+	_catalog["Iapetus"] = _make_moon("Iapetus", "Saturn", 734.5, 79.3)
+
+	_catalog["Miranda"] = _make_moon("Miranda", "Uranus", 235.8, 1.41)
+	_catalog["Ariel"] = _make_moon("Ariel", "Uranus", 578.9, 2.52)
+	_catalog["Umbriel"] = _make_moon("Umbriel", "Uranus", 584.7, 4.14)
+	_catalog["Titania"] = _make_moon("Titania", "Uranus", 788.4, 8.71)
+	_catalog["Oberon"] = _make_moon("Oberon", "Uranus", 761.4, 13.46)
+
+	_catalog["Triton"] = _make_moon("Triton", "Neptune", 1353.4, 5.88, true, 0.00002)
+
+	_catalog["Charon"] = _make_moon("Charon", "Pluto", 606.0, 6.39)
+	_catalog["Styx"] = _make_moon("Styx", "Pluto", 5.0, 20.2)
+	_catalog["Nix"] = _make_moon("Nix", "Pluto", 17.5, 24.9)
+	_catalog["Kerberos"] = _make_moon("Kerberos", "Pluto", 6.0, 32.1)
+	_catalog["Hydra"] = _make_moon("Hydra", "Pluto", 18.0, 38.5)

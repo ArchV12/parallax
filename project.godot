@@ -21,6 +21,7 @@ UITheme="*res://scripts/core/UITheme.gd"
 AudioManager="*res://scripts/core/AudioManager.gd"
 MusicManager="*res://scripts/core/MusicManager.gd"
 HUD="*res://scripts/core/HUD.gd"
+Discoveries="*res://scripts/core/Discoveries.gd"
 
 [display]
 

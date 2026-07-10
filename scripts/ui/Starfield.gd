@@ -8,6 +8,11 @@ extends Control
 # visibly re-scatter every time the flavor changes.
 
 const STAR_COUNT := 320
+# Twinkle is slow (0.8-2.2 rad/s, i.e. a ~3-8s period) — redrawing every
+# single frame re-issues 320 draw_circle calls for a change nobody can
+# actually see between frames. Throttling to this rate is visually
+# identical but far cheaper on the main thread.
+const REDRAW_INTERVAL := 1.0 / 24.0
 
 # A few stars get a faint color tint — spectral variety, very subtle.
 const TINTS: Array[Color] = [
@@ -19,6 +24,7 @@ const TINTS: Array[Color] = [
 
 var _stars: Array[Dictionary] = []
 var _time: float = 0.0
+var _redraw_accum: float = 0.0
 
 
 func _ready() -> void:
@@ -42,7 +48,10 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_time += delta
-	queue_redraw()
+	_redraw_accum += delta
+	if _redraw_accum >= REDRAW_INTERVAL:
+		_redraw_accum = 0.0
+		queue_redraw()
 
 
 func _draw() -> void:

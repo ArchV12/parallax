@@ -32,6 +32,18 @@ const HOVER_ANIM_TIME := 0.12
 
 @export var accent: bool = false  # true = primary/CTA styling (chamfered shape + gradient + glow border)
 @export var dim: bool = false     # true = de-emphasized text (secondary/utility actions)
+# true = near-opaque fill instead of the plain style's translucent glass —
+# for a plain button that needs to stay readable over whatever's behind it
+# (e.g. floating over a 3D scene where "behind" might be a bright planet or
+# the sun itself), where translucency defeats the point. No effect on
+# accent buttons, which are already a solid gradient fill.
+@export var solid: bool = false
+# false = skip the idle/hover sweep — the scale-pop and border/fill brighten
+# in _draw_accent_shape/_draw_bracket_frame (both keyed off is_hovered(),
+# independent of the shimmer) still provide a hover "light up" on their own.
+# Off for dense button clusters (the cockpit console) where a moving sweep
+# on every button at once reads as noisy rather than alive.
+@export var shimmer_enabled: bool = true
 
 var _shimmer: ColorRect
 var _shimmer_mat: ShaderMaterial
@@ -39,7 +51,8 @@ var _shimmer_mat: ShaderMaterial
 
 func _ready() -> void:
 	_apply_style()
-	_add_shimmer()
+	if shimmer_enabled:
+		_add_shimmer()
 	pivot_offset = size * 0.5
 	mouse_entered.connect(_on_hover)
 	mouse_exited.connect(_on_unhover)
@@ -60,6 +73,11 @@ func _apply_style() -> void:
 			empty.content_margin_top = 8
 			empty.content_margin_bottom = 8
 			add_theme_stylebox_override(state, empty)
+	elif solid:
+		add_theme_stylebox_override("normal", _make_style(UITheme.button, 0.95))
+		add_theme_stylebox_override("hover", _make_style(UITheme.button_hov, 0.95))
+		add_theme_stylebox_override("pressed", _make_style(UITheme.button_hov.darkened(0.15), 0.95))
+		add_theme_stylebox_override("disabled", _make_style(UITheme.button, 0.4))
 	else:
 		var base_alpha := 0.18
 		add_theme_stylebox_override("normal", _make_style(UITheme.button, base_alpha))
@@ -116,7 +134,8 @@ func _sync_shimmer_shape() -> void:
 
 func _on_resized() -> void:
 	pivot_offset = size * 0.5
-	_sync_shimmer_shape()
+	if _shimmer_mat != null:
+		_sync_shimmer_shape()
 	queue_redraw()
 
 
@@ -188,8 +207,9 @@ func _on_hover() -> void:
 	tw.set_parallel(true)
 	tw.tween_property(self, "scale", Vector2(HOVER_SCALE, HOVER_SCALE), HOVER_ANIM_TIME) \
 			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tw.tween_property(_shimmer_mat, "shader_parameter/intensity", SHIMMER_HOVER, HOVER_ANIM_TIME)
-	tw.tween_property(_shimmer_mat, "shader_parameter/speed", SHIMMER_SPEED_HOVER, HOVER_ANIM_TIME)
+	if _shimmer_mat != null:
+		tw.tween_property(_shimmer_mat, "shader_parameter/intensity", SHIMMER_HOVER, HOVER_ANIM_TIME)
+		tw.tween_property(_shimmer_mat, "shader_parameter/speed", SHIMMER_SPEED_HOVER, HOVER_ANIM_TIME)
 	queue_redraw()
 
 
@@ -198,8 +218,9 @@ func _on_unhover() -> void:
 	tw.set_parallel(true)
 	tw.tween_property(self, "scale", Vector2.ONE, HOVER_ANIM_TIME) \
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tw.tween_property(_shimmer_mat, "shader_parameter/intensity", SHIMMER_IDLE, HOVER_ANIM_TIME + 0.08)
-	tw.tween_property(_shimmer_mat, "shader_parameter/speed", SHIMMER_SPEED_IDLE, HOVER_ANIM_TIME + 0.08)
+	if _shimmer_mat != null:
+		tw.tween_property(_shimmer_mat, "shader_parameter/intensity", SHIMMER_IDLE, HOVER_ANIM_TIME + 0.08)
+		tw.tween_property(_shimmer_mat, "shader_parameter/speed", SHIMMER_SPEED_IDLE, HOVER_ANIM_TIME + 0.08)
 	queue_redraw()
 
 

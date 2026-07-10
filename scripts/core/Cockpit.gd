@@ -36,12 +36,13 @@ const MOON_SPIN := 0.01                         # rad/s — idle rotation, purel
 var _sun: DirectionalLight3D
 var _earth: Node3D
 var _moon: Node3D
+var _camera: Camera3D
 
 
 func _ready() -> void:
 	_build_environment()
 	_build_bodies()
-	HUD.set_view("Earth Orbit", "System", "res://scenes/system_view.tscn")
+	HUD.set_view("Earth Orbit", "cockpit")
 	MusicManager.play_earth_orbit()
 
 
@@ -55,14 +56,9 @@ func _process(delta: float) -> void:
 # --- 3D scene ---
 
 func _build_environment() -> void:
-	var sky_mat := PanoramaSkyMaterial.new()
-	sky_mat.panorama = StarfieldSky.build_texture()
-	var sky := Sky.new()
-	sky.sky_material = sky_mat
-
 	var env := Environment.new()
-	env.background_mode = Environment.BG_SKY
-	env.sky = sky
+	env.background_mode = Environment.BG_COLOR
+	env.background_color = Color(0.005, 0.007, 0.012)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color(0.10, 0.12, 0.18)
 	env.ambient_light_energy = 0.6
@@ -88,10 +84,14 @@ func _build_environment() -> void:
 	# Earth's bulk off in a corner instead of centered/full-frame. Narrower
 	# than Godot's 75° default — at this close a distance that default reads
 	# as an extreme fisheye bulge rather than a majestic orbital view.
-	var camera := Camera3D.new()
-	camera.fov = 60.0
-	camera.rotation_degrees = Vector3(-3, 8, 0)
-	add_child(camera)
+	_camera = Camera3D.new()
+	_camera.fov = 60.0
+	_camera.rotation_degrees = Vector3(-3, 8, 0)
+	add_child(_camera)
+
+	var stars := StarfieldStars.new()
+	stars.follow = _camera
+	add_child(stars)
 
 
 func _build_bodies() -> void:
@@ -128,5 +128,4 @@ func _build_bodies() -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
-		HUD.hide_hud()
-		get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+		HUD.open_system_menu()

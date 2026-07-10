@@ -539,14 +539,9 @@ func _orient_tail(tail: MeshInstance3D, sun_dir: Vector3) -> void:
 # --- 3D setup ---
 
 func _build_environment() -> void:
-	var sky_mat := PanoramaSkyMaterial.new()
-	sky_mat.panorama = StarfieldSky.build_texture()
-	var sky := Sky.new()
-	sky.sky_material = sky_mat
-
 	_env = Environment.new()
-	_env.background_mode = Environment.BG_SKY
-	_env.sky = sky
+	_env.background_mode = Environment.BG_COLOR
+	_env.background_color = Color(0.005, 0.007, 0.012)
 	_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	_env.ambient_light_color = Color(0.10, 0.12, 0.18)
 	_env.ambient_light_energy = 0.6
@@ -583,6 +578,10 @@ func _build_camera() -> void:
 	_camera = Camera3D.new()
 	_pivot.add_child(_camera)
 	_update_camera()
+
+	var stars := StarfieldStars.new()
+	stars.follow = _camera
+	add_child(stars)
 
 
 func _update_camera() -> void:

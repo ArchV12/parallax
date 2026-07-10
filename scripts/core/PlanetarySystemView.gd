@@ -1,105 +1,70 @@
 extends Node3D
 
-# The system-wide navigation map — angled top-down orbital view with
-# log-scaled radial distances (see the System view / Cockpit-System
-# transition decision in parallax-core-design-decisions memory). Bodies come
-# straight from the KnownBodies catalog — the same source of truth Cosmic
-# Forge and Cockpit use — so nothing about a planet's look is redefined here.
+# A planet's own orbital map — moons instead of planets, the planet itself
+# fixed at the center instead of Sol. Deliberately its own scene (matching
+# the "each view is a separate scene/context" convention), but borrows
+# System view's whole interaction shape wholesale: camera rig, click-to-
+# select, scan-gated callout + data panel. Reached only via the "Planetary
+# System" button on a scanned planet's BodyInfoPanel — never a persistent
+# ViewSwitcher tab, since it's parameterized per-planet rather than a fixed
+# peer scope (see the planetary-system-view conversation in
+# parallax-core-design-decisions memory).
 #
-# Real AU distances span ~100x (Mercury 0.39 AU to Pluto 39.5 AU) — far too
-# wide a range to render literally without either crushing the inner
-# planets together or pushing the outer ones off-screen. DISPLAY radius
-# below (BASE_GAP + LOG_SCALE * log(au)) compresses that range for display
-# only; KnownBodies' underlying AU values stay real, ready for whatever real
-# orbital-math system eventually drives actual travel/ephemeris.
-#
-# Not yet interactive — no destination picking, no ship, no travel. Just the
-# map itself; switching to/from Cockpit is a quick viewer flicker (HUD.go_to)
-# rather than a camera move through space — see the "Star Trek viewscreen"
-# transition decision in parallax-core-design-decisions memory. Planet
-# angles reroll every scene load (same "dynamic, not yet a real ephemeris"
-# spirit as Cockpit's Earth rotation/Luna jitter) since there's no real
-# time-of-day/orbital-phase system yet.
+# Real moon names/facts come from KnownBodies, same as every other body in
+# the game. Only Luna keeps its real canonical texture (KnownBodies.Entry.
+# use_canonical_art); every other moon here is a procedurally generated
+# MoonGenerator body, seeded off its own name so it looks the same every
+# time you visit rather than reshuffling.
 
-const BASE_GAP := 8.0          # display-radius offset before the log term — keeps Mercury clear of Sol's own bulk
-const LOG_SCALE := 6.0         # display units per natural-log-AU — the actual compression amount
-const BODY_MIN_RADIUS := 0.25
-const BODY_SIZE_SCALE := 0.12  # display-radius units per sqrt(real radius ratio)
-const ORBIT_RING_WIDTH := 0.008
-const SPIN := 0.03             # rad/s — idle rotation, purely for a "living" feel
-# Orbital angular speed follows Kepler's third law (period scales with
-# distance^1.5, so angular speed scales with 1/distance^1.5) — inner planets
-# visibly outpace outer ones, same relative ordering as reality, just sped
-# way up for a "living map" feel rather than real orbital timescales (at
-# this rate Mercury completes a lap in ~2 minutes; Pluto barely crawls,
-# which is itself realistic — outer planets really do move that much slower).
-const ORBIT_SPEED := 0.013
+const GAP_BASE := 3.0
+const GAP_SCALE := 2.2
+const BODY_MIN_RADIUS := 0.18
+const BODY_SIZE_SCALE := 0.9  # steeper than System view's — moons are all similar real sizes and would otherwise read as identical dots
+const PLANET_RADIUS := 2.2    # the central planet is a fixed display size, not scaled by its real radius_ratio — Jupiter and Mars would otherwise need wildly different camera distances
+const ORBIT_RING_WIDTH := 0.006
+const SPIN := 0.05
+# Tuned directly against real orbital_period_days (see _build_system),
+# unlike System view's AU^1.5 proxy — moons have real period data on hand.
+# Phobos' real period (0.32 days, the fastest of any cataloged moon) sets
+# the ceiling: this value keeps it at roughly System view's Mercury speed
+# (~0.05 rad/s, a ~2 minute lap) rather than several rotations per second,
+# which made it nearly impossible to click. Slower-orbiting moons (most of
+# them) end up well under that, same as System view's outer planets crawl.
+const ORBIT_SPEED := 0.016
 
-# Orbit/zoom/pan camera rig — same interaction model as Cosmic Forge's
-# viewer, just tuned for this scene's much larger scale (orbits span up to
-# ~30 units, vs. Cosmic Forge's single-object close-ups).
 const ZOOM_STEP := 0.9
-const MIN_DISTANCE := 1.5
-const MAX_DISTANCE := 150.0
+const MIN_DISTANCE := 0.8
+const MAX_DISTANCE := 60.0
 const ORBIT_SENSITIVITY := 0.008
 const PAN_SENSITIVITY := 0.0012
 
-# "Stock" framing — what Esc returns to when nothing's focused, and what
-# every session starts at.
 const STOCK_YAW := 0.0
-const STOCK_PITCH := -0.74  # matches the old fixed camera's implied angle
-const STOCK_DISTANCE := 62.0
+const STOCK_PITCH := -0.74
+const STOCK_DISTANCE := 16.0
 
-# Lower = slower, more dramatic sweep across the map; higher = a snappier
-# chase. This is an exponential-decay rate, not a duration — 4.0 reaches
-# ~63% of the way in 0.25s, ~95% by 0.75s. Exponential decay's tail is
-# inherently long/mushy (it never truly finishes) at low rates — this is
-# high enough that the tail is short enough not to read as "creeping up."
 const FOCUS_SWEEP_RATE := 4.0
-# Focused distance = the body's own display radius times this — a close-up
-# scaled to whatever you actually clicked, not the stock overview distance
-# (Pluto is tiny; Jupiter isn't — one fixed zoom level can't suit both).
 const FOCUS_DISTANCE_MULT := 6.0
-
-# A left click that moves the mouse more than this (pixels) reads as a drag
-# (camera orbit), not a selection attempt.
 const CLICK_DRAG_THRESHOLD := 6.0
-# Hit-test radius multiplier over a body's visual radius — planets are small
-# on screen at this scale, so a forgiving click target matters more than
-# pixel-perfect accuracy.
 const SELECT_RADIUS_PAD := 1.8
-
-# Sci-fi target-designator callout — dot on the body, an angled leader line,
-# an elbow to horizontal, then the name. Direction (left/right) mirrors
-# depending which half of the screen the body's on, so the line never runs
-# off the edge. Sequenced: hidden while the camera's still sweeping in, then
-# the line draws itself out, then the name types on — see CalloutStage.
 const CALLOUT_DIAGONAL := Vector2(28.0, -28.0)  # up-right — BodyInfoPanel sits on the left, but the small target callout stays on the right
 const CALLOUT_HORIZONTAL := 70.0
 const CALLOUT_LABEL_GAP := 8.0
-# Time-based, not distance-based — the pivot chases the focused body with
-# exponential smoothing, which has a permanent steady-state lag behind any
-# continuously-moving target (proportional to the body's own orbital
-# speed). Close, fast-orbiting bodies like Venus/Mercury never actually
-# close that gap to zero, so a distance threshold could get stuck waiting
-# forever; a fixed wait (a few sweep time-constants — always "visually
-# settled" by then, this scene's fastest planets included) is robust
-# regardless of target speed.
 const ARRIVE_WAIT_TIME := 3.0 / FOCUS_SWEEP_RATE
 const LINE_REVEAL_TIME := 0.25
-# Same typewriter convention as BootSequence/CommanderBriefing — click every
-# TYPE_CLICK_STRIDE-th character, not every one (blurs into a buzz at 35cps).
 const TYPE_CHARS_PER_SEC := 35.0
 const TYPE_MIN_TIME := 0.06
 const TYPE_CLICK_STRIDE := 2
 
 enum CalloutStage { HIDDEN, WAITING_FOR_SWEEP, REVEALING_LINE, TYPING_NAME, DONE }
 
+var _planet_name: String = "Earth"
+
 var _bodies: Array[Node3D] = []
-var _orbits: Array[Dictionary] = []  # body, radius, body_radius, angle, speed, atmo — see _build_system/_process
+var _orbits: Array[Dictionary] = []
 
 var _pivot: Node3D
 var _camera: Camera3D
+var _sun: DirectionalLight3D
 var _yaw := STOCK_YAW
 var _pitch := STOCK_PITCH
 var _distance := STOCK_DISTANCE
@@ -121,19 +86,18 @@ var _scan_prompt: ScanPrompt
 
 
 func _ready() -> void:
+	_planet_name = HUD.pending_planet_name if HUD.pending_planet_name != "" else "Earth"
+	HUD.pending_planet_name = ""
 	_build_environment()
 	_build_camera()
 	_build_system()
 	_build_callout()
 	_build_body_panel()
-	HUD.set_view("Solar System", "solar_system")
+	HUD.set_view("%s System" % _planet_name, "solar_system")
 
 
 func _process(delta: float) -> void:
 	for body in _bodies:
-		# Same fix as Cosmic Forge's idle spin — rotate each child except
-		# Rings individually, not the shared body root, or a ringed body's
-		# fixed tilt gets dragged around into a precessing wobble.
 		for child in body.get_children():
 			if child.name != "Rings":
 				child.rotate_y(SPIN * delta)
@@ -144,27 +108,11 @@ func _process(delta: float) -> void:
 		var radius: float = orbit["radius"]
 		var body: Node3D = orbit["body"]
 		body.position = Vector3(cos(angle) * radius, 0.0, sin(angle) * radius)
-		var atmo: MeshInstance3D = orbit["atmo"]
-		if atmo != null:
-			(atmo.material_override as ShaderMaterial).set_shader_parameter(
-					"sun_dir", (-body.position).normalized())
 
-	# Glide the pivot toward wherever it should be — the focused body's live
-	# position, or the origin once nothing's focused — instead of snapping.
-	# Framerate-independent exponential smoothing rather than a fixed-
-	# duration tween: the target itself keeps moving (an orbiting planet),
-	# so a tween-to-a-fixed-point would fall behind by the time it finishes;
-	# this keeps chasing the live position the whole way, decelerating into
-	# it, and handles "switching directly from one planet to another" and
-	# "returning to the stock view" the same way, since both are just "the
-	# target changed" — no separate transition state needed.
 	var pivot_target := _focused_body.position if _focused_body != null else Vector3.ZERO
 	var t := 1.0 - exp(-delta * FOCUS_SWEEP_RATE)
 	_pivot.position = _pivot.position.lerp(pivot_target, t)
 
-	# Same easing for zoom, toward whatever _select()/_clear_focus() set as
-	# the target — a manual wheel-zoom (see _unhandled_input) retargets this
-	# too, so it doesn't keep fighting the player's own zoom input.
 	if not is_equal_approx(_distance, _target_distance):
 		_distance = lerpf(_distance, _target_distance, t)
 		_update_camera()
@@ -184,16 +132,21 @@ func _build_environment() -> void:
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color(0.08, 0.09, 0.13)
 	env.ambient_light_energy = 0.5
-	# Sol is self-luminous — needs bloom to actually read as a light source
-	# rather than a flat bright disc, same as everywhere else Sol appears.
-	env.glow_enabled = true
-	env.glow_intensity = 0.9
-	env.glow_bloom = 0.25
-	env.glow_hdr_threshold = 1.0
 
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
+
+	# Everything here sits clustered tightly around one planet (unlike System
+	# view's system-wide spread), so a single directional Sun is a fine
+	# approximation — same technique Cockpit/Cosmic Forge use, rather than
+	# System view's per-position OmniLight (needed there specifically because
+	# planets are spread across wildly different real distances from Sol).
+	_sun = DirectionalLight3D.new()
+	_sun.light_color = Color(1.0, 0.96, 0.88)
+	_sun.light_energy = 1.3
+	_sun.rotation_degrees = Vector3(-25, 55, 0)
+	add_child(_sun)
 
 
 func _build_camera() -> void:
@@ -217,66 +170,73 @@ func _update_camera() -> void:
 
 
 func _build_system() -> void:
-	var sol_entry := KnownBodies.sol()
-	var sol_radius := BODY_MIN_RADIUS + BODY_SIZE_SCALE * sqrt(sol_entry.radius_ratio)
-	var sol := CanonicalBodyGenerator.generate(sol_entry.to_params(sol_radius))
-	add_child(sol)
-	_bodies.append(sol)
-	# Sol never orbits — radius 0 and speed 0 keep it pinned at the origin
-	# every frame — but folding it into _orbits too means click-selection
-	# and camera-follow (both driven by this array) work uniformly for Sol
-	# without a separate special case.
+	var planet_entry := KnownBodies.get_entry(_planet_name)
+	var planet := CanonicalBodyGenerator.generate(planet_entry.to_params(PLANET_RADIUS))
+	add_child(planet)
+	_bodies.append(planet)
+	# Fixed at the origin, radius/speed 0 — folded into _orbits anyway so
+	# click-selection works uniformly for the planet without a special case,
+	# same trick System view uses for Sol.
 	_orbits.append({
-		"body": sol,
+		"body": planet,
 		"radius": 0.0,
-		"body_radius": sol_radius,
+		"body_radius": PLANET_RADIUS,
 		"angle": 0.0,
 		"speed": 0.0,
-		"atmo": sol.get_node_or_null("Atmosphere") as MeshInstance3D,
 	})
 
-	# Sol lights every planet from its own position — a single directional
-	# light (as Cockpit/Cosmic Forge use) would light every planet from the
-	# same fixed direction regardless of where it actually sits relative to
-	# Sol, which breaks the moment more than one body is on screen at once.
-	var sun_light := OmniLight3D.new()
-	sun_light.light_color = Color(1.0, 0.96, 0.88)
-	sun_light.light_energy = 3.0
-	sun_light.omni_range = 200.0
-	add_child(sun_light)
+	# The planet doesn't move (unlike System view's orbiting planets), so
+	# this only needs setting once, not every frame.
+	var atmo := planet.get_node_or_null("Atmosphere") as MeshInstance3D
+	if atmo != null:
+		(atmo.material_override as ShaderMaterial).set_shader_parameter("sun_dir", _sun.global_basis.z)
 
-	for entry: KnownBodies.Entry in KnownBodies.planets():
-		var display_r := BASE_GAP + LOG_SCALE * log(entry.au_distance + 1.0)
+	var moons := KnownBodies.moons_of(_planet_name)
+	for i in moons.size():
+		var entry: KnownBodies.Entry = moons[i]
+		var display_r := GAP_BASE + GAP_SCALE * (i + 1)
 		add_child(_build_orbit_ring(display_r))
 
 		var body_r := BODY_MIN_RADIUS + BODY_SIZE_SCALE * sqrt(entry.radius_ratio)
-		var body := CanonicalBodyGenerator.generate(entry.to_params(body_r))
+		var body := _build_moon_body(entry, body_r)
 		var start_angle := randf_range(0.0, TAU)  # rerolled each load
-		# Position (and sun_dir below) set immediately, not just registered
-		# for _process to place next frame — otherwise every planet flashes
-		# at the origin (Sol's own position), wrongly lit, for one frame
-		# before its orbit angle first applies.
 		body.position = Vector3(cos(start_angle) * display_r, 0.0, sin(start_angle) * display_r)
 		add_child(body)
 		_bodies.append(body)
-
-		var atmo := body.get_node_or_null("Atmosphere") as MeshInstance3D
-		if atmo != null:
-			(atmo.material_override as ShaderMaterial).set_shader_parameter(
-					"sun_dir", (-body.position).normalized())
 
 		_orbits.append({
 			"body": body,
 			"radius": display_r,
 			"body_radius": body_r,
 			"angle": start_angle,
-			"speed": ORBIT_SPEED / pow(entry.au_distance, 1.5),
-			"atmo": atmo,
+			"speed": ORBIT_SPEED / maxf(entry.orbital_period_days, 0.1),
 		})
 
 
+func _build_moon_body(entry: KnownBodies.Entry, display_radius: float) -> Node3D:
+	if entry.use_canonical_art:
+		return CanonicalBodyGenerator.generate(entry.to_params(display_radius))
+
+	# Deterministic per moon name — same look every visit, not reshuffled —
+	# with a little seeded knob variety so a row of moons doesn't look like
+	# copies of one another.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = entry.body_name.hash()
+	var params := MoonParams.new()
+	params.seed_value = entry.body_name.hash()
+	params.radius = display_radius
+	params.surface_roughness = rng.randf_range(0.01, 0.04)
+	params.crater_density = rng.randf_range(0.25, 0.85)
+	params.crater_size = rng.randf_range(0.10, 0.28)
+	params.crater_depth = rng.randf_range(0.03, 0.08)
+	params.detail = 4
+	var body := MoonGenerator.generate(params)
+	body.name = entry.body_name
+	return body
+
+
 func _build_orbit_ring(radius: float) -> MeshInstance3D:
-	const SEGMENTS := 128
+	const SEGMENTS := 96
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for i in SEGMENTS:
@@ -297,9 +257,6 @@ func _build_orbit_ring(radius: float) -> MeshInstance3D:
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.albedo_color = Color(0.5, 0.55, 0.65, 0.12)
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	# Default backface culling only draws one side of each triangle — pan
-	# the camera underneath the system plane and the rings vanish. A thin
-	# reference ring should read the same from either side.
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 
 	var mi := MeshInstance3D.new()
@@ -309,18 +266,16 @@ func _build_orbit_ring(radius: float) -> MeshInstance3D:
 
 
 # --- Camera input ---
-# Click a body — select/focus it, camera follows it around its orbit.
-# Drag — orbit · Wheel — zoom · Right/middle-drag — pan (pan is a no-op
-# while focused — _process re-glues the pivot to the body every frame, so
-# any pan gets overwritten the instant it's applied). Esc clears focus, or
-# leaves to Cockpit if nothing's focused.
+# Same interaction model as System view: click a body to focus it, drag to
+# orbit, wheel to zoom, right/middle-drag to pan. Esc clears focus, or
+# leaves to Solar System view if nothing's focused.
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		if _focused_body != null:
 			_clear_focus()
 		else:
-			HUD.go_to("res://scenes/cockpit.tscn")
+			HUD.go_to("res://scenes/system_view.tscn")
 		return
 
 	if event is InputEventMouseButton:
@@ -328,7 +283,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		match mb.button_index:
 			MOUSE_BUTTON_WHEEL_UP:
 				_distance *= ZOOM_STEP
-				_target_distance = _distance  # manual zoom overrides any focus-zoom in progress
+				_target_distance = _distance
 				_update_camera()
 			MOUSE_BUTTON_WHEEL_DOWN:
 				_distance /= ZOOM_STEP
@@ -339,8 +294,6 @@ func _unhandled_input(event: InputEvent) -> void:
 				if mb.pressed:
 					_left_press_pos = mb.position
 				elif mb.position.distance_to(_left_press_pos) < CLICK_DRAG_THRESHOLD:
-					# Released close to where it was pressed — a click, not
-					# a drag; try to select whatever's under the cursor.
 					_try_select(mb.position)
 			MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE:
 				_panning = mb.pressed
@@ -376,8 +329,6 @@ func _try_select(screen_pos: Vector2) -> void:
 		_select(hit_orbit["body"], hit_orbit["body_radius"])
 
 
-# Ray-sphere intersection; returns the near hit distance along the ray, or
-# -1 if it misses. dir must be normalized (project_ray_normal guarantees it).
 func _ray_sphere_hit(origin: Vector3, dir: Vector3, center: Vector3, radius: float) -> float:
 	var oc := origin - center
 	var b := oc.dot(dir)
@@ -393,35 +344,23 @@ func _ray_sphere_hit(origin: Vector3, dir: Vector3, center: Vector3, radius: flo
 
 func _select(body: Node3D, body_radius: float) -> void:
 	if body == _focused_body:
-		return  # already focused on this one — don't restart the reveal for nothing
+		return
 
-	# No snap — _process's continuous lerp sweeps the pivot AND zoom to the
-	# new target from wherever they currently are.
 	_focused_body = body
 	_target_distance = maxf(body_radius * FOCUS_DISTANCE_MULT, MIN_DISTANCE)
-	# The generator names its root node after the body (see
-	# CanonicalBodyGenerator), so the node's own name is already the display
-	# name — no separate lookup needed.
 	_callout_label.text = body.name.to_upper()
 
-	# Restart the reveal fresh for the new target, killing whatever reveal
-	# was mid-flight for the previous one (switching targets mid-reveal is
-	# a hard restart, not a blend).
 	if _line_tween != null:
 		_line_tween.kill()
 	_callout_stage = CalloutStage.WAITING_FOR_SWEEP
 	_callout_line_progress = 0.0
 	_sweep_elapsed = 0.0
 	_callout_label.visible = false
-	# Old target's readout/scan prompt would otherwise still be showing while
-	# the camera sweeps to the new one.
 	_body_panel.hide_panel()
 	_scan_prompt.reset()
 
 
 func _clear_focus() -> void:
-	# Pivot and zoom both ease back the same way; yaw/pitch still reset
-	# immediately for now (only position/zoom sweep was asked for).
 	_focused_body = null
 	_target_distance = STOCK_DISTANCE
 	_yaw = STOCK_YAW
@@ -438,10 +377,6 @@ func _clear_focus() -> void:
 
 
 # --- Callout ---
-# A sci-fi target-designator: dot on the body, angled leader line, elbow to
-# horizontal, name label. Screen-space overlay recomputed every frame from
-# the focused body's projected position — it has to track both camera
-# movement and the body's own orbital motion.
 
 func _build_callout() -> void:
 	_overlay_layer = CanvasLayer.new()
@@ -467,12 +402,6 @@ func _build_callout() -> void:
 
 
 # --- Body info panel ---
-# Gated behind ScanPrompt now, not automatic — planets are unknown
-# properties until scanned (see the scanning design conversation in
-# parallax-core-design-decisions memory). Pressing SCAN/RESCAN runs the
-# panel's own scanning animation; BodyInfoPanel.scan_finished then flips the
-# button to RESCAN. Already-scanned bodies skip straight to the data (see
-# _select() below), no animation needed.
 
 func _build_body_panel() -> void:
 	_body_panel = BodyInfoPanel.new()
@@ -482,7 +411,7 @@ func _build_body_panel() -> void:
 
 func _on_scan_requested(id: String) -> void:
 	if _focused_body == null or _focused_body.name != id:
-		return  # focus moved on before this fired — stale, ignore
+		return
 	var entry := KnownBodies.get_entry(id)
 	if entry != null:
 		_body_panel.start_scan(entry)
@@ -493,8 +422,6 @@ func _on_scan_finished(id: String) -> void:
 		_scan_prompt.mark_scanned()
 
 
-# Cached each frame by _update_callout, read by both the label positioning
-# below and the _draw_callout draw callback — computed once, not twice.
 var _callout_visible := false
 var _callout_anchor := Vector2.ZERO
 var _callout_elbow := Vector2.ZERO
@@ -502,27 +429,18 @@ var _callout_line_end := Vector2.ZERO
 
 
 func _update_callout() -> void:
-	# Line/label only ever show once the reveal has actually started — stays
-	# fully hidden while still WAITING_FOR_SWEEP.
 	_callout_visible = (_focused_body != null
 			and _callout_stage != CalloutStage.HIDDEN
 			and _callout_stage != CalloutStage.WAITING_FOR_SWEEP
 			and not _camera.is_position_behind(_focused_body.position))
 
 	if _focused_body != null and not _camera.is_position_behind(_focused_body.position):
-		# Always the same fixed direction (up-right), not mirrored by screen
-		# half — the callout only ever shows while a body is focused, and the
-		# camera is specifically built to keep the focused body dead-centered
-		# (that's the whole point of the pivot-follow rig), so there's no
-		# edge to run off. Dynamic mirroring here just meant small residual
-		# lag (the pivot never perfectly catches up to a still-orbiting body)
-		# could nudge the projection across the centerline and flip sides.
-		# Stays on the right even though BodyInfoPanel now sits on the left —
-		# the two are deliberately on opposite sides here.
 		_callout_anchor = _camera.unproject_position(_focused_body.position)
 		_callout_elbow = _callout_anchor + CALLOUT_DIAGONAL
 		_callout_line_end = _callout_elbow + Vector2(CALLOUT_HORIZONTAL, 0.0)
 
+		# Stays on the right even though BodyInfoPanel now sits on the left —
+		# the two are deliberately on opposite sides here.
 		_callout_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 		_callout_label.position = Vector2(
 				_callout_line_end.x + CALLOUT_LABEL_GAP, _callout_line_end.y - _callout_label.size.y * 0.5)
@@ -533,11 +451,7 @@ func _update_callout() -> void:
 			_callout_stage = CalloutStage.REVEALING_LINE
 			_reveal_line()
 
-	# Tracks the same camera-relative visibility as the label/line — the SCAN
-	# prompt (or its progress bar) shouldn't float on screen once you've
-	# panned the focused body behind the camera.
 	_scan_prompt.visible = _callout_visible
-
 	_callout_overlay.queue_redraw()
 
 
@@ -556,9 +470,6 @@ func _start_name_typing() -> void:
 	_type_callout_label(_focused_body)
 
 
-# Same stepped-reveal technique as BootSequence._type_append /
-# CommanderBriefing._type_label: types one character at a time so a click
-# sfx can fire in lockstep, rather than a single continuous tween.
 func _type_callout_label(for_body: Node3D) -> void:
 	var total_len := _callout_label.text.length()
 	if total_len == 0:
@@ -567,7 +478,6 @@ func _type_callout_label(for_body: Node3D) -> void:
 	var char_time := maxf(1.0 / TYPE_CHARS_PER_SEC, TYPE_MIN_TIME)
 	var clickable_count := 0
 	for i in range(total_len):
-		# Bail if the target changed (cleared or switched) mid-type.
 		if _focused_body != for_body:
 			return
 		_callout_label.visible_ratio = float(i + 1) / float(total_len)
@@ -579,11 +489,6 @@ func _type_callout_label(for_body: Node3D) -> void:
 		await get_tree().create_timer(char_time).timeout
 	if _focused_body == for_body:
 		_callout_stage = CalloutStage.DONE
-		# SCAN/RESCAN prompt appears once the name has actually finished
-		# typing — reads as "target lock acquired," not an instant data pop
-		# the moment you click. Already-scanned bodies skip straight to
-		# showing the cached data (no animation needed); a fresh scan only
-		# starts once SCAN is actually pressed (_on_scan_requested).
 		_scan_prompt.present(for_body.name)
 		if Discoveries.is_scanned(for_body.name):
 			var entry := KnownBodies.get_entry(for_body.name)
@@ -595,8 +500,6 @@ func _draw_callout() -> void:
 	if not _callout_visible:
 		return
 	var color := UITheme.accent
-	# First half of progress draws the diagonal leg, second half the
-	# horizontal leg — the line draws itself out rather than popping in.
 	var diagonal_t := clampf(_callout_line_progress * 2.0, 0.0, 1.0)
 	var elbow_point := _callout_anchor.lerp(_callout_elbow, diagonal_t)
 	_callout_overlay.draw_circle(_callout_anchor, 4.0, color)

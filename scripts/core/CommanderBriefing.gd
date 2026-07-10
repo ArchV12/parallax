@@ -19,9 +19,11 @@ func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	HUD.hide_hud()
 
+	# True space-black, not the theme's bg color — see the same fix in
+	# MainMenu.gd.
 	var bg := ColorRect.new()
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	bg.color = Color(UITheme.bg, 1.0)
+	bg.color = Color.BLACK
 	add_child(bg)
 
 	add_child(Starfield.new())

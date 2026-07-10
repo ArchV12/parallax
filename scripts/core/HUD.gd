@@ -24,13 +24,16 @@ const TRANSITION_HOLD_TIME := 0.05
 
 var _hud_layer: CanvasLayer
 var _fade_layer: CanvasLayer
+var _pause_layer: CanvasLayer
+var _debug_layer: CanvasLayer
 var _system_label: Label
 var _year_label: Label
 var _view_label: Label
-var _nav_button: UIButton
+var _view_switcher: ViewSwitcher
+var _console: ConsolePanel
 var _fade_rect: ColorRect
-
-var _nav_target_scene: String = ""
+var _fps_label: Label
+var _pause_menu: PauseMenu
 
 
 func _ready() -> void:
@@ -45,11 +48,36 @@ func _ready() -> void:
 	_hud_layer.layer = 100
 	add_child(_hud_layer)
 
+	# Above the console, below the debug overlay — the System panel floats
+	# over the console it was opened from.
+	_pause_layer = CanvasLayer.new()
+	_pause_layer.layer = 150
+	add_child(_pause_layer)
+
+	# Above everything and independent of show_hud()/hide_hud() — the F1
+	# cheat overlay is dev tooling, not gameplay chrome, so it needs to work
+	# on every screen (menus, Cosmic Forge, ...) not just in-flight views.
+	_debug_layer = CanvasLayer.new()
+	_debug_layer.layer = 200
+	add_child(_debug_layer)
+
 	_build_fade()
 	_build_hud()
+	_build_pause()
+	_build_debug()
 	hide_hud()
 
 	UITheme.theme_changed.connect(_on_theme_changed)
+
+
+func _process(_delta: float) -> void:
+	if _fps_label.visible:
+		_fps_label.text = "FPS: %d" % Engine.get_frames_per_second()
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F1:
+		_fps_label.visible = not _fps_label.visible
 
 
 func _build_fade() -> void:
@@ -80,17 +108,30 @@ func _build_hud() -> void:
 	_view_label.add_theme_font_size_override("font_size", 12)
 	_view_label.add_theme_color_override("font_color", UITheme.dim)
 
-	# Placeholder position — bottom-right for now, will get tucked into the
-	# real HUD chrome once that exists.
-	_nav_button = UIButton.new()
-	_nav_button.custom_minimum_size = Vector2(100, 36)
-	_nav_button.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
-	_nav_button.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	_nav_button.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	_nav_button.offset_right = -16
-	_nav_button.offset_bottom = -16
-	_nav_button.pressed.connect(_on_nav_pressed)
-	_hud_layer.add_child(_nav_button)
+	_view_switcher = ViewSwitcher.new()
+	_view_switcher.view_selected.connect(go_to)
+	_hud_layer.add_child(_view_switcher)
+
+	_console = ConsolePanel.new()
+	_console.system_pressed.connect(open_system_menu)
+	_hud_layer.add_child(_console)
+
+
+func _build_pause() -> void:
+	_pause_menu = PauseMenu.new()
+	_pause_layer.add_child(_pause_menu)
+
+
+func _build_debug() -> void:
+	_fps_label = Label.new()
+	_fps_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
+	_fps_label.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_fps_label.offset_left = 12
+	_fps_label.offset_bottom = -8
+	_fps_label.add_theme_font_size_override("font_size", 14)
+	_fps_label.add_theme_color_override("font_color", Color.YELLOW)
+	_fps_label.visible = false
+	_debug_layer.add_child(_fps_label)
 
 
 func _make_label(preset: Control.LayoutPreset) -> Label:
@@ -115,22 +156,45 @@ func show_hud() -> void:
 
 func hide_hud() -> void:
 	_hud_layer.visible = false
+	_pause_menu.force_close()
 
 
 # --- View registration ---
 # Every in-flight view scene calls this from its own _ready() to tell the
-# HUD what it is — updates the view-name readout and configures the nav
-# button to lead to whatever view is next (e.g. Cockpit registers "System"
-# leading to system_view.tscn; System view registers "Cockpit" leading back).
-func set_view(view_name: String, nav_label: String, nav_target_scene: String) -> void:
+# HUD what it is — view_name is the specific-location readout (e.g. "Earth
+# Orbit"), view_id is which ViewSwitcher.VIEWS scope tab to highlight (e.g.
+# "cockpit") — the two are independent since a scope can have more than one
+# specific location within it. The console itself never changes between
+# views (see ConsolePanel.gd) and no longer switches scopes at all — that's
+# the ViewSwitcher's job now; System view's own Esc handling still covers
+# "back to Cockpit" when nothing's focused there.
+func set_view(view_name: String, view_id: String) -> void:
 	show_hud()
 	_view_label.text = view_name.to_upper()
-	_nav_button.text = nav_label
-	_nav_target_scene = nav_target_scene
+	_view_switcher.set_active(view_id)
 
 
-func _on_nav_pressed() -> void:
-	go_to(_nav_target_scene)
+# --- Parameterized navigation ---
+# change_scene_to_file() can't pass arguments directly, so a scene that
+# needs to know something about WHERE it's going (which planet's moon
+# system to build, here) stashes it here first — the target scene reads it
+# back in its own _ready(). Not a ViewSwitcher tab: Planetary System is
+# parameterized per-planet and only reached via a specific scanned planet's
+# BodyInfoPanel button, not a persistent peer scope (see the
+# planetary-system-view conversation in parallax-core-design-decisions
+# memory).
+var pending_planet_name: String = ""
+
+
+func go_to_planetary_system(planet_name: String) -> void:
+	pending_planet_name = planet_name
+	go_to("res://scenes/planetary_system_view.tscn")
+
+
+# --- System / pause menu ---
+# Reached via the console's SYSTEM button, or Esc from Cockpit.
+func open_system_menu() -> void:
+	_pause_menu.open()
 
 
 # --- Transition ---
