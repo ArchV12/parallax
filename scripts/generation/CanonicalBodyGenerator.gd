@@ -35,13 +35,15 @@ static func generate(params: CanonicalBodyParams) -> Node3D:
 	if params.atmosphere > 0.01:
 		root.add_child(_build_atmosphere(params))
 	if params.rings > 0.01:
-		# RingSystem only uses the RNG for the band pattern's noise offset, not
-		# color — seeding it from the body's own name (not a random roll) keeps
-		# a curated body's look stable across regenerations, same spirit as
-		# everything else here being authored rather than rolled.
+		# RingSystem only uses the RNG for the band pattern's noise offset (and
+		# tilt, if ring_tilt_degrees is left at -1) — seeding it from the body's
+		# own name (not a random roll) keeps a curated body's look stable
+		# across regenerations, same spirit as everything else here being
+		# authored rather than rolled.
 		var rng := RandomNumberGenerator.new()
 		rng.seed = hash(params.body_name)
-		root.add_child(RingSystem.build(rng, params.radius, params.rings, params.ring_tint))
+		root.add_child(RingSystem.build(rng, params.radius, params.rings, params.ring_tracks,
+				params.ring_tint, params.ring_tilt_degrees))
 	return root
 
 

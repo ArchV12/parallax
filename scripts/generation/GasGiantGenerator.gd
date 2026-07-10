@@ -22,7 +22,7 @@ static func generate(params: GasGiantParams) -> Node3D:
 	if params.atmosphere > 0.01:
 		root.add_child(_build_atmosphere(params, palette))
 	if params.rings > 0.01:
-		root.add_child(RingSystem.build(rng, params.radius, params.rings, palette["ring_tint"]))
+		root.add_child(RingSystem.build(rng, params.radius, params.rings, params.ring_tracks, palette["ring_tint"]))
 	return root
 
 

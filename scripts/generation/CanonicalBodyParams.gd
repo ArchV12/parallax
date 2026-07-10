@@ -23,7 +23,16 @@ var self_luminous: bool = false
 var emission_energy: float = 1.5
 
 # Saturn's the one canonical body whose defining feature isn't on the
-# surface texture at all — 0 = no rings, higher = wider/denser. Same
-# RingSystem utility GasGiantGenerator uses.
-var rings: float = 0.0
+# surface texture at all. Same RingSystem utility GasGiantGenerator uses,
+# but with extent and track count split apart (GasGiantGenerator's single
+# "Rings" knob scales both together) — a real ring system's visual size and
+# how many separate bands it's made of are independent: Uranus reads as
+# essentially one narrow track, Saturn as several packed close (see
+# ring.gdshader's organic domain-warp — it does the "looks dense" work
+# rather than needing dozens of literal tracks).
+var rings: float = 0.0    # 0 = no rings; higher = the system reaches further out
+var ring_tracks: int = 8  # how many discrete concentric bands make it up
 var ring_tint: Color = Color(0.85, 0.75, 0.55)
+# -1 = let RingSystem roll a random tilt; a curated body should instead pass
+# its real axial tilt (e.g. Saturn's 26.7°) so it's authored, not rolled.
+var ring_tilt_degrees: float = -1.0

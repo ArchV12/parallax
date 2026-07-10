@@ -93,11 +93,14 @@ const GAS_GIANT_KNOBS: Array = [
 	["band_contrast",  ["Band Contrast",  0.0, 1.0, 1.0,  false]],
 	["atmosphere",     ["Atmosphere",     0.0, 1.0, 0.15, false]],
 	["atmo_falloff",   ["Atmo Falloff",   0.5, 3.0, 1.2,  false]],
-	["rings",          ["Rings",          0.0, 1.0, 0.0,  false]],
+	["rings",          ["Ring Extent",    0.0, 1.0, 0.0,  false]],
+	["ring_tracks",    ["Ring Tracks",    1.0, 14.0, 5.0, true]],
 ]
 
 # Uranus/Neptune — calmer and nearly featureless by default; Band Contrast
-# starts low but is still draggable up to a full Jupiter-style look.
+# starts low but is still draggable up to a full Jupiter-style look. Ring
+# Tracks defaults low (Uranus/Neptune's real rings are sparse, narrow
+# tracks) rather than reusing Gas Giant's default.
 const ICE_GIANT_KNOBS: Array = [
 	["radius",         ["Radius",         0.8, 3.0, 1.6,  false]],
 	["band_scale",     ["Band Scale",     0.5, 3.0, 1.2,  false]],
@@ -106,7 +109,8 @@ const ICE_GIANT_KNOBS: Array = [
 	["band_contrast",  ["Band Contrast",  0.0, 1.0, 0.12, false]],
 	["atmosphere",     ["Atmosphere",     0.0, 1.0, 0.15, false]],
 	["atmo_falloff",   ["Atmo Falloff",   0.5, 3.0, 1.2,  false]],
-	["rings",          ["Rings",          0.0, 1.0, 0.0,  false]],
+	["rings",          ["Ring Extent",    0.0, 1.0, 0.0,  false]],
+	["ring_tracks",    ["Ring Tracks",    1.0, 14.0, 1.0,  true]],
 ]
 
 # Airless, cratered — no atmosphere or ocean concept applies at all.
@@ -196,14 +200,14 @@ const JUPITER_KNOBS: Array = [
 	["atmo_falloff", ["Atmo Falloff", 0.5, 3.0,  1.2,   false]],
 ]
 
-# The rings are the whole point, so they default on, not at 0 like
-# GasGiantParams.rings does — this is Saturn, not "a gas giant that could
-# optionally have rings."
+# No ring knobs here on purpose — Saturn's rings are fixed (see the SATURN
+# case in _regenerate()), not user-tunable. Ring Extent/Ring Tracks controls
+# live on Gas Giant/Ice Giant instead, where "does this generated body have
+# rings, and what do they look like" is actually an open question.
 const SATURN_KNOBS: Array = [
 	["radius",       ["Radius",       4.0, 14.0, 9.14, false]],
 	["atmosphere",   ["Atmosphere",   0.0, 1.0,  0.25, false]],
 	["atmo_falloff", ["Atmo Falloff", 0.5, 3.0,  1.2,  false]],
-	["rings",        ["Rings",        0.0, 1.0,  0.75, false]],
 ]
 
 const URANUS_KNOBS: Array = [
@@ -281,7 +285,15 @@ func _process(delta: float) -> void:
 		if nucleus != null:
 			nucleus.rotate_y(BODY_SPIN * delta)
 	else:
-		_body.rotate_y(BODY_SPIN * delta)
+		# Spin each child individually rather than the shared root — a ring
+		# system's plane stays fixed in orientation as the real planet spins
+		# beneath it (only the surface/cloud bands actually rotate); spinning
+		# the whole root would drag Rings' fixed tilt around with it every
+		# frame, precessing it like a wobbling hula hoop instead of holding
+		# still.
+		for child in _body.get_children():
+			if child.name != "Rings":
+				child.rotate_y(BODY_SPIN * delta)
 
 
 # --- Generation ---
@@ -351,13 +363,26 @@ func _roll_new_seed() -> void:
 	_regenerate()
 
 
+# Rings are the exception, not the rule — most gas/ice giants shouldn't have
+# them (Saturn stands out precisely because real ones are rare). A plain
+# uniform roll across the "Ring Extent" slider's full 0-1 range would give
+# ~99% of randomized bodies rings, since anything above the near-zero
+# no-rings threshold counts — gate it behind its own low-probability roll
+# instead. This is also the closest existing stand-in for how universe
+# generation will eventually roll body variants, so the odds here matter
+# beyond just this dev tool.
+const RING_CHANCE := 0.1
+
 # Random button: scatter every slider relevant to the current type across
 # its range, then roll a new seed.
 func _randomize_all() -> void:
 	for knob: Array in _knobs_for_type(_body_type):
 		var spec: Array = knob[1]
 		var slider: HSlider = _sliders[knob[0]]
-		slider.value = randf_range(spec[1] as float, spec[2] as float)
+		if (knob[0] as String) == "rings" and randf() > RING_CHANCE:
+			slider.value = spec[1] as float  # min value — no rings
+		else:
+			slider.value = randf_range(spec[1] as float, spec[2] as float)
 	_roll_new_seed()
 
 
@@ -378,6 +403,7 @@ func _regenerate() -> void:
 			params.atmosphere = _sliders["atmosphere"].value
 			params.atmo_falloff = _sliders["atmo_falloff"].value
 			params.rings = _sliders["rings"].value
+			params.ring_tracks = int(_sliders["ring_tracks"].value)
 			params.ice = (_body_type == BodyType.ICE_GIANT)
 			_body = GasGiantGenerator.generate(params)
 		BodyType.MOON:
@@ -450,12 +476,25 @@ func _regenerate() -> void:
 		BodyType.SATURN:
 			var params := _build_canonical_params(
 					"Saturn", "saturn", Color(0.85, 0.72, 0.48), Color(0.90, 0.80, 0.55))
-			params.rings = _sliders["rings"].value
+			# Fixed, not user-tunable — Saturn's rings are a known fact, not
+			# something to dial in, including the real ~26.7° axial tilt.
+			params.rings = 0.7
+			params.ring_tracks = 1
 			params.ring_tint = Color(0.80, 0.72, 0.58)
+			params.ring_tilt_degrees = 26.7
 			_body = CanonicalBodyGenerator.generate(params)
 		BodyType.URANUS:
-			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
-					"Uranus", "uranus", Color(0.55, 0.80, 0.85), Color(0.60, 0.85, 0.90)))
+			var params := _build_canonical_params(
+					"Uranus", "uranus", Color(0.55, 0.80, 0.85), Color(0.60, 0.85, 0.90))
+			# Fixed, not user-tunable — Uranus is essentially tipped onto its
+			# side (real axial tilt ~97.8°), which is exactly why its thin
+			# rings read as nearly vertical rather than a flat disc like
+			# every other ringed body here.
+			params.rings = 0.03
+			params.ring_tracks = 1
+			params.ring_tint = Color(0.75, 0.80, 0.82)
+			params.ring_tilt_degrees = 97.8
+			_body = CanonicalBodyGenerator.generate(params)
 		BodyType.NEPTUNE:
 			_body = CanonicalBodyGenerator.generate(_build_canonical_params(
 					"Neptune", "neptune", Color(0.25, 0.35, 0.75), Color(0.35, 0.45, 0.90)))

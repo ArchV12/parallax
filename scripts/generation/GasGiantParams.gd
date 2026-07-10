@@ -14,5 +14,6 @@ var storminess: float = 0.35    # contrast/blotchiness of storm features
 var band_contrast: float = 1.0  # 0 = flat/featureless (Uranus, Neptune), 1 = full bands (Jupiter, Saturn)
 var atmosphere: float = 0.15    # optional extra limb glow shell; the shader's own limb darkening carries the "gas planet" look, so 0 is fine
 var atmo_falloff: float = 1.2
-var rings: float = 0.0          # 0 = no ring system; higher = denser, more visible, wider rings
-var ice: bool = false            # true = cooler palette, calmer bands (Ice Giant)
+var rings: float = 0.0     # 0 = no ring system; higher = the system reaches further out
+var ring_tracks: int = 6   # how many discrete concentric bands make it up — 1 reads as a single Uranus-style track, higher packs closer to a Saturn-style disc
+var ice: bool = false      # true = cooler palette, calmer bands (Ice Giant)
