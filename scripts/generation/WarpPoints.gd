@@ -16,22 +16,45 @@ extends Node3D
 # trickiest part (getting the streak axis to agree with wherever the camera
 # actually happens to be pointed).
 #
-# Each star lives in an abstract "tunnel" space: a random (x, y) offset
-# within TUNNEL_RADIUS of the flight axis, plus a depth along that axis.
-# Depth scrolls toward the camera over time (driven by `warp_strength`) and
-# wraps back to the far end via mod() once it passes — an infinite tunnel
-# from a fixed STAR_COUNT. The (x, y) offsets are generated once, in this
-# abstract space, independent of the actual travel direction; `set_axis`
-# just changes the two world-space perpendicular uniforms the vertex shader
-# projects that abstract space through, so a mid-trip destination swap
-# doesn't need new geometry, only new axis uniforms. POINT_SIZE and
-# brightness both scale with proximity (nearer = bigger/brighter, matching
-# real parallax) — unlike StarfieldStars' fixed-distance shell, these stars
-# have genuine varying depth, so that falloff is the actual point of the
-# effect, not just decoration.
+# Each star lives in an abstract "tunnel" space: a fixed (x, y) Cartesian
+# offset from the flight axis, plus a depth along that axis. Depth scrolls
+# toward the camera over time (driven by `warp_strength`) and wraps back to
+# the far end via mod() once it passes — an infinite tunnel from a fixed
+# STAR_COUNT. The offset/depth are generated once, in this abstract space,
+# independent of the actual travel direction; `set_axis` just changes the
+# two world-space perpendicular uniforms the vertex shader projects that
+# abstract space through, so a mid-trip destination swap doesn't need new
+# geometry, only new axis uniforms. POINT_SIZE and brightness both scale
+# with proximity (nearer = bigger/brighter, matching real parallax) —
+# unlike StarfieldStars' fixed-distance shell, these stars have genuine
+# varying depth, so that falloff is the actual point of the effect, not
+# just decoration.
+#
+# The (x, y) offset is a FIXED Cartesian value, NOT recomputed from live
+# depth each frame, precisely so the flying-past parallax happens at all: as
+# a fixed offset's depth shrinks, its projected screen angle atan(r/depth)
+# GROWS, which is what reads as "swinging outward as it approaches" — an
+# offset that instead scaled WITH depth (r = depth * tan(fixed_angle)) was
+# tried first and was wrong in a subtle way: r/depth, and therefore the
+# on-screen position, stays constant for that star's entire lifetime, so
+# nothing ever appears to move sideways — every star just grows in place at
+# a fixed ring radius, which is exactly the static "halo" that looked so
+# broken.
+#
+# A keep-clear angle (MIN_AXIS_ANGLE_DEG/MAX_AXIS_ANGLE_DEG) only comes in
+# at SPAWN time, to pick that fixed r: r =
+# FAR_FADE_START * tan(chosen_angle), i.e. "the Cartesian offset this star
+# would need to already sit at (at minimum) MIN_AXIS_ANGLE_DEG off the
+# vanishing point at the depth it first fades into visibility." Since a
+# star is invisible for any depth beyond FAR_FADE_START (see that constant)
+# and its projected angle only ever GROWS as depth shrinks from there, this
+# guarantees every star stays outside MIN_AXIS_ANGLE_DEG for its entire
+# visible lifetime, not just at one instant — without freezing its screen
+# position the way deriving r from the CURRENT depth did.
 
 const STAR_COUNT := 2000
-const TUNNEL_RADIUS := 45.0
+const MIN_AXIS_ANGLE_DEG := 7.0    # keep-clear cone around the vanishing point/travel axis, guaranteed at every visible depth — see above
+const MAX_AXIS_ANGLE_DEG := 24.0   # outer edge of the point field at spawn — stays mostly within the camera's own FOV without needing every star on-screen (off-screen ones are simply culled, harmlessly); actual on-screen angle only grows larger than this as a star approaches
 const TUNNEL_LENGTH := 500.0
 const MIN_DEPTH := 4.0             # keeps depth (and 1/depth size scaling) from blowing up right as a point wraps past the camera
 const MIN_POINT_SIZE := 1.0
@@ -74,7 +97,7 @@ func _ready() -> void:
 	_material = _build_material()
 	_mesh_instance.material_override = _material
 	_mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_mesh_instance.extra_cull_margin = TUNNEL_RADIUS + TUNNEL_LENGTH
+	_mesh_instance.extra_cull_margin = TUNNEL_LENGTH * 1.5
 	_mesh_instance.visible = false
 	add_child(_mesh_instance)
 	_apply_axis_uniforms()
@@ -125,15 +148,18 @@ static func _build_mesh() -> ArrayMesh:
 	positions.resize(STAR_COUNT)
 	colors.resize(STAR_COUNT)
 	for i in STAR_COUNT:
-		# Uniform random point within a disk of TUNNEL_RADIUS (sqrt-weighted
-		# radius, not linear, or points would visibly clump toward center).
-		var theta := rng.randf_range(0.0, TAU)
-		var r := TUNNEL_RADIUS * sqrt(rng.randf())
+		# r is fixed per star, sized so its projected angle off the axis is
+		# already >= MIN_AXIS_ANGLE_DEG at FAR_FADE_START (the depth it fades
+		# into visibility) — see the class comment for why r has to stay
+		# fixed (not re-derived from live depth) for the parallax to work.
+		var axis_angle := deg_to_rad(rng.randf_range(MIN_AXIS_ANGLE_DEG, MAX_AXIS_ANGLE_DEG))
+		var r := FAR_FADE_START * tan(axis_angle)
+		var azimuth := rng.randf_range(0.0, TAU)
 		var depth0 := rng.randf_range(0.0, TUNNEL_LENGTH)
 		# VERTEX doubles as raw tunnel-space data here, not a real position —
 		# see the vertex shader, which projects (x, y, depth) through the
 		# perp1/perp2/warp_axis uniforms rather than MODEL_MATRIX.
-		positions[i] = Vector3(r * cos(theta), r * sin(theta), depth0)
+		positions[i] = Vector3(r * cos(azimuth), r * sin(azimuth), depth0)
 
 		var b := rng.randf_range(0.4, 1.0) * rng.randf_range(0.6, 1.0)
 		var size_t := rng.randf_range(0.0, 1.0) * rng.randf_range(0.0, 1.0)

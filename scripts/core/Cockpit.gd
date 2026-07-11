@@ -46,12 +46,12 @@ extends Node3D
 # be cruising while the readout still showed a stale "Acceleration Burn"
 # and a nonsense multi-million km/s number, since the two were computed by
 # two entirely separate, disagreeing formulas. The fix (2026-07-10, take 2):
-# the whole burn+cruise flight shape now lives in ONE place —
+# the whole burn+decel flight shape now lives in ONE place —
 # TravelCalc.flight_profile()/flight_progress() — and this file's position
 # curve just calls flight_progress() directly instead of maintaining its
 # own parallel kinematics. See TravelCalc.gd's class comment for the actual
-# physics (burn to a peak speed, decelerate to a fixed real CRUISE_SPEED_KM_S,
-# glide the final CRUISE_DISTANCE_KM at that speed).
+# physics (a symmetric burn to a peak speed, then decelerate at that same
+# rate all the way back down to a dead stop at the destination).
 
 const EARTH_RADIUS := 5.5
 const LUNA_RADIUS := 4.0
@@ -113,47 +113,29 @@ const ORBIT_ANGULAR_SPEED := -TAU / 60.0         # one full lap every ~60s. Sign
 const ORBIT_TILT_DEG := 14.0
 const ORBIT_GLANCE_DEG := 50.0                   # 0 = pure tangent (body at 90°, off-screen); 90 = old nose-aimed look_at
 
-# How long the camera's reorientation-into-orbit takes AFTER arrival — see
-# _total_lean_duration/_lean_elapsed and _on_travel_completed. Originally
-# 5.5s, sized for a near-90° pole-to-equator swing back when
-# _seeded_direction scattered bodies in a full symmetric cone (see that
-# function's comment) — now that every body's straight-line approach lands
-# close to the shared, near-flat orbital plane by construction, the POSITION
-# swing left to play out here is small. But the ORIENTATION swing is NOT
-# small even now — raw flight looks dead-center at the target
-# (Basis.looking_at), while the orbit pose deliberately glances at it
-# off-center (ORBIT_GLANCE_DEG below puts the body ~40° off boresight, not
-# centered) — so there's a real ~40° turn to cover regardless of how flat
-# the approach is. An earlier cut to 2.2s (before that residual gap was
-# isolated from the position-plane issue above) squeezed that swing into
-# too little time to read as smooth no matter how the blend curve
-# (_apply_lean's eased_t) is shaped — peak angular velocity is a function of
-# angle-covered/time, not just curve smoothness. NOT what times the ORBITAL
-# INSERTION status label, which is governed by pre_arrival_lead_seconds and
-# switches to "IN ORBIT" right at arrival regardless of this constant
-# (ConsolePanel._on_travel_completed) — this only paces the camera's own
-# post-arrival visual settle.
+# How long the camera's reorientation-into-orbit takes — entirely AFTER
+# arrival now (see _begin_orbit_settle/_lean_elapsed and
+# _on_travel_completed; 2026-07-11: an earlier version started this turn
+# mid-decel, blending continuously from the still-moving flight pose into
+# the orbit pose specifically to avoid a "stop, THEN restart" seam — that
+# was explicitly asked to stop in favor of a real, visible full stop before
+# any reorientation begins, which TravelCalc's ARRIVAL_HOLD_SECONDS pause
+# now guarantees, so there's no seam left to blend away). Originally 5.5s,
+# sized for a near-90° pole-to-equator swing back when _seeded_direction
+# scattered bodies in a full symmetric cone (see that function's comment) —
+# now that every body's straight-line approach lands close to the shared,
+# near-flat orbital plane by construction, the POSITION swing left to play
+# out here is small. But the ORIENTATION swing is NOT small even now — raw
+# flight looks dead-center at the target (Basis.looking_at), while the
+# orbit pose deliberately glances at it off-center (ORBIT_GLANCE_DEG below
+# puts the body ~40° off boresight, not centered) — so there's a real ~40°
+# turn to cover regardless of how flat the approach is. NOT what times the
+# ORBITAL INSERTION status label — that's driven purely by
+# TravelCalc.ship_status's own real t1/t2 boundaries, entirely independent
+# of this constant (purely cosmetic camera timing) — and switches to
+# "IN ORBIT" right at arrival regardless (ConsolePanel._on_travel_completed)
+# — this only paces the camera's own post-arrival visual settle.
 const ORBIT_SETTLE_DURATION := 2.8  # was 4.0 — trimmed to make orbital insertion read a bit snappier, tune by eye
-
-# How long before arrival the camera's lean into orbit starts — NOT a fixed
-# constant, computed per-trip (see _pre_swing_lead/_total_lean_duration,
-# set once in _build_transit) via TravelCalc.pre_arrival_lead_seconds, which
-# scales this as a fraction of the trip's own deceleration time rather than
-# a flat number of seconds — a flat value doesn't work across wildly
-# different trip lengths (a fixed 2-4s window is a huge chunk of a 15s
-# cheat-engine hop, starting the reorientation while the ship is still
-# visibly screaming toward the target, but negligible on a real multi-minute
-# trip). Scaling with the trip means the swing only starts once the ship is
-# ALREADY genuinely slow per the real deceleration curve, not early.
-#
-# Also solves the original problem this constant existed for: without a
-# continuous curve, "approach eases to a stop, THEN a separate reorientation
-# eases up from a stop" reads as two motions chained back to back, with a
-# dead beat right at the seam (both eases have zero velocity at their own
-# start/end). ONE continuous eased curve spans _pre_swing_lead (still
-# mid-flight) through ORBIT_SETTLE_DURATION (post-arrival) — see
-# _total_lean_duration/_lean_elapsed — so the slow start happens exactly
-# once, and velocity is never reset.
 
 # Departure maneuver — a real orientation burn, not a flat single-axis
 # swing: the ship starts SUBSTANTIALLY off its heading — target roughly
@@ -198,7 +180,7 @@ const REBASE_THRESHOLD := 2048.0
 var _sun: DirectionalLight3D
 var _camera: Camera3D
 var _warp_points: WarpPoints
-var _transit_peak_speed := TravelCalc.CRUISE_SPEED_KM_S  # set per-trip in _build_transit — current_speed_km_s() normalized against this drives warp point intensity, see _process
+var _transit_peak_speed := 1.0  # set per-trip in _build_transit — current_speed_km_s() normalized against this drives warp point intensity, see _process; 1.0 is just a safe non-zero placeholder before the first trip ever sets a real value
 var _primary: Node3D
 var _secondaries: Array[Node3D] = []             # background dressing at the arrived-at body — see _secondary_entries_for: every real moon of a planet, or just the parent if orbiting a moon
 var _secondary_is_universe_body: Array[bool] = []  # parallel to _secondaries
@@ -216,16 +198,14 @@ var _transit_target_anchor := Vector3.ZERO  # the destination body's own real po
 var _transit_target_radius := 0.0
 var _in_transit := false
 var _hidden_from_body: Node3D  # the departure body, hidden for the duration of the trip — see _build_transit/_build_arrival
-var _pre_swing_lead := 0.0        # per-trip, set in _build_transit — see the class comment above ORBIT_SETTLE_DURATION for why this isn't a flat constant
-var _total_lean_duration := 0.0   # = _pre_swing_lead + ORBIT_SETTLE_DURATION, also set in _build_transit
 
 var _primary_display_radius := 0.0
 var _orbit_angle := randf_range(0.0, TAU)  # start partway around the loop, not always fresh at 0
 var _camera_base_forward := Vector3.FORWARD  # fixed reference direction the whole universe layout is seeded from — see _build_universe/_seeded_direction
 
-var _settling := false          # true from arrival until the lean finishes — still distinct from _lean_started, which can go true earlier, mid-flight
-var _lean_started := false      # whether the lean-into-orbit curve has been seeded yet this trip (reset per _build_transit)
-var _lean_elapsed := 0.0        # continuous across the pre-arrival lean AND the post-arrival settle — never reset at arrival, see _total_lean_duration
+var _settling := false          # true from arrival (PlayerState.travel_completed, see _begin_orbit_settle) until the lean finishes
+var _lean_started := false      # whether _lean_from_pos/_lean_from_basis have been seeded yet — guards _begin_orbit_settle against firing twice, see its own comment
+var _lean_elapsed := 0.0        # elapsed time within the post-arrival lean — see _begin_orbit_settle/ORBIT_SETTLE_DURATION
 var _lean_from_pos := Vector3.ZERO    # camera's actual position/orientation at the moment the lean started — captured dynamically (the camera genuinely moves now, unlike the old fixed-at-origin transit), not a fixed constant
 var _lean_from_basis := Basis.IDENTITY
 
@@ -333,16 +313,15 @@ func _process(delta: float) -> void:
 		# Warp point intensity tracks the same live speed the HUD reads (see
 		# class comment on `progress` above) — genuinely zero through the
 		# departure hold since motion_elapsed is clamped to 0 there, ramps up
-		# through the burn, eases back toward cruise, then this same call
-		# keeps returning CRUISE_SPEED_KM_S for the rest of the glide, which
-		# the pre-arrival-lean check below fades out before orbital
-		# insertion so the points don't carry into the settle.
+		# through the accel burn, and eases back down to a genuine 0 as the
+		# ship decelerates to a full stop (see TravelCalc's class comment) —
+		# no separate fade-out override needed, current_speed_km_s already
+		# reaches exactly 0 by construction right as the burn ends.
 		if _warp_points != null:
 			var speed := TravelCalc.current_speed_km_s(
 					PlayerState.travel_distance_km, PlayerState.travel_duration,
 					PlayerState.travel_elapsed, PlayerState.travel_accel_multiplier)
-			var fading_out := PlayerState.travel_remaining() <= _pre_swing_lead
-			_warp_points.set_target_warp(0.0 if fading_out else speed / _transit_peak_speed)
+			_warp_points.set_target_warp(speed / _transit_peak_speed)
 
 		if PlayerState.travel_elapsed >= hold_duration:
 			var to_target := _transit_target_anchor - _camera.position
@@ -351,34 +330,17 @@ func _process(delta: float) -> void:
 		# else: still mid-departure-maneuver — that tween owns rotation
 		# this frame (see _play_departure_maneuver); only position is set
 		# above, which the tween never touches.
-
-		# Final-approach lean — see _pre_swing_lead/_total_lean_duration above.
-		# Crucially, _lean_from_pos/_lean_from_basis are NOT a one-time
-		# snapshot frozen at the moment the lean starts — they're
-		# overwritten every frame with wherever the flight formula ABOVE
-		# actually put the camera this frame, for as long as we're still
-		# genuinely in flight. That's what makes the reorientation blend in
-		# WHILE STILL MOVING rather than from a dead stop: at the exact
-		# instant the lean begins (eased_t = 0, zero blend-derivative), the
-		# displayed position/orientation is 100% the live, still-moving
-		# flight value, and only gradually swings toward the orbit pose as
-		# eased_t rises — a true crossfade, not a stop-then-go. This only
-		# ever stops updating once the trip actually ends (_settling takes
-		# over below and this branch no longer runs) — safe to freeze there
-		# because the approach above always glides to zero velocity right at
-		# that exact instant anyway, so there's essentially nothing left to
-		# lose by holding still from that point on.
-		var remaining := PlayerState.travel_remaining()
-		if remaining <= _pre_swing_lead:
-			if not _lean_started:
-				_lean_started = true
-				_lean_elapsed = 0.0
-				var current_offset := _camera.position - _transit_target_anchor
-				var untilted := current_offset.rotated(Vector3.RIGHT, -deg_to_rad(ORBIT_TILT_DEG))
-				_orbit_angle = atan2(untilted.z, untilted.x)
-			_lean_from_pos = _camera.position
-			_lean_from_basis = _camera.transform.basis
-			_apply_lean(delta, _transit_target_anchor, _transit_target_radius)
+		#
+		# Nothing else happens once the burn (accel+decel) finishes — the
+		# ship just holds here, facing the target, dead still (`progress`
+		# above is already clamped to 1.0, so the position/orientation lines
+		# above naturally freeze in place) for ARRIVAL_HOLD_SECONDS. See
+		# _begin_orbit_settle for the reorientation that follows — it only
+		# ever fires once PlayerState.travel_completed does, i.e. once this
+		# hold has genuinely elapsed (2026-07-11: turning DURING deceleration,
+		# which an earlier version did via a continuous pre/post-arrival
+		# blend, was explicitly asked to stop — the ship should visibly
+		# come to a complete stop and pause before it starts reorienting).
 		return
 
 	if _settling:
@@ -388,7 +350,7 @@ func _process(delta: float) -> void:
 		for i in _secondaries.size():
 			if not _secondary_is_universe_body[i]:
 				_secondaries[i].rotate_y(SPIN * 0.5 * delta)
-		if _lean_elapsed >= _total_lean_duration:
+		if _lean_elapsed >= ORBIT_SETTLE_DURATION:
 			_settling = false
 		return
 
@@ -803,17 +765,17 @@ func _orbit_pose(angle: float, anchor: Vector3, radius: float) -> Transform3D:
 	return Transform3D(Basis(right, up, backward), camera_pos)
 
 
-# Shared by the pre-arrival lean (_in_transit branch, once within
-# _pre_swing_lead of arrival) and the post-arrival settle (_settling
-# branch) — advances the ONE continuous _lean_elapsed/_orbit_angle pair
-# and blends the camera from wherever it was when the lean started
-# (_lean_from_pos/_lean_from_basis — captured dynamically, see _process)
-# toward a live-recomputed orbit pose around whatever anchor/radius the
-# caller passes. One continuous curve is the whole point (see
-# _total_lean_duration) — this never resets mid-lean.
+# The post-arrival reorientation-into-orbit (_settling branch, kicked off
+# by _begin_orbit_settle once PlayerState.travel_completed fires — see its
+# comment for why this is the ONLY place the lean ever starts now).
+# Advances _lean_elapsed/_orbit_angle and blends the camera from wherever
+# it was when the lean started (_lean_from_pos/_lean_from_basis — a
+# one-time snapshot, since the ship is already stationary by then) toward
+# a live-recomputed orbit pose around whatever anchor/radius the caller
+# passes.
 func _apply_lean(delta: float, anchor: Vector3, radius: float) -> void:
 	_lean_elapsed += delta
-	var t := clampf(_lean_elapsed / _total_lean_duration, 0.0, 1.0)
+	var t := clampf(_lean_elapsed / ORBIT_SETTLE_DURATION, 0.0, 1.0)
 	# NEITHER smoothstep NOR a pure ease-out curve — both were tried and
 	# both are wrong for this, for opposite reasons:
 	#   - smoothstep (3t^2-2t^3) has ZERO derivative at t=0 — the camera
@@ -845,11 +807,18 @@ func _apply_lean(delta: float, anchor: Vector3, radius: float) -> void:
 	# essentially to) the destination's true direction.
 
 
-# Flips on the post-arrival half of the lean. Normally the pre-arrival half
-# (_in_transit branch, above) has already been running for _pre_swing_lead
-# seconds by now — comfortably shorter than any real trip's duration — so
-# this is usually just _settling = true. The _lean_started guard is a
-# fallback for the unlikely case it somehow didn't.
+# Kicks off the ENTIRE reorientation-into-orbit — called once, right when
+# PlayerState.travel_completed fires (see _on_travel_completed), which by
+# construction only happens once the ship has been sitting fully stopped
+# for ARRIVAL_HOLD_SECONDS (see TravelCalc.estimate/ARRIVAL_HOLD_SECONDS).
+# Nothing in the _in_transit branch ever starts this early anymore — the
+# ship flies straight, comes to a complete stop, pauses, and ONLY THEN
+# turns; see the class comment on ORBIT_SETTLE_DURATION and _process's
+# _in_transit branch for why (2026-07-11: turning mid-decel, which an
+# earlier continuous pre/post-arrival blend did specifically to avoid a
+# stop-then-go seam, was explicitly asked to stop — with the ship now
+# genuinely at rest before this ever runs, there's no seam to avoid in the
+# first place). _lean_started still guards against a double-call.
 func _begin_orbit_settle() -> void:
 	if _camera == null or _primary == null:
 		return
@@ -931,16 +900,15 @@ func _build_transit() -> void:
 	# different phase text up here.
 	HUD.set_view("En Route to %s" % PlayerState.travel_target_id.to_upper(), "cockpit")
 
-	_pre_swing_lead = TravelCalc.pre_arrival_lead_seconds(PlayerState.travel_duration)
-	_total_lean_duration = _pre_swing_lead + ORBIT_SETTLE_DURATION
-
 	# Warp point intensity (see _process) is current speed as a fraction of
-	# THIS trip's own peak — a short hop that never exceeds cruise speed
-	# should still show a mild effect at "full" warp, not a fraction of some
-	# unrelated fixed ceiling every trip is judged against.
+	# THIS trip's own peak — a short hop with a modest peak speed should
+	# still show a mild effect at "full" warp, not a fraction of some
+	# unrelated fixed ceiling every trip is judged against. Floored well
+	# above 0 purely to avoid a division blowing up for a degenerate
+	# zero-distance profile — real trips always have a real peak speed.
 	var speed_profile := TravelCalc.flight_profile(
 			PlayerState.travel_distance_km, PlayerState.travel_accel_multiplier)
-	_transit_peak_speed = maxf(speed_profile["peak_speed"], TravelCalc.CRUISE_SPEED_KM_S)
+	_transit_peak_speed = maxf(speed_profile["peak_speed"], 1.0)
 
 	var target_id := PlayerState.travel_target_id
 	var from_id := PlayerState.location_id
@@ -984,8 +952,32 @@ func _build_transit() -> void:
 		# it geometrically; it reappears once orbit around the destination
 		# is actually established (_build_arrival), since it may well be
 		# visible from there too (e.g. Earth from Moon orbit).
-		if _universe_bodies.has(from_id):
-			_hidden_from_body = _universe_bodies[from_id]
+		#
+		# NOT _primary — GO always routes through a fresh Cockpit scene load
+		# (see class comment), and _ready() goes straight to _build_transit()
+		# without ever calling _build_arrival() first when a trip is already
+		# in progress, so _primary is still null at this point every single
+		# time. Have to find the departure body's node by other means:
+		#   - A planet/Sol is always in _universe_bodies, found by from_id.
+		#   - A moon isn't (ad-hoc, only ever spawned by _build_arrival/
+		#     _build_secondaries) — the moon we just left never got spawned
+		#     in THIS fresh scene UNLESS it's also one of the destination's
+		#     own secondaries (its parent planet, or a sibling moon of the
+		#     same parent — see _build_secondaries just above), which is
+		#     exactly the moon<->parent case this needs to cover: leaving a
+		#     moon for its own parent planet respawns that same moon as the
+		#     parent's background dressing, sitting right in the flight path.
+		#     Anything else (the departure moon isn't part of the
+		#     destination's own system) has no node here to hide in the
+		#     first place, so there's nothing to do.
+		var hide_target: Node3D = _universe_bodies.get(from_id)
+		if hide_target == null:
+			for secondary: Node3D in _secondaries:
+				if secondary.name == from_id:
+					hide_target = secondary
+					break
+		if hide_target != null:
+			_hidden_from_body = hide_target
 			_hidden_from_body.visible = false
 
 		# Entry points just outside each body, on the side facing the other
@@ -1007,7 +999,23 @@ func _build_transit() -> void:
 		# flipping again as the two motions fought each other. Spreading it
 		# across real travel time instead means it's already essentially at
 		# the destination's true direction well before insertion ever starts.
-		_sun_lean_from_dir = _sun.global_basis.z if _sun != null else Vector3.ZERO
+		#
+		# Derived from from_pos (Sol -> departure body), NOT _sun.global_basis.z
+		# — the sun's actual basis.z is the OPPOSITE of that (Godot's look_at
+		# convention points -Z at the target, so basis.z ends up as
+		# body -> Sol, "direction to the sun," which is exactly what the
+		# atmosphere shader wants it for elsewhere — see _apply_sun_dir's
+		# `sun_dir` uniform — but is backwards as a `dir`-shaped input here).
+		# Reading the basis fed a near-antiparallel pair into the lerp below
+		# whenever from/to were close together in Sol's sky (leaving a moon
+		# for its own parent planet, or vice versa): the blend passes through
+		# zero length right around the midpoint, which the `length() > 0.01`
+		# guard then freezes on, and the direction effectively flips sign
+		# partway through the trip — read as the destination swinging from
+		# lit to fully dark mid-flight.
+		var from_sol_dir := from_pos - _sol_position
+		_sun_lean_from_dir = (from_sol_dir.normalized() if from_sol_dir.length() > 0.01
+				else (_sun.global_basis.z if _sun != null else Vector3.ZERO))
 		_sun_lean_to_pos = end_pos
 
 	# EN ROUTE/ETA/SPEED all live in ConsolePanel's own center-band readout

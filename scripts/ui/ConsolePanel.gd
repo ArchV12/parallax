@@ -50,6 +50,8 @@ var _right_buttons: Array[ConsolePadButton] = []
 
 const SPEED_REFRESH_INTERVAL := 0.1  # updating every frame reads as digit-flicker at this font size — see _process
 const STATUS_STRIP_HEIGHT := 26.0    # fixed reserved band along the top of the center readout — see _ship_status_label
+const STATUS_STRIP_PADDING := 8.0    # horizontal inset off the center band's own edges — _ship_status_label/_ship_distance_label are left/right-aligned now (see _layout_buttons), so text needs breathing room off the bevel instead of running flush to it
+const LOCAL_DISTANCE_THRESHOLD_KM := TravelCalc.AU_KM * 0.05  # below this, the live in-flight distance reads in KM (a same-system hop like Earth<->Luna, ~384K km, would show as "0.00 AU" otherwise); at/above it, AU — see _process
 
 var _dest_container: VBoxContainer
 var _dest_header: Label
@@ -66,8 +68,13 @@ var _speed_refresh_elapsed := 0.0
 # top of the center band (see _layout_buttons) rather than living inside
 # _dest_container's own ALIGNMENT_CENTER stack, which visibly shifts up/down
 # depending on how many of ITS OWN rows happen to be visible — ship status
-# needs to stay put regardless of that.
+# needs to stay put regardless of that. Left-aligned, sharing the strip with
+# _ship_distance_label (right-aligned) — the one thing that label ISN'T is
+# always-on: it only has anything meaningful to show while actually en
+# route (a live shrinking distance-to-target), so it stays hidden the rest
+# of the time rather than displaying a stale or zero figure while in orbit.
 var _ship_status_label: Label
+var _ship_distance_label: Label
 
 
 func _ready() -> void:
@@ -106,16 +113,18 @@ func _process(delta: float) -> void:
 	# insertion) happen mid-flight with no signal to hook, purely a function
 	# of elapsed time. Cheap enough to just recompute every frame; see
 	# _on_location_changed for the idle "IN ORBIT" side of this.
-	_ship_status_label.text = TravelCalc.ship_status(
-			PlayerState.travel_distance_km, PlayerState.travel_duration, PlayerState.travel_elapsed,
+	_ship_status_label.text = "SHIP STATUS: %s" % TravelCalc.ship_status(
+			PlayerState.travel_distance_km, PlayerState.travel_elapsed,
 			PlayerState.travel_accel_multiplier).to_upper()
 	_dest_time.text = "ETA: %s" % TravelCalc.format_duration(PlayerState.travel_remaining())
+	_ship_distance_label.visible = true
 
-	# Speed changes every frame at full precision, which reads as the last
-	# digit flickering constantly at this font size — visibly re-rendering
-	# the label text only a few times a second reads as a live instrument,
-	# not noise, without actually lying about the value (it's still the true
-	# instantaneous speed each time it does update, just sampled less often).
+	# Speed/distance change every frame at full precision, which reads as
+	# the last digit flickering constantly at this font size — visibly
+	# re-rendering the label text only a few times a second reads as a live
+	# instrument, not noise, without actually lying about the value (it's
+	# still the true instantaneous reading each time it does update, just
+	# sampled less often).
 	_speed_refresh_elapsed += delta
 	if _speed_refresh_elapsed >= SPEED_REFRESH_INTERVAL:
 		_speed_refresh_elapsed = 0.0
@@ -124,12 +133,25 @@ func _process(delta: float) -> void:
 				PlayerState.travel_accel_multiplier)
 		_dest_speed.text = "SPEED: %.1f KM/S" % speed
 
+		# Same motion_elapsed/flight_progress Cockpit's own camera curve
+		# reads (see TravelCalc.flight_progress) — so this shrinking
+		# distance is provably the same number the ship is actually flying,
+		# not a second formula that could disagree with it.
+		var motion_elapsed := maxf(PlayerState.travel_elapsed - TravelCalc.DEPARTURE_HOLD_SECONDS, 0.0)
+		var progress := TravelCalc.flight_progress(
+				PlayerState.travel_distance_km, motion_elapsed, PlayerState.travel_accel_multiplier)
+		var remaining_km := PlayerState.travel_distance_km * (1.0 - progress)
+		var distance_text := ("%.0f KM" % remaining_km) if PlayerState.travel_distance_km < LOCAL_DISTANCE_THRESHOLD_KM \
+				else ("%.2f AU" % (remaining_km / TravelCalc.AU_KM))
+		_ship_distance_label.text = "DISTANCE: %s" % distance_text
+
 
 # Once you've arrived somewhere you'd already locked as a destination, the
 # lock no longer means anything ("travel to where you already are" doesn't
 # make sense) — clearing it also flips the readout back to its base state.
 func _on_location_changed() -> void:
-	_ship_status_label.text = "IN ORBIT"  # PlayerState.is_traveling is already false by the time this fires, so _process won't touch this label again until the next trip starts
+	_ship_status_label.text = "SHIP STATUS: IN ORBIT"  # PlayerState.is_traveling is already false by the time this fires, so _process won't touch this label again until the next trip starts
+	_ship_distance_label.visible = false  # no target to show a distance to while in orbit — see _ship_distance_label's own comment
 	if Destination.locked_id == PlayerState.location_id:
 		Destination.clear()
 	else:
@@ -143,12 +165,20 @@ func _on_go_pressed() -> void:
 
 func _build_destination_readout() -> void:
 	_ship_status_label = Label.new()
-	_ship_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_ship_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_ship_status_label.add_theme_font_size_override("font_size", 14)
 	_ship_status_label.add_theme_color_override("font_color", UITheme.accent)
 	_ship_status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_ship_status_label.text = "IN ORBIT"
+	_ship_status_label.text = "SHIP STATUS: IN ORBIT"
 	add_child(_ship_status_label)
+
+	_ship_distance_label = Label.new()
+	_ship_distance_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_ship_distance_label.add_theme_font_size_override("font_size", 14)
+	_ship_distance_label.add_theme_color_override("font_color", UITheme.accent)
+	_ship_distance_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ship_distance_label.visible = false  # en-route only — see the var's own comment
+	add_child(_ship_distance_label)
 
 	_dest_container = VBoxContainer.new()
 	_dest_container.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -275,8 +305,11 @@ func _layout_buttons() -> void:
 		btn.size = Vector2(xb - xa, h)
 		btn.set_top_edge(_right_edge_y(xa, x1, size.x, h), _right_edge_y(xb, x1, size.x, h))
 
-	_ship_status_label.position = Vector2(x0, 6.0)
-	_ship_status_label.size = Vector2(x1 - x0, STATUS_STRIP_HEIGHT)
+	_ship_status_label.position = Vector2(x0 + STATUS_STRIP_PADDING, 6.0)
+	_ship_status_label.size = Vector2(x1 - x0 - STATUS_STRIP_PADDING * 2.0, STATUS_STRIP_HEIGHT)
+
+	_ship_distance_label.position = Vector2(x0 + STATUS_STRIP_PADDING, 6.0)
+	_ship_distance_label.size = Vector2(x1 - x0 - STATUS_STRIP_PADDING * 2.0, STATUS_STRIP_HEIGHT)
 
 	_dest_container.position = Vector2(x0, STATUS_STRIP_HEIGHT)
 	_dest_container.size = Vector2(x1 - x0, h - STATUS_STRIP_HEIGHT)
