@@ -175,11 +175,32 @@ const DEPARTURE_PITCH_RANGE := 35.0                 # degrees off heading, +/- �
 const DEPARTURE_ROLL_RANGE := 45.0                  # degrees of bank — a real "rolling out of a turn" cue, not a light tilt
 const DEPARTURE_SKIP_AFTER := 0.5                   # trips older than this are a mid-trip re-entry, not a departure — see _build_transit
 
+# Floating origin — Godot renders in single-precision floats, and this
+# scene's real-scale layout (PLANET_DIST_AU_TO_UNITS) puts Saturn ~500K
+# units from the origin (Neptune >1M). A float32's resolution step near
+# 500K is ~0.03 units, so camera and vertex positions quantize to a visible
+# grid: sub-pixel snapping every frame that reads as jitter/vibration.
+# Thin bright ring lines alias hardest (Saturn is where it was actually
+# noticed), but body edges shimmer from the same cause; Earth/Mars distances
+# (~52-80K units, 4-8x finer steps) merely sat below the visible threshold.
+# The fix is the standard space-game one: whenever the camera has drifted
+# beyond REBASE_THRESHOLD from the origin, translate the ENTIRE scene so
+# the camera is back at zero (see _maybe_rebase_origin). Relative geometry
+# is unchanged — every position computation in this file is a difference of
+# two positions, so a uniform shift cancels — and precision is only needed
+# NEAR the camera: a body a million units away lands on coarse float steps,
+# but at that distance it subtends a fraction of a pixel, so its error is
+# invisible by construction. At 2048 the ulp is ~0.00024 units, far below
+# perception; even a fast interplanetary cruise only rebases a few times a
+# second, and each rebase touches only a dozen-odd nodes.
+const REBASE_THRESHOLD := 2048.0
+
 var _sun: DirectionalLight3D
 var _camera: Camera3D
 var _primary: Node3D
 var _secondaries: Array[Node3D] = []             # background dressing at the arrived-at body — see _secondary_entries_for: every real moon of a planet, or just the parent if orbiting a moon
 var _secondary_is_universe_body: Array[bool] = []  # parallel to _secondaries
+var _secondaries_built_for := ""                 # KnownBodies id the current _secondaries set was built for — _build_transit pre-spawns them at trip start, and this is how _build_arrival knows not to spawn a duplicate set on top (see _build_secondaries)
 var _primary_is_universe_body := false    # avoids double-spinning a body that's both _primary/_secondary AND in _universe_bodies (which all spin every frame regardless — see _process)
 
 var _universe_bodies: Dictionary = {}     # body_name -> Node3D — Sol + all 9 planets, persistent for the whole scene's life
@@ -222,7 +243,40 @@ func _ready() -> void:
 	PlayerState.travel_completed.connect(_on_travel_completed)
 
 
+# See REBASE_THRESHOLD's comment for the why. Shifts every Node3D child
+# (bodies, camera, sun, starfield — the starfield re-centers itself on the
+# camera each frame anyway, so shifting it is merely harmless) AND every
+# stored world-position variable, which MUST move together with the nodes
+# or the logical state desyncs from the rendered one. Direction-valued
+# state (_sun_lean_from_dir, _camera_base_forward, orientations) is
+# untouched — directions are position differences, invariant under a
+# uniform translation.
+func _maybe_rebase_origin() -> void:
+	if _camera == null:
+		return
+	var cam_pos := _camera.position
+	if cam_pos.length_squared() < REBASE_THRESHOLD * REBASE_THRESHOLD:
+		return
+	var shift := -cam_pos
+	for child in get_children():
+		if child is Node3D:
+			(child as Node3D).position += shift
+	_sol_position += shift
+	for key: String in _universe_positions:
+		_universe_positions[key] += shift
+	_transit_start_pos += shift
+	_transit_end_pos += shift
+	_transit_target_anchor += shift
+	_lean_from_pos += shift
+	_sun_lean_to_pos += shift
+
+
 func _process(delta: float) -> void:
+	# First thing, before any position math this frame — see the function's
+	# comment. Everything below is translation-invariant, so it doesn't
+	# matter that this may have just moved the whole world.
+	_maybe_rebase_origin()
+
 	# Sol + every planet are always alive in the world, spinning gently,
 	# regardless of transit/orbit state — see class comment.
 	for body: Node3D in _universe_bodies.values():
@@ -231,6 +285,13 @@ func _process(delta: float) -> void:
 	if _in_transit:
 		if _transit_body != null:
 			_transit_body.rotate_y(SPIN * delta)
+		# Destination moons are pre-spawned at trip start (see
+		# _build_secondaries) — keep them spinning through the flight at the
+		# same rate every other state gives them, or their rotation would
+		# freeze mid-trip and visibly kick back in at arrival.
+		for i in _secondaries.size():
+			if not _secondary_is_universe_body[i]:
+				_secondaries[i].rotate_y(SPIN * 0.5 * delta)
 
 		# Held at the start point entirely until the departure maneuver
 		# (DEPARTURE_MANEUVER_TIME) actually finishes, THEN eases into
@@ -586,7 +647,10 @@ func _generate_body(entry: KnownBodies.Entry, radius: float) -> Node3D:
 	params.radius = radius
 	params.surface_roughness = rng.randf_range(0.01, 0.04)
 	params.crater_density = rng.randf_range(0.25, 0.85)
-	params.crater_size = rng.randf_range(0.10, 0.28)
+	# crater_size is the MAX radius now (power-law distributed below it, see
+	# CraterField.make) — range widened from the old average-semantics
+	# (0.10, 0.28) so typical craters stay a similar visible size.
+	params.crater_size = rng.randf_range(0.2, 0.5)
 	params.crater_depth = rng.randf_range(0.03, 0.08)
 	params.detail = 4
 	var body := MoonGenerator.generate(params)
@@ -632,15 +696,14 @@ func _build_arrival(location_id: String) -> void:
 		_hidden_from_body.visible = true
 		_hidden_from_body = null
 
-	_secondaries.clear()
-	_secondary_is_universe_body.clear()
-	for secondary_entry: KnownBodies.Entry in _secondary_entries_for(entry):
-		if _universe_bodies.has(secondary_entry.body_name):
-			_secondaries.append(_universe_bodies[secondary_entry.body_name])
-			_secondary_is_universe_body.append(true)
-		else:
-			_secondaries.append(_spawn_moon_body(secondary_entry))
-			_secondary_is_universe_body.append(false)
+	# Normally already built by _build_transit at TRIP START (see
+	# _build_secondaries — spawning here at arrival made any moon in visual
+	# range pop onto the screen right as orbit settled). Only a genuine cold
+	# load, where no transit ever ran, still needs them built here; the
+	# guard also prevents stacking duplicate moon nodes on the arrival ones.
+	if _secondaries_built_for != location_id:
+		_build_secondaries(entry)
+		_secondaries_built_for = location_id
 
 	HUD.set_view("%s Orbit" % location_id, "cockpit")
 	# Only track that exists yet — see the "no location system" gap this
@@ -792,6 +855,28 @@ func _secondary_entries_for(entry: KnownBodies.Entry) -> Array[KnownBodies.Entry
 	return KnownBodies.moons_of(entry.body_name)
 
 
+# Builds the _secondaries set for a destination. Called from _build_transit
+# at TRIP START — not just from _build_arrival — because moons are anchored
+# near their real parent position and grow into view during the approach
+# exactly like the destination itself does; when they were only spawned on
+# arrival, any moon already in visual range popped onto the screen right as
+# orbit settled. Pre-spawning is the same "already real the entire time"
+# philosophy the destination body follows (see the transit-visual comment
+# block below). The previous _secondaries entries just stop being tracked
+# (their nodes live on in the world where they belong — ad-hoc moons are
+# anchored dressing, and universe bodies were never Cockpit's to free).
+func _build_secondaries(entry: KnownBodies.Entry) -> void:
+	_secondaries.clear()
+	_secondary_is_universe_body.clear()
+	for secondary_entry: KnownBodies.Entry in _secondary_entries_for(entry):
+		if _universe_bodies.has(secondary_entry.body_name):
+			_secondaries.append(_universe_bodies[secondary_entry.body_name])
+			_secondary_is_universe_body.append(true)
+		else:
+			_secondaries.append(_spawn_moon_body(secondary_entry))
+			_secondary_is_universe_body.append(false)
+
+
 # --- Transit visual ---
 # The destination is the real object the whole time — either already alive
 # in _universe_bodies (a planet/Sol), or spawned once here and anchored to
@@ -831,6 +916,15 @@ func _build_transit() -> void:
 		else:
 			end_body = _spawn_moon_body(entry)
 			_transit_body = end_body
+
+		# The destination's moons become real NOW, not at arrival — they're
+		# anchored near the destination and grow into view during the
+		# approach exactly like the destination itself; spawned on arrival
+		# they popped onto the screen right as orbit settled. See
+		# _build_secondaries; _secondaries_built_for is what tells
+		# _build_arrival not to spawn a duplicate set on top of these.
+		_build_secondaries(entry)
+		_secondaries_built_for = target_id
 
 		var from_pos := _body_anchor_pos(from_entry)
 		var end_pos := end_body.position

@@ -121,7 +121,7 @@ const MOON_KNOBS: Array = [
 	["radius",            ["Radius",            0.15, 1.0,  0.35, false]],
 	["surface_roughness", ["Surface Roughness", 0.0,  0.08, 0.02, false]],
 	["crater_density",    ["Crater Density",    0.0,  1.0,  0.5,  false]],
-	["crater_size",       ["Crater Size",       0.05, 0.35, 0.18, false]],
+	["crater_size",       ["Max Crater Size",   0.05, 0.6,  0.3,  false]],
 	["crater_depth",      ["Crater Depth",      0.01, 0.15, 0.05, false]],
 	["detail",            ["Mesh Detail",       3.0,  6.0,  4.0,  true]],
 ]
@@ -132,7 +132,7 @@ const ASTEROID_KNOBS: Array = [
 	["irregularity",   ["Irregularity",   0.0,  1.2,  0.5,  false]],
 	["elongation",     ["Elongation",     0.0,  1.5,  0.3,  false]],
 	["crater_density", ["Crater Density", 0.0,  1.0,  0.5,  false]],
-	["crater_size",    ["Crater Size",    0.05, 0.4,  0.22, false]],
+	["crater_size",    ["Max Crater Size", 0.05, 0.65, 0.35, false]],
 	["crater_depth",   ["Crater Depth",   0.01, 0.15, 0.08, false]],
 	["detail",         ["Mesh Detail",    3.0,  6.0,  4.0,  true]],
 ]
@@ -238,7 +238,7 @@ const COMET_KNOBS: Array = [
 	["radius",         ["Radius",         0.03, 0.3,  0.1,  false]],
 	["irregularity",   ["Irregularity",   0.0,  1.2,  0.6,  false]],
 	["crater_density", ["Crater Density", 0.0,  1.0,  0.3,  false]],
-	["crater_size",    ["Crater Size",    0.05, 0.4,  0.2,  false]],
+	["crater_size",    ["Max Crater Size", 0.05, 0.65, 0.32, false]],
 	["crater_depth",   ["Crater Depth",   0.01, 0.15, 0.06, false]],
 	["coma_size",      ["Coma Size",      0.0,  1.0,  0.6,  false]],
 	["tail_length",    ["Tail Length",    0.0,  1.0,  0.6,  false]],

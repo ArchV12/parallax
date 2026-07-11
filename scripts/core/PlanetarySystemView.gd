@@ -238,7 +238,13 @@ func _build_moon_body(entry: KnownBodies.Entry, display_radius: float) -> Node3D
 	params.radius = display_radius
 	params.surface_roughness = rng.randf_range(0.01, 0.04)
 	params.crater_density = rng.randf_range(0.25, 0.85)
-	params.crater_size = rng.randf_range(0.10, 0.28)
+	# crater_size is the MAX radius now (power-law distributed below it, see
+	# CraterField.make) — range widened from the old average-semantics
+	# (0.10, 0.28) so typical craters stay a similar visible size. Keep in
+	# sync with Cockpit._spawn_moon_body: same rng seed (body_name.hash) and
+	# same draw sequence is what makes the same moon look identical in both
+	# views.
+	params.crater_size = rng.randf_range(0.2, 0.5)
 	params.crater_depth = rng.randf_range(0.03, 0.08)
 	params.detail = 4
 	var body := MoonGenerator.generate(params)

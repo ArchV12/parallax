@@ -6,6 +6,19 @@ extends RefCounted
 # by impact craters rather than continents. Shares Icosphere (seamless
 # sphere mesh) and CraterField (crater placement/profile) with the other
 # generators.
+#
+# Geometry displacement (the actual bumps/bowls) is computed here on the CPU
+# as before. SHADING is not — a saturated crater field can have well over a
+# hundred craters, most too small for a sane vertex budget to resolve, so
+# vertex-color shading (the original approach) either blurred them into a
+# faint painted smudge or needed an expensive mesh to look sharp. Surface
+# color now comes from cratered_surface.gdshader, which recomputes the SAME
+# crater math analytically per pixel instead of interpolating it from a
+# handful of nearby vertices — crisp rims regardless of mesh resolution,
+# plus fine regolith speckle a smooth vertex gradient could never produce.
+# See that shader's header comment for the CraterField.gd correspondence.
+
+const TERRAIN_SHADER := preload("res://shaders/cratered_surface.gdshader")
 
 static func generate(params: MoonParams) -> Node3D:
 	var rng := RandomNumberGenerator.new()
@@ -22,12 +35,12 @@ static func generate(params: MoonParams) -> Node3D:
 
 	var root := Node3D.new()
 	root.name = "Moon"
-	root.add_child(_build_terrain(params, base_noise, craters, palette))
+	root.add_child(_build_terrain(params, base_noise, craters, palette, rng))
 	return root
 
 
 static func _build_terrain(params: MoonParams, base_noise: FastNoiseLite,
-		craters: Array, palette: Dictionary) -> MeshInstance3D:
+		craters: Array, palette: Dictionary, rng: RandomNumberGenerator) -> MeshInstance3D:
 	var sphere := Icosphere.build(params.detail)
 	var verts: PackedVector3Array = sphere[0]
 	var indices: PackedInt32Array = sphere[1]
@@ -36,33 +49,50 @@ static func _build_terrain(params: MoonParams, base_noise: FastNoiseLite,
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for unit in verts:
 		var h := _height_at(unit, base_noise, craters, params)
-		st.set_color(_height_color(h, palette))
 		st.add_vertex(unit * params.radius * (1.0 + h))
 	for idx in indices:
 		st.add_index(idx)
 	st.generate_normals()
 
-	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 1.0
-
 	var mi := MeshInstance3D.new()
 	mi.name = "Terrain"
 	mi.mesh = st.commit()
-	mi.material_override = mat
+	mi.material_override = _build_material(params, craters, palette, rng)
 	return mi
+
+
+static func _build_material(params: MoonParams, craters: Array, palette: Dictionary,
+		rng: RandomNumberGenerator) -> ShaderMaterial:
+	# `craters` is at most 400 entries (CraterField.make's own cap, since
+	# crater_density is clamped to [0, 1]) — matches cratered_surface.gdshader's
+	# MAX_CRATERS array size exactly, so every entry here always fits.
+	var centers := PackedVector3Array()
+	var radii := PackedFloat32Array()
+	for crater: Dictionary in craters:
+		centers.append(crater["center"])
+		radii.append(crater["radius"])
+
+	var mat := ShaderMaterial.new()
+	mat.shader = TERRAIN_SHADER
+	mat.set_shader_parameter("crater_centers", centers)
+	mat.set_shader_parameter("crater_radii", radii)
+	mat.set_shader_parameter("crater_count", craters.size())
+	# No crater_depth uniform — the shader shades in raw profile units so the
+	# palette always spans dark bowls to bright rims; crater_depth remains a
+	# pure geometry knob (how deep the mesh displacement actually is).
+	mat.set_shader_parameter("color_dark", palette["dark"])
+	mat.set_shader_parameter("color_mid", palette["mid"])
+	mat.set_shader_parameter("color_light", palette["light"])
+	# Small range on purpose — the shader scales this into its noise domain,
+	# and large offsets exhaust float precision (blocky artifacts). Same
+	# convention as GasGiantGenerator/StarGenerator/CometGenerator.
+	mat.set_shader_parameter("seed_offset", rng.randf_range(0.0, 20.0))
+	return mat
 
 
 static func _height_at(unit: Vector3, base_noise: FastNoiseLite, craters: Array, params: MoonParams) -> float:
 	var h := base_noise.get_noise_3dv(unit) * params.surface_roughness
 	return h + CraterField.height_at(unit, craters, params.crater_depth)
-
-
-static func _height_color(h: float, palette: Dictionary) -> Color:
-	var t := clampf((h + 0.25) / 0.35, 0.0, 1.0)
-	var col: Color = (palette["dark"] as Color).lerp(palette["mid"] as Color, smoothstep(0.0, 0.5, t))
-	col = col.lerp(palette["light"] as Color, smoothstep(0.5, 1.0, t))
-	return col
 
 
 # Seed-derived color scheme. Mostly desaturated grays (regolith), with an
