@@ -81,7 +81,7 @@ const DEPARTURE_HOLD_SECONDS := 3.4
 # slowing down, it's to only start the reorientation once the ship is
 # ALREADY genuinely slow (per the real curve), so turning away from
 # "facing target" doesn't happen while still visibly screaming toward it.
-const PRE_ARRIVAL_LEAD_FRACTION := 0.18
+const PRE_ARRIVAL_LEAD_FRACTION := 0.13  # was 0.18 — shortened alongside ORBIT_SETTLE_DURATION so orbital insertion overall reads a bit snappier, tune by eye
 
 
 # The ACTUAL seconds-before-arrival the lean should start for a trip of this

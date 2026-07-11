@@ -89,6 +89,7 @@ var _sweep_elapsed := 0.0
 var _body_panel: BodyInfoPanel
 var _scan_prompt: ScanPrompt
 var _lock_button: LockButton
+var _callout_go_btn: UIButton
 var _return_scene: String = "res://scenes/system_view.tscn"  # where "back" (Esc or the button) actually goes — see _ready/HUD.pending_return_scene
 
 
@@ -377,6 +378,7 @@ func _select(body: Node3D, body_radius: float) -> void:
 	_body_panel.hide_panel()
 	_scan_prompt.reset()
 	_lock_button.reset()
+	_callout_go_btn.visible = false
 
 
 func _clear_focus() -> void:
@@ -394,6 +396,7 @@ func _clear_focus() -> void:
 	_body_panel.hide_panel()
 	_scan_prompt.reset()
 	_lock_button.reset()
+	_callout_go_btn.visible = false
 
 
 # --- Callout ---
@@ -423,6 +426,19 @@ func _build_callout() -> void:
 	_lock_button = LockButton.new()
 	_overlay_layer.add_child(_lock_button)
 
+	# GO, right under LOCK/UNLOCK — mirrors System view's callout so locking a
+	# moon here and hitting GO works the same way instead of needing a detour
+	# through the control panel. See SystemView.gd's own copy of this block.
+	_callout_go_btn = UIButton.new()
+	_callout_go_btn.text = "GO"
+	_callout_go_btn.solid = true
+	_callout_go_btn.shimmer_enabled = false
+	_callout_go_btn.custom_minimum_size = Vector2(90.0, 28.0)
+	_callout_go_btn.add_theme_font_size_override("font_size", 12)
+	_callout_go_btn.visible = false
+	_callout_go_btn.pressed.connect(_on_callout_go_pressed)
+	_overlay_layer.add_child(_callout_go_btn)
+
 
 # --- Body info panel ---
 
@@ -430,6 +446,13 @@ func _build_body_panel() -> void:
 	_body_panel = BodyInfoPanel.new()
 	_body_panel.scan_finished.connect(_on_scan_finished)
 	_overlay_layer.add_child(_body_panel)
+
+
+func _on_callout_go_pressed() -> void:
+	if _focused_body == null:
+		return
+	if PlayerState.travel_to(_focused_body.name):
+		HUD.go_to("res://scenes/cockpit.tscn")
 
 
 func _on_scan_requested(id: String) -> void:
@@ -501,6 +524,8 @@ func _update_callout() -> void:
 				_callout_label.position.x, _callout_label.position.y + _callout_label.size.y + 6.0)
 		_lock_button.position = Vector2(
 				_callout_label.position.x, _scan_prompt.position.y + _scan_prompt.size.y + 4.0)
+		_callout_go_btn.position = Vector2(
+				_callout_label.position.x, _lock_button.position.y + _lock_button.size.y + 4.0)
 
 		if _callout_stage == CalloutStage.WAITING_FOR_SWEEP and _sweep_elapsed >= ARRIVE_WAIT_TIME:
 			_callout_stage = CalloutStage.REVEALING_LINE
@@ -508,6 +533,17 @@ func _update_callout() -> void:
 
 	_scan_prompt.visible = _callout_visible
 	_lock_button.visible = _callout_visible
+
+	# GO only for a focused body that's ALSO the current locked destination —
+	# appears the moment you LOCK, disappears on UNLOCK (or if focus moves to
+	# a different body than the one you locked).
+	var focused_id: String = String(_focused_body.name) if _focused_body != null else ""
+	_callout_go_btn.visible = _callout_visible and Destination.is_locked(focused_id)
+	if _callout_go_btn.visible:
+		var already_here: bool = focused_id == PlayerState.location_id
+		_callout_go_btn.text = "HERE" if already_here else "GO"
+		_callout_go_btn.disabled = PlayerState.is_traveling or already_here
+
 	_callout_overlay.queue_redraw()
 
 
@@ -577,6 +613,8 @@ func _draw_callout() -> void:
 			bg_rect = bg_rect.merge(Rect2(_scan_prompt.position - pad, _scan_prompt.size + pad * 2.0))
 		if _lock_button.visible:
 			bg_rect = bg_rect.merge(Rect2(_lock_button.position - pad, _lock_button.size + pad * 2.0))
+		if _callout_go_btn.visible:
+			bg_rect = bg_rect.merge(Rect2(_callout_go_btn.position - pad, _callout_go_btn.size + pad * 2.0))
 		var bg_col: Color = UITheme.panel
 		bg_col.a = 0.85
 		_callout_overlay.draw_rect(bg_rect, bg_col)

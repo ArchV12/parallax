@@ -133,7 +133,7 @@ const ORBIT_GLANCE_DEG := 50.0                   # 0 = pure tangent (body at 90�
 # switches to "IN ORBIT" right at arrival regardless of this constant
 # (ConsolePanel._on_travel_completed) — this only paces the camera's own
 # post-arrival visual settle.
-const ORBIT_SETTLE_DURATION := 4.0
+const ORBIT_SETTLE_DURATION := 2.8  # was 4.0 — trimmed to make orbital insertion read a bit snappier, tune by eye
 
 # How long before arrival the camera's lean into orbit starts — NOT a fixed
 # constant, computed per-trip (see _pre_swing_lead/_total_lean_duration,
@@ -197,6 +197,8 @@ const REBASE_THRESHOLD := 2048.0
 
 var _sun: DirectionalLight3D
 var _camera: Camera3D
+var _warp_points: WarpPoints
+var _transit_peak_speed := TravelCalc.CRUISE_SPEED_KM_S  # set per-trip in _build_transit — current_speed_km_s() normalized against this drives warp point intensity, see _process
 var _primary: Node3D
 var _secondaries: Array[Node3D] = []             # background dressing at the arrived-at body — see _secondary_entries_for: every real moon of a planet, or just the parent if orbiting a moon
 var _secondary_is_universe_body: Array[bool] = []  # parallel to _secondaries
@@ -328,6 +330,20 @@ func _process(delta: float) -> void:
 			if blended_sun_dir.length() > 0.01:
 				_apply_sun_dir(blended_sun_dir)
 
+		# Warp point intensity tracks the same live speed the HUD reads (see
+		# class comment on `progress` above) — genuinely zero through the
+		# departure hold since motion_elapsed is clamped to 0 there, ramps up
+		# through the burn, eases back toward cruise, then this same call
+		# keeps returning CRUISE_SPEED_KM_S for the rest of the glide, which
+		# the pre-arrival-lean check below fades out before orbital
+		# insertion so the points don't carry into the settle.
+		if _warp_points != null:
+			var speed := TravelCalc.current_speed_km_s(
+					PlayerState.travel_distance_km, PlayerState.travel_duration,
+					PlayerState.travel_elapsed, PlayerState.travel_accel_multiplier)
+			var fading_out := PlayerState.travel_remaining() <= _pre_swing_lead
+			_warp_points.set_target_warp(0.0 if fading_out else speed / _transit_peak_speed)
+
 		if PlayerState.travel_elapsed >= hold_duration:
 			var to_target := _transit_target_anchor - _camera.position
 			if to_target.length() > 0.01:
@@ -453,6 +469,10 @@ func _build_environment() -> void:
 	stars.follow = _camera
 	add_child(stars)
 
+	_warp_points = WarpPoints.new()
+	_warp_points.follow = _camera
+	add_child(_warp_points)
+
 
 # --- Universe (Sol + all planets, persistent for the scene's whole life) ---
 
@@ -515,7 +535,12 @@ func _apply_sun_dir(dir: Vector3) -> void:
 		return
 	_sun.position = _sol_position
 	if dir.length() > 0.01:
-		_sun.look_at(_sol_position + dir, Vector3.UP)
+		# Building the basis straight from `dir` instead of look_at()'s usual
+		# position + dir target avoids float32 precision loss: at real-scale
+		# Sol distances, _sol_position's magnitude can swallow a unit-length
+		# offset entirely, making the "target" round back to the same point
+		# and tripping look_at()'s same-position guard every frame.
+		_sun.basis = Basis.looking_at(dir, Vector3.UP)
 	var sun_dir := _sun.global_basis.z
 	for body: Node3D in _universe_bodies.values():
 		var atmo := body.get_node_or_null("Atmosphere") as MeshInstance3D
@@ -663,6 +688,8 @@ func _generate_body(entry: KnownBodies.Entry, radius: float) -> Node3D:
 func _build_arrival(location_id: String) -> void:
 	var was_in_transit := _in_transit  # see the _point_sun_at call below
 	_in_transit = false
+	if _warp_points != null:
+		_warp_points.set_target_warp(0.0)
 	var entry := KnownBodies.get_entry(location_id)
 	if entry == null:
 		entry = KnownBodies.get_entry("Earth")
@@ -851,7 +878,10 @@ func _primary_radius_for(entry: KnownBodies.Entry) -> float:
 func _secondary_entries_for(entry: KnownBodies.Entry) -> Array[KnownBodies.Entry]:
 	if entry.parent != "":
 		var parent_entry := KnownBodies.get_entry(entry.parent)
-		return [parent_entry] if parent_entry != null else []
+		var result: Array[KnownBodies.Entry] = []
+		if parent_entry != null:
+			result.append(parent_entry)
+		return result
 	return KnownBodies.moons_of(entry.body_name)
 
 
@@ -904,6 +934,14 @@ func _build_transit() -> void:
 	_pre_swing_lead = TravelCalc.pre_arrival_lead_seconds(PlayerState.travel_duration)
 	_total_lean_duration = _pre_swing_lead + ORBIT_SETTLE_DURATION
 
+	# Warp point intensity (see _process) is current speed as a fraction of
+	# THIS trip's own peak — a short hop that never exceeds cruise speed
+	# should still show a mild effect at "full" warp, not a fraction of some
+	# unrelated fixed ceiling every trip is judged against.
+	var speed_profile := TravelCalc.flight_profile(
+			PlayerState.travel_distance_km, PlayerState.travel_accel_multiplier)
+	_transit_peak_speed = maxf(speed_profile["peak_speed"], TravelCalc.CRUISE_SPEED_KM_S)
+
 	var target_id := PlayerState.travel_target_id
 	var from_id := PlayerState.location_id
 	var entry := KnownBodies.get_entry(target_id)
@@ -930,6 +968,8 @@ func _build_transit() -> void:
 		var end_pos := end_body.position
 		var travel_dir := end_pos - from_pos
 		var travel_dir_n := travel_dir.normalized() if travel_dir.length() > 0.01 else _camera_base_forward
+		if _warp_points != null:
+			_warp_points.set_axis(travel_dir_n)
 		var from_radius := _primary_radius_for(from_entry)
 		var end_radius := _primary_radius_for(entry)
 
