@@ -12,16 +12,26 @@ extends Control
 # layered on top, never absorbed into this shape — see the cockpit-console
 # design conversation in parallax-core-design-decisions memory.
 #
-# Read left to right: SYSTEM, GO, SCAN on the left wing (SCAN sits against
-# the center bend, so it's automatically the tallest/biggest of the three);
-# COMMAND, RESEARCH, DATABASE on the right (mirrored — COMMAND against the
-# bend). GO/SCAN/COMMAND/RESEARCH/DATABASE have no systems behind them yet —
-# left fully interactive (hover/press feedback) rather than disabled, they
-# just have nothing connected to `pressed`, so a click no-ops. GO is meant
-# to become the travel-commit action once a destination can be plotted
-# somewhere (System view and later scopes) — it does NOT switch views itself;
-# that's ViewSwitcher.gd's job now (see the view-switcher conversation in
-# parallax-core-design-decisions memory).
+# Read left to right: SYSTEM, GO on the left wing; COMMAND, RESEARCH,
+# DATABASE on the right (mirrored). GO/COMMAND/RESEARCH/DATABASE have no
+# systems behind them yet — left fully interactive (hover/press feedback)
+# rather than disabled, they just have nothing connected to `pressed`, so a
+# click no-ops (except GO, now wired — see below). GO is the travel-commit
+# action once a destination is locked (see LockButton.gd / Destination
+# autoload, reached from a target's callout in System/Planetary System view
+# — never from the console itself): pressing it starts a PlayerState trip
+# and flicks the viewer to Cockpit, which shows the transit visual. SCAN
+# used to live here too, but got pulled once the
+# in-scene SCAN button made it redundant (see the console-vs-in-scene-
+# actions conversation in parallax-core-design-decisions memory) — the
+# console only holds actions that don't depend on what's currently
+# targeted; SCAN and LOCK both do, so they stay in-scene.
+#
+# The center band shows the current locked destination (see Destination
+# autoload) — name, distance, travel time (via TravelCalc) — with a CLEAR
+# button, or (once GO has been pressed) an EN ROUTE readout with a live ETA
+# instead, sourced from the PlayerState autoload. Genuinely context-free: it
+# reflects the standing lock/trip, not whatever's currently focused.
 
 signal system_pressed
 
@@ -32,11 +42,32 @@ const CENTER_WIDTH_FRAC := 0.42
 const EDGE_HALO_WIDTH := 6.0
 const EDGE_CORE_WIDTH := 1.5
 
-const LEFT_LABELS := ["SYSTEM", "GO", "SCAN"]
+const LEFT_LABELS := ["SYSTEM", "GO"]
 const RIGHT_LABELS := ["COMMAND", "RESEARCH", "DATABASE"]
 
 var _left_buttons: Array[ConsolePadButton] = []
 var _right_buttons: Array[ConsolePadButton] = []
+
+const SPEED_REFRESH_INTERVAL := 0.1  # updating every frame reads as digit-flicker at this font size — see _process
+const STATUS_STRIP_HEIGHT := 26.0    # fixed reserved band along the top of the center readout — see _ship_status_label
+
+var _dest_container: VBoxContainer
+var _dest_header: Label
+var _dest_distance: Label
+var _dest_time: Label
+var _dest_speed: Label
+var _dest_clear_btn: UIButton
+var _speed_refresh_elapsed := 0.0
+
+# Always-on "what is the ship doing right now" readout — separate from
+# _dest_container (which shows nothing at all when no destination is locked
+# and nothing en route) because this one is never empty: IN ORBIT is as much
+# a status as ORBITAL INSERTION is. Sits in its own fixed strip along the
+# top of the center band (see _layout_buttons) rather than living inside
+# _dest_container's own ALIGNMENT_CENTER stack, which visibly shifts up/down
+# depending on how many of ITS OWN rows happen to be visible — ship status
+# needs to stay put regardless of that.
+var _ship_status_label: Label
 
 
 func _ready() -> void:
@@ -55,10 +86,143 @@ func _ready() -> void:
 		add_child(btn)
 
 	_left_buttons[0].pressed.connect(func() -> void: system_pressed.emit())
+	_left_buttons[1].pressed.connect(_on_go_pressed)
+
+	_build_destination_readout()
+	Destination.destination_changed.connect(_refresh_destination_readout)
+	PlayerState.travel_started.connect(_refresh_destination_readout)
+	PlayerState.location_changed.connect(_on_location_changed)
+	_refresh_destination_readout()
 
 	resized.connect(_layout_buttons)
 	UITheme.theme_changed.connect(queue_redraw)
 	_layout_buttons()
+
+
+func _process(delta: float) -> void:
+	if not PlayerState.is_traveling:
+		return
+	# Continuous, not event-driven — the phase changes (orienting -> burn ->
+	# insertion) happen mid-flight with no signal to hook, purely a function
+	# of elapsed time. Cheap enough to just recompute every frame; see
+	# _on_location_changed for the idle "IN ORBIT" side of this.
+	_ship_status_label.text = TravelCalc.ship_status(
+			PlayerState.travel_distance_km, PlayerState.travel_duration, PlayerState.travel_elapsed,
+			PlayerState.travel_accel_multiplier).to_upper()
+	_dest_time.text = "ETA: %s" % TravelCalc.format_duration(PlayerState.travel_remaining())
+
+	# Speed changes every frame at full precision, which reads as the last
+	# digit flickering constantly at this font size — visibly re-rendering
+	# the label text only a few times a second reads as a live instrument,
+	# not noise, without actually lying about the value (it's still the true
+	# instantaneous speed each time it does update, just sampled less often).
+	_speed_refresh_elapsed += delta
+	if _speed_refresh_elapsed >= SPEED_REFRESH_INTERVAL:
+		_speed_refresh_elapsed = 0.0
+		var speed := TravelCalc.current_speed_km_s(
+				PlayerState.travel_distance_km, PlayerState.travel_duration, PlayerState.travel_elapsed,
+				PlayerState.travel_accel_multiplier)
+		_dest_speed.text = "SPEED: %.1f KM/S" % speed
+
+
+# Once you've arrived somewhere you'd already locked as a destination, the
+# lock no longer means anything ("travel to where you already are" doesn't
+# make sense) — clearing it also flips the readout back to its base state.
+func _on_location_changed() -> void:
+	_ship_status_label.text = "IN ORBIT"  # PlayerState.is_traveling is already false by the time this fires, so _process won't touch this label again until the next trip starts
+	if Destination.locked_id == PlayerState.location_id:
+		Destination.clear()
+	else:
+		_refresh_destination_readout()
+
+
+func _on_go_pressed() -> void:
+	if Destination.has_destination() and PlayerState.travel_to(Destination.locked_id):
+		HUD.go_to("res://scenes/cockpit.tscn")
+
+
+func _build_destination_readout() -> void:
+	_ship_status_label = Label.new()
+	_ship_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_ship_status_label.add_theme_font_size_override("font_size", 14)
+	_ship_status_label.add_theme_color_override("font_color", UITheme.accent)
+	_ship_status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ship_status_label.text = "IN ORBIT"
+	add_child(_ship_status_label)
+
+	_dest_container = VBoxContainer.new()
+	_dest_container.alignment = BoxContainer.ALIGNMENT_CENTER
+	_dest_container.add_theme_constant_override("separation", 4)
+	_dest_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_dest_container)
+
+	_dest_header = Label.new()
+	_dest_header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_dest_header.add_theme_font_size_override("font_size", 14)
+	_dest_header.add_theme_color_override("font_color", UITheme.accent)
+	_dest_container.add_child(_dest_header)
+
+	_dest_distance = Label.new()
+	_dest_distance.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_dest_distance.add_theme_font_size_override("font_size", 12)
+	_dest_distance.add_theme_color_override("font_color", UITheme.dim)
+	_dest_container.add_child(_dest_distance)
+
+	_dest_time = Label.new()
+	_dest_time.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_dest_time.add_theme_font_size_override("font_size", 12)
+	_dest_time.add_theme_color_override("font_color", UITheme.dim)
+	_dest_container.add_child(_dest_time)
+
+	# EN ROUTE only — a locked-but-not-yet-departed destination has no speed
+	# to show (see _refresh_destination_readout).
+	_dest_speed = Label.new()
+	_dest_speed.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_dest_speed.add_theme_font_size_override("font_size", 12)
+	_dest_speed.add_theme_color_override("font_color", UITheme.dim)
+	_dest_speed.visible = false
+	_dest_container.add_child(_dest_speed)
+
+	var spacer := Control.new()
+	spacer.custom_minimum_size = Vector2(0, 4)
+	_dest_container.add_child(spacer)
+
+	_dest_clear_btn = UIButton.new()
+	_dest_clear_btn.text = "CLEAR"
+	_dest_clear_btn.dim = true
+	_dest_clear_btn.shimmer_enabled = false
+	_dest_clear_btn.custom_minimum_size = Vector2(70, 22)
+	_dest_clear_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_dest_clear_btn.add_theme_font_size_override("font_size", 10)
+	_dest_clear_btn.pressed.connect(func() -> void: Destination.clear())
+	_dest_container.add_child(_dest_clear_btn)
+
+
+func _refresh_destination_readout() -> void:
+	var id := Destination.locked_id
+	var has_dest := id != ""
+
+	if PlayerState.is_traveling:
+		_dest_header.text = "EN ROUTE TO %s" % PlayerState.travel_target_id.to_upper()
+		_dest_distance.text = ""
+		_dest_time.text = "ETA: %s" % TravelCalc.format_duration(PlayerState.travel_remaining())
+		_dest_distance.visible = false
+		_dest_time.visible = true
+		_dest_speed.visible = true
+		_speed_refresh_elapsed = SPEED_REFRESH_INTERVAL  # force an immediate first read instead of waiting out the throttle
+		_dest_clear_btn.visible = false
+		return
+
+	_dest_header.text = ("DESTINATION: %s" % id.to_upper()) if has_dest else "NO DESTINATION LOCKED"
+	if has_dest:
+		var multiplier := TravelCalc.CHEAT_ENGINE_MULTIPLIER if PlayerState.cheat_engine_enabled else 1.0
+		var est := TravelCalc.estimate(PlayerState.location_id, id, multiplier)
+		_dest_distance.text = TravelCalc.format_distance(est)
+		_dest_time.text = "TRAVEL TIME: %s" % TravelCalc.format_duration(est["duration_sec"])
+	_dest_distance.visible = has_dest
+	_dest_time.visible = has_dest
+	_dest_speed.visible = false
+	_dest_clear_btn.visible = has_dest
 
 
 func _make_pad(label: String) -> ConsolePadButton:
@@ -110,6 +274,12 @@ func _layout_buttons() -> void:
 		btn.position = Vector2(xa, 0.0)
 		btn.size = Vector2(xb - xa, h)
 		btn.set_top_edge(_right_edge_y(xa, x1, size.x, h), _right_edge_y(xb, x1, size.x, h))
+
+	_ship_status_label.position = Vector2(x0, 6.0)
+	_ship_status_label.size = Vector2(x1 - x0, STATUS_STRIP_HEIGHT)
+
+	_dest_container.position = Vector2(x0, STATUS_STRIP_HEIGHT)
+	_dest_container.size = Vector2(x1 - x0, h - STATUS_STRIP_HEIGHT)
 
 	queue_redraw()
 

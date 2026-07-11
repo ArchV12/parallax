@@ -157,6 +157,15 @@ func _add_spacer(parent: Control, height: int) -> void:
 
 func _on_new_game() -> void:
 	MusicManager.stop()
+	# Autoloads (PlayerState/Destination/Discoveries/HUD) persist across
+	# scene changes by design — without an explicit reset, a previous
+	# session's stale location/trip/scan state carried straight into the
+	# "new" one (e.g. still mid-flight with nothing to actually fly toward,
+	# reading as dropping into open space instead of Earth orbit).
+	PlayerState.reset_for_new_game()
+	Destination.clear()
+	Discoveries.reset_for_new_game()
+	HUD.reset_for_new_game()
 	get_tree().change_scene_to_file("res://scenes/boot_sequence.tscn")
 
 

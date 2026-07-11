@@ -16,7 +16,14 @@ extends Node
 
 enum Tier { NONE, SCANNED }
 
-var _scans: Dictionary = {}  # id -> Tier
+# Earth and Luna start pre-scanned — the vertical slice's fixed starting
+# position (see Cockpit.gd) means the player is already there at boot, so
+# treating them as freshly "unknown" would be a lie the game tells about
+# itself. Every other body still starts unscanned as normal.
+var _scans: Dictionary = {
+	"Earth": Tier.SCANNED,
+	"Luna": Tier.SCANNED,
+}  # id -> Tier
 
 
 func is_scanned(id: String) -> bool:
@@ -29,3 +36,12 @@ func scan_tier(id: String) -> Tier:
 
 func mark_scanned(id: String, tier: Tier = Tier.SCANNED) -> void:
 	_scans[id] = tier
+
+
+# See PlayerState.reset_for_new_game — same "autoloads outlive the scene"
+# problem, applied here.
+func reset_for_new_game() -> void:
+	_scans = {
+		"Earth": Tier.SCANNED,
+		"Luna": Tier.SCANNED,
+	}

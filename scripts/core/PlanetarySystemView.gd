@@ -4,11 +4,16 @@ extends Node3D
 # fixed at the center instead of Sol. Deliberately its own scene (matching
 # the "each view is a separate scene/context" convention), but borrows
 # System view's whole interaction shape wholesale: camera rig, click-to-
-# select, scan-gated callout + data panel. Reached only via the "Planetary
-# System" button on a scanned planet's BodyInfoPanel — never a persistent
-# ViewSwitcher tab, since it's parameterized per-planet rather than a fixed
-# peer scope (see the planetary-system-view conversation in
-# parallax-core-design-decisions memory).
+# select, scan-gated callout + data panel. Reached either via the "Planetary
+# System" button on a scanned planet's BodyInfoPanel, or the ViewSwitcher's
+# own PLANETARY tab (2026-07-11) — which resolves to whatever planet you're
+# currently orbiting, or the parent of whatever moon you're at (see
+# ViewSwitcher._current_planet_for_view), including moonless planets (an
+# empty system reads better than a tab that mysteriously does nothing).
+# Still parameterized per-planet rather than a fixed peer scope either way —
+# both entry points go through HUD.go_to_planetary_system (see
+# the planetary-system-view conversation in parallax-core-design-decisions
+# memory).
 #
 # Real moon names/facts come from KnownBodies, same as every other body in
 # the game. Only Luna keeps its real canonical texture (KnownBodies.Entry.
@@ -83,17 +88,23 @@ var _line_tween: Tween
 var _sweep_elapsed := 0.0
 var _body_panel: BodyInfoPanel
 var _scan_prompt: ScanPrompt
+var _lock_button: LockButton
+var _return_scene: String = "res://scenes/system_view.tscn"  # where "back" (Esc or the button) actually goes — see _ready/HUD.pending_return_scene
 
 
 func _ready() -> void:
 	_planet_name = HUD.pending_planet_name if HUD.pending_planet_name != "" else "Earth"
 	HUD.pending_planet_name = ""
+	if HUD.pending_return_scene != "":
+		_return_scene = HUD.pending_return_scene
+	HUD.pending_return_scene = ""
 	_build_environment()
 	_build_camera()
 	_build_system()
 	_build_callout()
 	_build_body_panel()
-	HUD.set_view("%s System" % _planet_name, "solar_system")
+	_build_back_button()
+	HUD.set_view("%s System" % _planet_name, "planetary")
 
 
 func _process(delta: float) -> void:
@@ -268,14 +279,15 @@ func _build_orbit_ring(radius: float) -> MeshInstance3D:
 # --- Camera input ---
 # Same interaction model as System view: click a body to focus it, drag to
 # orbit, wheel to zoom, right/middle-drag to pan. Esc clears focus, or
-# leaves to Solar System view if nothing's focused.
+# leaves back to wherever this view was entered from if nothing's focused
+# (see _return_scene).
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		if _focused_body != null:
 			_clear_focus()
 		else:
-			HUD.go_to("res://scenes/system_view.tscn")
+			HUD.go_to(_return_scene)
 		return
 
 	if event is InputEventMouseButton:
@@ -358,6 +370,7 @@ func _select(body: Node3D, body_radius: float) -> void:
 	_callout_label.visible = false
 	_body_panel.hide_panel()
 	_scan_prompt.reset()
+	_lock_button.reset()
 
 
 func _clear_focus() -> void:
@@ -374,6 +387,7 @@ func _clear_focus() -> void:
 	_callout_label.visible = false
 	_body_panel.hide_panel()
 	_scan_prompt.reset()
+	_lock_button.reset()
 
 
 # --- Callout ---
@@ -400,6 +414,9 @@ func _build_callout() -> void:
 	_scan_prompt.pressed_for.connect(_on_scan_requested)
 	_overlay_layer.add_child(_scan_prompt)
 
+	_lock_button = LockButton.new()
+	_overlay_layer.add_child(_lock_button)
+
 
 # --- Body info panel ---
 
@@ -420,6 +437,36 @@ func _on_scan_requested(id: String) -> void:
 func _on_scan_finished(id: String) -> void:
 	if _focused_body != null and _focused_body.name == id:
 		_scan_prompt.mark_scanned()
+
+
+# --- Back button ---
+# Esc already does this (see _unhandled_input), but that's not discoverable
+# on its own — and "back" isn't always System view anymore now that
+# PLANETARY is reachable from Cockpit's tab too (see _return_scene), so the
+# button's own label has to match wherever it's actually going, not a fixed
+# "SOLAR SYSTEM" caption that would be a lie whenever you arrived from
+# Cockpit. _return_label() looks the display name up from ViewSwitcher.VIEWS
+# (same {id, label, scene} table the top tab row itself is built from)
+# rather than duplicating a second scene->label mapping here.
+func _build_back_button() -> void:
+	var btn := UIButton.new()
+	btn.text = "◀ %s" % _return_label()
+	btn.solid = true
+	btn.shimmer_enabled = false
+	btn.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	btn.offset_left = 24.0
+	btn.offset_top = 78.0
+	btn.custom_minimum_size = Vector2(0, 30)
+	btn.add_theme_font_size_override("font_size", 13)
+	btn.pressed.connect(func() -> void: HUD.go_to(_return_scene))
+	_overlay_layer.add_child(btn)
+
+
+func _return_label() -> String:
+	for view: Dictionary in ViewSwitcher.VIEWS:
+		if view["scene"] == _return_scene:
+			return view["label"]
+	return "SOLAR SYSTEM"  # fallback — matches this view's original always-System-view behavior
 
 
 var _callout_visible := false
@@ -446,12 +493,15 @@ func _update_callout() -> void:
 				_callout_line_end.x + CALLOUT_LABEL_GAP, _callout_line_end.y - _callout_label.size.y * 0.5)
 		_scan_prompt.position = Vector2(
 				_callout_label.position.x, _callout_label.position.y + _callout_label.size.y + 6.0)
+		_lock_button.position = Vector2(
+				_callout_label.position.x, _scan_prompt.position.y + _scan_prompt.size.y + 4.0)
 
 		if _callout_stage == CalloutStage.WAITING_FOR_SWEEP and _sweep_elapsed >= ARRIVE_WAIT_TIME:
 			_callout_stage = CalloutStage.REVEALING_LINE
 			_reveal_line()
 
 	_scan_prompt.visible = _callout_visible
+	_lock_button.visible = _callout_visible
 	_callout_overlay.queue_redraw()
 
 
@@ -490,6 +540,7 @@ func _type_callout_label(for_body: Node3D) -> void:
 	if _focused_body == for_body:
 		_callout_stage = CalloutStage.DONE
 		_scan_prompt.present(for_body.name)
+		_lock_button.present(for_body.name)
 		if Discoveries.is_scanned(for_body.name):
 			var entry := KnownBodies.get_entry(for_body.name)
 			if entry != null:
@@ -509,15 +560,17 @@ func _draw_callout() -> void:
 		var end_point := _callout_elbow.lerp(_callout_line_end, horiz_t)
 		_callout_overlay.draw_line(_callout_elbow, end_point, color, 1.5)
 
-	# One unified backdrop behind the name AND the scan control below it,
-	# not two separately-boxed floating elements — reads as a single panel.
-	# Drawn under both (this overlay is added to the tree before
-	# _callout_label/_scan_prompt, so it paints first).
+	# One unified backdrop behind the name AND the scan/lock controls below
+	# it, not separately-boxed floating elements — reads as a single panel.
+	# Drawn under all three (this overlay is added to the tree before
+	# _callout_label/_scan_prompt/_lock_button, so it paints first).
 	if _callout_label.visible:
 		var pad := Vector2(8.0, 7.0)
 		var bg_rect := Rect2(_callout_label.position - pad, _callout_label.size + pad * 2.0)
 		if _scan_prompt.visible:
 			bg_rect = bg_rect.merge(Rect2(_scan_prompt.position - pad, _scan_prompt.size + pad * 2.0))
+		if _lock_button.visible:
+			bg_rect = bg_rect.merge(Rect2(_lock_button.position - pad, _lock_button.size + pad * 2.0))
 		var bg_col: Color = UITheme.panel
 		bg_col.a = 0.85
 		_callout_overlay.draw_rect(bg_rect, bg_col)

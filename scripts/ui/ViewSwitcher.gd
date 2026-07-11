@@ -19,7 +19,7 @@ signal view_selected(scene_path: String)
 const VIEWS: Array[Dictionary] = [
 	{"id": "cockpit", "label": "COCKPIT", "scene": "res://scenes/cockpit.tscn"},
 	{"id": "solar_system", "label": "SOLAR SYSTEM", "scene": "res://scenes/system_view.tscn"},
-	{"id": "planetary", "label": "PLANETARY", "scene": ""},
+	{"id": "planetary", "label": "PLANETARY", "scene": "res://scenes/planetary_system_view.tscn"},  # not routed generically — see _on_tab_pressed, this needs a resolved planet name first
 	{"id": "stellar", "label": "STELLAR", "scene": ""},
 	{"id": "galactic", "label": "GALACTIC", "scene": ""},
 ]
@@ -77,6 +77,29 @@ func set_active(id: String) -> void:
 
 
 func _on_tab_pressed(id: String, scene: String) -> void:
-	if scene == "" or id == _active_id:
+	if id == _active_id:
+		return
+	# PLANETARY jumps straight into whatever planetary system you're
+	# currently relevant to — the planet you're orbiting, or the parent of
+	# the moon you're orbiting — rather than a fixed scene, so it can't
+	# route through the generic scene-path emit below (see
+	# HUD.go_to_planetary_system, which needs that planet name up front).
+	# Still offered for a moonless planet (Mercury/Venus/...) — showing an
+	# empty system is far less confusing than a tab that mysteriously does
+	# nothing with no way to tell why.
+	if id == "planetary":
+		HUD.go_to_planetary_system(_current_planet_for_view())
+		return
+	if scene == "":
 		return
 	view_selected.emit(scene)
+
+
+# Whatever planet PLANETARY should open on: the body you're currently
+# orbiting itself if it's a planet (or Sol), or its parent planet if you're
+# at one of its moons — see KnownBodies.Entry.parent.
+func _current_planet_for_view() -> String:
+	var entry := KnownBodies.get_entry(PlayerState.location_id)
+	if entry == null:
+		return "Earth"
+	return entry.parent if entry.parent != "" else entry.body_name

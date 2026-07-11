@@ -25,6 +25,7 @@ class Entry:
 	var radius_ratio: float = 1.0    # Earth = 1.0
 	var au_distance: float = 0.0     # semi-major axis from Sol; unused for moons (0 for Sol itself)
 	var parent: String = ""          # "" = orbits Sol directly; else the parent body's name
+	var parent_distance_km: float = 0.0  # real semi-major axis around `parent`; only set for moons (0/unused otherwise) — see TravelCalc, Cockpit's moon anchoring
 	var atmosphere: float = 0.0
 	var atmo_falloff: float = 1.5
 	var self_luminous: bool = false
@@ -142,7 +143,7 @@ static func moons_of(planet_name: String) -> Array[Entry]:
 # have no meaningful atmosphere; the two real exceptions (Titan, Triton)
 # pass has_atmo/pressure explicitly.
 static func _make_moon(moon_name: String, parent_name: String, radius_km: float, period_days: float,
-		has_atmo: bool = false, pressure_atm: float = 0.0) -> Entry:
+		distance_km: float, has_atmo: bool = false, pressure_atm: float = 0.0) -> Entry:
 	var m := Entry.new()
 	m.body_name = moon_name
 	m.parent = parent_name
@@ -150,6 +151,7 @@ static func _make_moon(moon_name: String, parent_name: String, radius_km: float,
 	m.real_radius_km = radius_km
 	m.radius_ratio = radius_km / 6371.0  # Earth-relative, same reference every other entry uses
 	m.orbital_period_days = period_days
+	m.parent_distance_km = distance_km
 	m.has_atmosphere = has_atmo
 	m.has_solid_surface = true
 	m.surface_pressure_atm = pressure_atm
@@ -256,6 +258,7 @@ static func _ensure_built() -> void:
 	luna.atmo_color = Color(0.6, 0.6, 0.6)
 	luna.radius_ratio = 0.27
 	luna.parent = "Earth"
+	luna.parent_distance_km = 384400.0
 	luna.atmosphere = 0.0
 	luna.atmo_falloff = 1.5
 	luna.body_type = "Moon"
@@ -375,33 +378,33 @@ static func _ensure_built() -> void:
 	# real closest-to-farthest order (moons_of() sorts by orbital period).
 	# Titan and Triton are the two real exceptions with a genuine atmosphere;
 	# every other moon here has none worth showing.
-	_catalog["Phobos"] = _make_moon("Phobos", "Mars", 11.1, 0.32)
-	_catalog["Deimos"] = _make_moon("Deimos", "Mars", 6.2, 1.26)
+	_catalog["Phobos"] = _make_moon("Phobos", "Mars", 11.1, 0.32, 9376.0)
+	_catalog["Deimos"] = _make_moon("Deimos", "Mars", 6.2, 1.26, 23463.0)
 
-	_catalog["Io"] = _make_moon("Io", "Jupiter", 1821.6, 1.77)
-	_catalog["Europa"] = _make_moon("Europa", "Jupiter", 1560.8, 3.55)
-	_catalog["Ganymede"] = _make_moon("Ganymede", "Jupiter", 2634.1, 7.15)
-	_catalog["Callisto"] = _make_moon("Callisto", "Jupiter", 2410.3, 16.69)
+	_catalog["Io"] = _make_moon("Io", "Jupiter", 1821.6, 1.77, 421700.0)
+	_catalog["Europa"] = _make_moon("Europa", "Jupiter", 1560.8, 3.55, 671034.0)
+	_catalog["Ganymede"] = _make_moon("Ganymede", "Jupiter", 2634.1, 7.15, 1070412.0)
+	_catalog["Callisto"] = _make_moon("Callisto", "Jupiter", 2410.3, 16.69, 1882709.0)
 
-	_catalog["Mimas"] = _make_moon("Mimas", "Saturn", 198.2, 0.94)
-	_catalog["Enceladus"] = _make_moon("Enceladus", "Saturn", 252.1, 1.37)
-	_catalog["Tethys"] = _make_moon("Tethys", "Saturn", 531.1, 1.89)
-	_catalog["Dione"] = _make_moon("Dione", "Saturn", 561.4, 2.74)
-	_catalog["Rhea"] = _make_moon("Rhea", "Saturn", 763.8, 4.52)
+	_catalog["Mimas"] = _make_moon("Mimas", "Saturn", 198.2, 0.94, 185539.0)
+	_catalog["Enceladus"] = _make_moon("Enceladus", "Saturn", 252.1, 1.37, 237948.0)
+	_catalog["Tethys"] = _make_moon("Tethys", "Saturn", 531.1, 1.89, 294619.0)
+	_catalog["Dione"] = _make_moon("Dione", "Saturn", 561.4, 2.74, 377396.0)
+	_catalog["Rhea"] = _make_moon("Rhea", "Saturn", 763.8, 4.52, 527108.0)
 	# Titan's surface pressure is real — genuinely thicker than Earth's.
-	_catalog["Titan"] = _make_moon("Titan", "Saturn", 2574.7, 15.95, true, 1.45)
-	_catalog["Iapetus"] = _make_moon("Iapetus", "Saturn", 734.5, 79.3)
+	_catalog["Titan"] = _make_moon("Titan", "Saturn", 2574.7, 15.95, 1221870.0, true, 1.45)
+	_catalog["Iapetus"] = _make_moon("Iapetus", "Saturn", 734.5, 79.3, 3560820.0)
 
-	_catalog["Miranda"] = _make_moon("Miranda", "Uranus", 235.8, 1.41)
-	_catalog["Ariel"] = _make_moon("Ariel", "Uranus", 578.9, 2.52)
-	_catalog["Umbriel"] = _make_moon("Umbriel", "Uranus", 584.7, 4.14)
-	_catalog["Titania"] = _make_moon("Titania", "Uranus", 788.4, 8.71)
-	_catalog["Oberon"] = _make_moon("Oberon", "Uranus", 761.4, 13.46)
+	_catalog["Miranda"] = _make_moon("Miranda", "Uranus", 235.8, 1.41, 129390.0)
+	_catalog["Ariel"] = _make_moon("Ariel", "Uranus", 578.9, 2.52, 191020.0)
+	_catalog["Umbriel"] = _make_moon("Umbriel", "Uranus", 584.7, 4.14, 266000.0)
+	_catalog["Titania"] = _make_moon("Titania", "Uranus", 788.4, 8.71, 435910.0)
+	_catalog["Oberon"] = _make_moon("Oberon", "Uranus", 761.4, 13.46, 583520.0)
 
-	_catalog["Triton"] = _make_moon("Triton", "Neptune", 1353.4, 5.88, true, 0.00002)
+	_catalog["Triton"] = _make_moon("Triton", "Neptune", 1353.4, 5.88, 354759.0, true, 0.00002)
 
-	_catalog["Charon"] = _make_moon("Charon", "Pluto", 606.0, 6.39)
-	_catalog["Styx"] = _make_moon("Styx", "Pluto", 5.0, 20.2)
-	_catalog["Nix"] = _make_moon("Nix", "Pluto", 17.5, 24.9)
-	_catalog["Kerberos"] = _make_moon("Kerberos", "Pluto", 6.0, 32.1)
-	_catalog["Hydra"] = _make_moon("Hydra", "Pluto", 18.0, 38.5)
+	_catalog["Charon"] = _make_moon("Charon", "Pluto", 606.0, 6.39, 19591.0)
+	_catalog["Styx"] = _make_moon("Styx", "Pluto", 5.0, 20.2, 42656.0)
+	_catalog["Nix"] = _make_moon("Nix", "Pluto", 17.5, 24.9, 48694.0)
+	_catalog["Kerberos"] = _make_moon("Kerberos", "Pluto", 6.0, 32.1, 57783.0)
+	_catalog["Hydra"] = _make_moon("Hydra", "Pluto", 18.0, 38.5, 64738.0)

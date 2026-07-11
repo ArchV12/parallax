@@ -241,7 +241,7 @@ func _read_prefs() -> Dictionary:
 # soft drop shadow, a darker "pressed" state, and a hover scale-pop — instead
 # of a single flat bg_color swap.
 
-func style_button(btn: Button, bg_normal: Color, bg_hover: Color, border_col: Color, corner: int = 6) -> void:
+func style_button(btn: Button, bg_normal: Color, bg_hover: Color, border_col: Color, corner: int = 6, pop: bool = true) -> void:
 	var normal := StyleBoxFlat.new()
 	normal.bg_color = bg_normal
 	normal.border_color = border_col
@@ -269,7 +269,12 @@ func style_button(btn: Button, bg_normal: Color, bg_hover: Color, border_col: Co
 	pressed.set_corner_radius_all(corner)
 	btn.add_theme_stylebox_override("pressed", pressed)
 
-	wire_hover_pop(btn)
+	# Rows packed edge-to-edge in a tight list (see LocationsPanel) have
+	# nowhere to grow — the pop visibly bulges past the panel's own border on
+	# hover instead of reading as a tactile pop. Callers with that kind of
+	# layout pass pop=false and rely on the border/bg swap above alone.
+	if pop:
+		wire_hover_pop(btn)
 
 
 # Subtle scale-up on hover (reset on exit) — gives buttons a tactile "pop"

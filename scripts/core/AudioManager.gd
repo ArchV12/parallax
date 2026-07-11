@@ -62,6 +62,16 @@ func ui_panel_close() -> void:
 	play("ui/panel_close")
 
 
+# --- Flight sounds ---
+
+# Cockpit's departure maneuver (see DEPARTURE_MANEUVER_TIME/
+# _play_departure_maneuver in Cockpit.gd) — fired once, right as the ship
+# starts rotating onto its heading. No asset yet; safe to call now, same as
+# every other sound here.
+func engine_power_up() -> void:
+	play("engine/power_up")
+
+
 # --- Boot sequence sounds ---
 
 func boot_tone() -> void:

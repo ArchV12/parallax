@@ -32,6 +32,7 @@ const FADE_TIME := 1.0
 const TYPE_CHARS_PER_SEC := 35.0
 const TYPE_MIN_TIME := 0.06
 const TYPE_CLICK_STRIDE := 2  # click every Nth typed character — every char at 35cps blurs into a buzz
+const PREFS_PATH := "user://prefs.json"  # same file/shape OptionsUI reads and writes "skip_intro" to
 
 var _skipped := false
 
@@ -44,6 +45,11 @@ var _skip_hint: Label
 
 
 func _ready() -> void:
+	# Skip Intro (Options menu) — bail before building any of the sequence's
+	# UI at all, straight to the same destination the manual skip goes to.
+	if _skip_intro_pref():
+		get_tree().change_scene_to_file("res://scenes/cockpit.tscn")
+		return
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 
@@ -254,3 +260,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	if (event is InputEventKey and event.pressed) or (event is InputEventMouseButton and event.pressed):
 		_skipped = true
 		get_tree().change_scene_to_file("res://scenes/cockpit.tscn")
+
+
+func _skip_intro_pref() -> bool:
+	if not FileAccess.file_exists(PREFS_PATH):
+		return false
+	var file := FileAccess.open(PREFS_PATH, FileAccess.READ)
+	if not file:
+		return false
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	var prefs: Dictionary = parsed as Dictionary if parsed is Dictionary else {}
+	return prefs.get("skip_intro", false)

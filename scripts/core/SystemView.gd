@@ -22,7 +22,16 @@ extends Node3D
 # time-of-day/orbital-phase system yet.
 
 const BASE_GAP := 8.0          # display-radius offset before the log term — keeps Mercury clear of Sol's own bulk
-const LOG_SCALE := 6.0         # display units per natural-log-AU — the actual compression amount
+# Display units per natural-log-AU — the actual compression amount. Bumped
+# from 6.0 (2026-07-10): at 6.0, adjacent inner-planet orbit GAPS (e.g.
+# Venus-Earth ~0.9 units) were only slightly bigger than a planet's own
+# rendered diameter (~0.74 units), so two planets landing at a similar angle
+# (each planet's start angle rerolls independently every scene load, not a
+# simulated conjunction) would visually crowd or nearly touch. Since the
+# view can be freely panned/zoomed, there's no need to keep the whole
+# system framed by default — spacing was widened for its own sake, and
+# STOCK_DISTANCE below widened to match.
+const LOG_SCALE := 9.0
 const BODY_MIN_RADIUS := 0.25
 const BODY_SIZE_SCALE := 0.12  # display-radius units per sqrt(real radius ratio)
 const ORBIT_RING_WIDTH := 0.008
@@ -37,7 +46,7 @@ const ORBIT_SPEED := 0.013
 
 # Orbit/zoom/pan camera rig — same interaction model as Cosmic Forge's
 # viewer, just tuned for this scene's much larger scale (orbits span up to
-# ~30 units, vs. Cosmic Forge's single-object close-ups).
+# ~41 units, vs. Cosmic Forge's single-object close-ups).
 const ZOOM_STEP := 0.9
 const MIN_DISTANCE := 1.5
 const MAX_DISTANCE := 150.0
@@ -48,7 +57,7 @@ const PAN_SENSITIVITY := 0.0012
 # every session starts at.
 const STOCK_YAW := 0.0
 const STOCK_PITCH := -0.74  # matches the old fixed camera's implied angle
-const STOCK_DISTANCE := 62.0
+const STOCK_DISTANCE := 80.0  # widened alongside LOG_SCALE so the default view keeps roughly the same proportion of the (now bigger) system in frame
 
 # Lower = slower, more dramatic sweep across the map; higher = a snappier
 # chase. This is an exponential-decay rate, not a duration — 4.0 reaches
@@ -118,6 +127,9 @@ var _line_tween: Tween
 var _sweep_elapsed := 0.0
 var _body_panel: BodyInfoPanel
 var _scan_prompt: ScanPrompt
+var _lock_button: LockButton
+var _callout_go_btn: UIButton
+var _locations_panel: LocationsPanel
 
 
 func _ready() -> void:
@@ -126,6 +138,7 @@ func _ready() -> void:
 	_build_system()
 	_build_callout()
 	_build_body_panel()
+	_build_locations_panel()
 	HUD.set_view("Solar System", "solar_system")
 
 
@@ -417,6 +430,8 @@ func _select(body: Node3D, body_radius: float) -> void:
 	# the camera sweeps to the new one.
 	_body_panel.hide_panel()
 	_scan_prompt.reset()
+	_lock_button.reset()
+	_callout_go_btn.visible = false
 
 
 func _clear_focus() -> void:
@@ -435,6 +450,8 @@ func _clear_focus() -> void:
 	_callout_label.visible = false
 	_body_panel.hide_panel()
 	_scan_prompt.reset()
+	_lock_button.reset()
+	_callout_go_btn.visible = false
 
 
 # --- Callout ---
@@ -465,6 +482,23 @@ func _build_callout() -> void:
 	_scan_prompt.pressed_for.connect(_on_scan_requested)
 	_overlay_layer.add_child(_scan_prompt)
 
+	_lock_button = LockButton.new()
+	_overlay_layer.add_child(_lock_button)
+
+	# GO, right under LOCK/UNLOCK — only for whichever body is BOTH focused
+	# AND currently locked (see _update_callout), so you can commit to a trip
+	# without detouring through LocationsPanel just to press GO. Same
+	# lock+travel+viewer-swap sequence LocationsPanel's own GO uses.
+	_callout_go_btn = UIButton.new()
+	_callout_go_btn.text = "GO"
+	_callout_go_btn.solid = true
+	_callout_go_btn.shimmer_enabled = false
+	_callout_go_btn.custom_minimum_size = Vector2(90.0, 28.0)
+	_callout_go_btn.add_theme_font_size_override("font_size", 12)
+	_callout_go_btn.visible = false
+	_callout_go_btn.pressed.connect(_on_callout_go_pressed)
+	_overlay_layer.add_child(_callout_go_btn)
+
 
 # --- Body info panel ---
 # Gated behind ScanPrompt now, not automatic — planets are unknown
@@ -480,6 +514,13 @@ func _build_body_panel() -> void:
 	_overlay_layer.add_child(_body_panel)
 
 
+func _on_callout_go_pressed() -> void:
+	if _focused_body == null:
+		return
+	if PlayerState.travel_to(_focused_body.name):
+		HUD.go_to("res://scenes/cockpit.tscn")
+
+
 func _on_scan_requested(id: String) -> void:
 	if _focused_body == null or _focused_body.name != id:
 		return  # focus moved on before this fired — stale, ignore
@@ -491,6 +532,32 @@ func _on_scan_requested(id: String) -> void:
 func _on_scan_finished(id: String) -> void:
 	if _focused_body != null and _focused_body.name == id:
 		_scan_prompt.mark_scanned()
+	_locations_panel.refresh()
+
+
+# --- Known Locations panel ---
+# Standing, not focus-gated like the callout controls above — see
+# LocationsPanel.gd for why (the friction it's solving) and how it stays in
+# sync (refreshed here on a fresh scan; a moon scanned in Planetary System
+# view doesn't need a live hook since returning here is always a fresh
+# scene load).
+
+func _build_locations_panel() -> void:
+	_locations_panel = LocationsPanel.new()
+	_locations_panel.location_selected.connect(_on_locations_panel_selected)
+	_overlay_layer.add_child(_locations_panel)
+
+
+# Mirrors a panel selection into this view's own 3D focus — same _select()
+# a direct click on the body would trigger. Only Sol/planets actually exist
+# in this scene's _orbits; a moon selected in the panel has nothing here to
+# focus, so this simply no-ops for it (see LocationsPanel.gd's header).
+func _on_locations_panel_selected(id: String) -> void:
+	for orbit: Dictionary in _orbits:
+		var body: Node3D = orbit["body"]
+		if body.name == id:
+			_select(body, orbit["body_radius"])
+			return
 
 
 # Cached each frame by _update_callout, read by both the label positioning
@@ -528,15 +595,30 @@ func _update_callout() -> void:
 				_callout_line_end.x + CALLOUT_LABEL_GAP, _callout_line_end.y - _callout_label.size.y * 0.5)
 		_scan_prompt.position = Vector2(
 				_callout_label.position.x, _callout_label.position.y + _callout_label.size.y + 6.0)
+		_lock_button.position = Vector2(
+				_callout_label.position.x, _scan_prompt.position.y + _scan_prompt.size.y + 4.0)
+		_callout_go_btn.position = Vector2(
+				_callout_label.position.x, _lock_button.position.y + _lock_button.size.y + 4.0)
 
 		if _callout_stage == CalloutStage.WAITING_FOR_SWEEP and _sweep_elapsed >= ARRIVE_WAIT_TIME:
 			_callout_stage = CalloutStage.REVEALING_LINE
 			_reveal_line()
 
-	# Tracks the same camera-relative visibility as the label/line — the SCAN
-	# prompt (or its progress bar) shouldn't float on screen once you've
-	# panned the focused body behind the camera.
+	# Tracks the same camera-relative visibility as the label/line — the
+	# SCAN/LOCK controls shouldn't float on screen once you've panned the
+	# focused body behind the camera.
 	_scan_prompt.visible = _callout_visible
+	_lock_button.visible = _callout_visible
+
+	# GO only for a focused body that's ALSO the current locked destination —
+	# appears the moment you LOCK, disappears on UNLOCK (or if focus moves to
+	# a different body than the one you locked).
+	var focused_id: String = String(_focused_body.name) if _focused_body != null else ""
+	_callout_go_btn.visible = _callout_visible and Destination.is_locked(focused_id)
+	if _callout_go_btn.visible:
+		var already_here: bool = focused_id == PlayerState.location_id
+		_callout_go_btn.text = "HERE" if already_here else "GO"
+		_callout_go_btn.disabled = PlayerState.is_traveling or already_here
 
 	_callout_overlay.queue_redraw()
 
@@ -585,6 +667,9 @@ func _type_callout_label(for_body: Node3D) -> void:
 		# showing the cached data (no animation needed); a fresh scan only
 		# starts once SCAN is actually pressed (_on_scan_requested).
 		_scan_prompt.present(for_body.name)
+		# LOCK isn't gated behind scanning at all — you can commit to a
+		# destination you've never scanned.
+		_lock_button.present(for_body.name)
 		if Discoveries.is_scanned(for_body.name):
 			var entry := KnownBodies.get_entry(for_body.name)
 			if entry != null:
@@ -606,15 +691,19 @@ func _draw_callout() -> void:
 		var end_point := _callout_elbow.lerp(_callout_line_end, horiz_t)
 		_callout_overlay.draw_line(_callout_elbow, end_point, color, 1.5)
 
-	# One unified backdrop behind the name AND the scan control below it,
-	# not two separately-boxed floating elements — reads as a single panel.
-	# Drawn under both (this overlay is added to the tree before
-	# _callout_label/_scan_prompt, so it paints first).
+	# One unified backdrop behind the name AND the scan/lock controls below
+	# it, not separately-boxed floating elements — reads as a single panel.
+	# Drawn under all three (this overlay is added to the tree before
+	# _callout_label/_scan_prompt/_lock_button, so it paints first).
 	if _callout_label.visible:
 		var pad := Vector2(8.0, 7.0)
 		var bg_rect := Rect2(_callout_label.position - pad, _callout_label.size + pad * 2.0)
 		if _scan_prompt.visible:
 			bg_rect = bg_rect.merge(Rect2(_scan_prompt.position - pad, _scan_prompt.size + pad * 2.0))
+		if _lock_button.visible:
+			bg_rect = bg_rect.merge(Rect2(_lock_button.position - pad, _lock_button.size + pad * 2.0))
+		if _callout_go_btn.visible:
+			bg_rect = bg_rect.merge(Rect2(_callout_go_btn.position - pad, _callout_go_btn.size + pad * 2.0))
 		var bg_col: Color = UITheme.panel
 		bg_col.a = 0.85
 		_callout_overlay.draw_rect(bg_rect, bg_col)

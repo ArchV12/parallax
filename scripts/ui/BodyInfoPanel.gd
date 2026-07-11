@@ -183,8 +183,7 @@ func _build_planet_rows(entry: KnownBodies.Entry) -> void:
 			"%.2f AU" % entry.au_distance if entry.parent == "" and entry.au_distance > 0.0 else "—"))
 	_add_row("ORBITAL PERIOD", _format_period(entry.orbital_period_days))
 	_add_row("ATMOSPHERE", "Yes" if entry.has_atmosphere else "No")
-	_add_row("SURFACE PRESSURE", (
-			"%.3g atm" % entry.surface_pressure_atm if entry.has_solid_surface else "N/A"))
+	_add_row("SURFACE PRESSURE", _format_pressure(entry.surface_pressure_atm) if entry.has_solid_surface else "N/A")
 	if entry.parent == "":  # moons don't have their own moons
 		_add_row("MAJOR MOONS" if entry.moon_count_is_capped else "MOONS", str(entry.moon_count))
 		if entry.moon_count > 0:
@@ -251,3 +250,18 @@ func _format_period(days: float) -> String:
 	if days >= 500.0:
 		return "%.1f years" % (days / 365.25)
 	return "%.1f days" % days
+
+
+# Real pressures here span 92 atm (Venus) down to 0.00001 atm (Pluto), too
+# wide a range for one fixed decimal count — a %.3g-style "N significant
+# figures" specifier would be the natural fit, but GDScript's String % only
+# supports %s/%d/%f/%o/%x/%c, not %g, so precision is picked by magnitude
+# instead.
+func _format_pressure(atm: float) -> String:
+	if atm <= 0.0:
+		return "0 atm"
+	if atm >= 1.0:
+		return "%.2f atm" % atm
+	if atm >= 0.001:
+		return "%.4f atm" % atm
+	return "%.6f atm" % atm

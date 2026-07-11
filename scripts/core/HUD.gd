@@ -33,6 +33,7 @@ var _view_switcher: ViewSwitcher
 var _console: ConsolePanel
 var _fade_rect: ColorRect
 var _fps_label: Label
+var _cheat_engine_label: Label
 var _pause_menu: PauseMenu
 
 
@@ -76,8 +77,15 @@ func _process(_delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F1:
+	if not (event is InputEventKey and event.pressed and not event.echo):
+		return
+	if event.keycode == KEY_F1:
 		_fps_label.visible = not _fps_label.visible
+	elif event.keycode == KEY_F2:
+		PlayerState.toggle_cheat_engine()
+		_cheat_engine_label.visible = PlayerState.cheat_engine_enabled
+		if PlayerState.cheat_engine_enabled:
+			_cheat_engine_label.text = "CHEAT ENGINE ACTIVE — x%.0f ACCEL" % TravelCalc.CHEAT_ENGINE_MULTIPLIER
 
 
 func _build_fade() -> void:
@@ -133,6 +141,16 @@ func _build_debug() -> void:
 	_fps_label.visible = false
 	_debug_layer.add_child(_fps_label)
 
+	_cheat_engine_label = Label.new()
+	_cheat_engine_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
+	_cheat_engine_label.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_cheat_engine_label.offset_left = 12
+	_cheat_engine_label.offset_bottom = -28  # stacked just above the FPS label
+	_cheat_engine_label.add_theme_font_size_override("font_size", 14)
+	_cheat_engine_label.add_theme_color_override("font_color", Color.CYAN)
+	_cheat_engine_label.visible = false
+	_debug_layer.add_child(_cheat_engine_label)
+
 
 func _make_label(preset: Control.LayoutPreset) -> Label:
 	var l := Label.new()
@@ -178,16 +196,35 @@ func set_view(view_name: String, view_id: String) -> void:
 # change_scene_to_file() can't pass arguments directly, so a scene that
 # needs to know something about WHERE it's going (which planet's moon
 # system to build, here) stashes it here first — the target scene reads it
-# back in its own _ready(). Not a ViewSwitcher tab: Planetary System is
-# parameterized per-planet and only reached via a specific scanned planet's
-# BodyInfoPanel button, not a persistent peer scope (see the
-# planetary-system-view conversation in parallax-core-design-decisions
+# back in its own _ready(). Planetary System is parameterized per-planet,
+# not a fixed scene — reached via a specific scanned planet's BodyInfoPanel
+# button, OR the ViewSwitcher's PLANETARY tab (which resolves the right
+# planet itself before calling this — see ViewSwitcher._current_planet_for_view)
+# (see the planetary-system-view conversation in parallax-core-design-decisions
 # memory).
 var pending_planet_name: String = ""
+
+# Which scene to go back to on Esc/the back button — Planetary System can
+# now be reached from more than one place (Cockpit's PLANETARY tab, System
+# view's PLANETARY tab, or a scanned planet's BodyInfoPanel button, which
+# only ever lives in System view), so "back" can't be hardcoded to System
+# view anymore. Captured from whatever scene is actually active the moment
+# this is called — before the switch — rather than requiring every caller
+# to know/pass its own path.
+var pending_return_scene: String = ""
+
+
+# See PlayerState.reset_for_new_game — stray pending-navigation state left
+# over from a previous session shouldn't leak into a fresh one.
+func reset_for_new_game() -> void:
+	pending_planet_name = ""
+	pending_return_scene = ""
 
 
 func go_to_planetary_system(planet_name: String) -> void:
 	pending_planet_name = planet_name
+	var current_scene := get_tree().current_scene
+	pending_return_scene = current_scene.scene_file_path if current_scene != null else "res://scenes/system_view.tscn"
 	go_to("res://scenes/planetary_system_view.tscn")
 
 

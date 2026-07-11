@@ -7,6 +7,7 @@ var _music_slider:   HSlider
 var _sfx_slider:     HSlider
 var _ambient_slider: HSlider
 var _theme_option:   OptionButton
+var _skip_intro_check: CheckBox
 var _panel:          UIPanel
 
 # Set true for an in-game pause Options panel. Persistent in-game panels are
@@ -117,6 +118,26 @@ func _build() -> void:
 
 	vbox.add_child(HSeparator.new())
 
+	var gameplay_title := Label.new()
+	gameplay_title.text = "GAMEPLAY"
+	gameplay_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	gameplay_title.add_theme_font_size_override("font_size", 13)
+	gameplay_title.add_theme_color_override("font_color", UITheme.accent)
+	vbox.add_child(gameplay_title)
+
+	# Only ever consulted by BootSequence, which only ever runs right after
+	# "New Game" — toggling this mid-session (from the in-game pause Options)
+	# has no visible effect until the NEXT new game, same as changing the UI
+	# theme from here would need a main-menu round-trip to fully re-apply.
+	_skip_intro_check = CheckBox.new()
+	_skip_intro_check.text = "Skip Intro"
+	_skip_intro_check.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_skip_intro_check.add_theme_font_size_override("font_size", 13)
+	_skip_intro_check.toggled.connect(_on_skip_intro_toggled)
+	vbox.add_child(_skip_intro_check)
+
+	vbox.add_child(HSeparator.new())
+
 	var close_btn := UIButton.new()
 	close_btn.text = "Back"
 	close_btn.custom_minimum_size = Vector2(0, 36)
@@ -175,6 +196,10 @@ func _on_ambient_changed(value: float) -> void:
 	_save()
 
 
+func _on_skip_intro_toggled(_pressed: bool) -> void:
+	_save()
+
+
 # UITheme.set_flavor() notifies listeners immediately, but this panel's own
 # styleboxes were already baked with the old flavor's colors — rebuild it too
 # so picking a flavor previews it right here. Deferred because we're still
@@ -208,9 +233,11 @@ func _load_and_apply() -> void:
 	var music_vol:   float = prefs.get("music_volume",   0.2)
 	var sfx_vol:     float = prefs.get("sfx_volume",     1.0)
 	var ambient_vol: float = prefs.get("ambient_volume", 0.2)
+	var skip_intro:  bool  = prefs.get("skip_intro",     false)
 	_music_slider.set_value_no_signal(music_vol)
 	_sfx_slider.set_value_no_signal(sfx_vol)
 	_ambient_slider.set_value_no_signal(ambient_vol)
+	_skip_intro_check.set_pressed_no_signal(skip_intro)
 	_apply_bus("Music",   music_vol)
 	_apply_bus("SFX",     sfx_vol)
 	_apply_bus("Ambient", ambient_vol)
@@ -224,6 +251,7 @@ func _save() -> void:
 	prefs["music_volume"]   = _music_slider.value
 	prefs["sfx_volume"]     = _sfx_slider.value
 	prefs["ambient_volume"] = _ambient_slider.value
+	prefs["skip_intro"]     = _skip_intro_check.button_pressed
 	var file := FileAccess.open(PREFS_PATH, FileAccess.WRITE)
 	if file:
 		file.store_string(JSON.stringify(prefs))
