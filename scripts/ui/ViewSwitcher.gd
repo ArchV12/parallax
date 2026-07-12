@@ -52,6 +52,8 @@ func _ready() -> void:
 		btn.shimmer_enabled = false
 		btn.custom_minimum_size = Vector2(0, 26)
 		btn.add_theme_font_size_override("font_size", 12)
+		if view["scene"] == "":  # STELLAR/GALACTIC — no scene built yet, a genuine no-op (see class comment), so it should sound like one
+			btn.press_sfx = "error"
 		btn.pressed.connect(_on_tab_pressed.bind(view["id"], view["scene"]))
 		cell.add_child(btn)
 

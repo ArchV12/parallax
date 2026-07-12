@@ -23,8 +23,15 @@ extends Node3D
 
 const GAP_BASE := 3.0
 const GAP_SCALE := 2.2
-const BODY_MIN_RADIUS := 0.18
-const BODY_SIZE_SCALE := 0.9  # steeper than System view's — moons are all similar real sizes and would otherwise read as identical dots
+const BODY_MIN_RADIUS := 0.18  # floor for bare visibility/clickability of an asteroid-sized moon (Styx, Deimos, ...), not a size that's meant to read as "normal"
+# Scales almost linearly with real radius_ratio (not sqrt-compressed) — moons
+# span a much wider real size range than planets do (Pluto's Styx, ~5km, to
+# Ganymede, ~2634km — over 500x), and sqrt-compressing that on top of
+# BODY_MIN_RADIUS's own floor left everything reading as "similar dots"
+# regardless of real size — Charon barely looked bigger than Pluto's other,
+# genuinely tiny moons. This keeps the "big real moons clearly read as big,
+# tiny ones clearly read as tiny" distinction instead.
+const BODY_SIZE_SCALE := 3.0
 const PLANET_RADIUS := 2.2    # the central planet is a fixed display size, not scaled by its real radius_ratio — Jupiter and Mars would otherwise need wildly different camera distances
 const ORBIT_RING_WIDTH := 0.006
 const SPIN := 0.05
@@ -210,7 +217,7 @@ func _build_system() -> void:
 		var display_r := GAP_BASE + GAP_SCALE * (i + 1)
 		add_child(_build_orbit_ring(display_r))
 
-		var body_r := BODY_MIN_RADIUS + BODY_SIZE_SCALE * sqrt(entry.radius_ratio)
+		var body_r := BODY_MIN_RADIUS + BODY_SIZE_SCALE * entry.radius_ratio
 		var body := _build_moon_body(entry, body_r)
 		var start_angle := randf_range(0.0, TAU)  # rerolled each load
 		body.position = Vector3(cos(start_angle) * display_r, 0.0, sin(start_angle) * display_r)

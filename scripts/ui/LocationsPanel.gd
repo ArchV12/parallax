@@ -106,7 +106,7 @@ func _build_tab() -> void:
 	_tab.tooltip_text = "Known Locations"
 	UITheme.style_button(_tab, UITheme.button, UITheme.button_hov, UITheme.border)
 	_tab.pressed.connect(func() -> void:
-		AudioManager.ui_confirm()  # a raw Button, not UIButton/ConsolePadButton — those wire this on their own, this one has to do it itself
+		AudioManager.ui_confirm("menu_slide")  # the drawer's own slide cue, not the generic click — a raw Button, not UIButton/ConsolePadButton, so this has to do it itself
 		_set_expanded(not _expanded))
 	_drawer.add_child(_tab)
 

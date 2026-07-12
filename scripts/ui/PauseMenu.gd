@@ -83,6 +83,11 @@ func _add_action(parent: VBoxContainer, label: String, callback: Callable = Call
 	btn.add_theme_font_size_override("font_size", 14)
 	if callback.is_valid():
 		btn.pressed.connect(callback)
+	else:
+		# No callback (Save, currently — see class comment) means this is a
+		# genuine no-op, so it should sound like one instead of playing the
+		# same click every working action here uses.
+		btn.press_sfx = "error"
 	parent.add_child(btn)
 
 

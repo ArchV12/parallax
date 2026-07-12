@@ -55,6 +55,21 @@ extends Node3D
 
 const EARTH_RADIUS := 5.5
 const LUNA_RADIUS := 4.0
+
+# Moons span a much wider real size range than planets do (Pluto's Styx,
+# ~5km, to Ganymede, ~2634km — over 500x) and _primary_radius_for's planet
+# formula (sqrt-compressed + a flat +2.0 floor) was swallowing nearly all of
+# that: every non-Luna moon landed in a narrow ~2.0-3.9 unit band regardless
+# of real size, so Charon barely read bigger than Pluto's other, genuinely
+# tiny moons. This scales almost linearly with real radius_ratio instead
+# (only a small floor, for bare visibility of an asteroid-sized moon, not a
+# big constant that dominates the result) — tuned so MOON_MIN_RADIUS +
+# MOON_RADIUS_SCALE * radius_ratio lands close to LUNA_RADIUS at Luna's own
+# real radius_ratio, keeping this consistent with Luna's already-established
+# fixed size.
+const MOON_MIN_RADIUS := 0.6
+const MOON_RADIUS_SCALE := 14.0
+const MOON_MAX_RADIUS := 4.5
 # Sol's display radius is NOT a hand-tuned constant like every other body
 # here — now that distance is a true linear AU scale (see
 # PLANET_DIST_AU_TO_UNITS below), Sol's real radius can be run through that
@@ -112,6 +127,12 @@ const ORBIT_ANGULAR_SPEED := -TAU / 60.0         # one full lap every ~60s. Sign
 # fix on its own was correct.
 const ORBIT_TILT_DEG := 14.0
 const ORBIT_GLANCE_DEG := 50.0                   # 0 = pure tangent (body at 90°, off-screen); 90 = old nose-aimed look_at
+
+# A/D roll — the only direct ship control the player ever gets. Purely
+# cosmetic framing (which side of the screen the body glances into, how the
+# horizon sits) while parked in the idle orbit view — see _roll_angle's own
+# comment for why it doesn't persist between locations.
+const ROLL_SPEED_DEG := 30.0
 
 # How long the camera's reorientation-into-orbit takes — entirely AFTER
 # arrival now (see _begin_orbit_settle/_lean_elapsed and
@@ -214,6 +235,15 @@ var _arrival_stop_played := false  # guards AudioManager.arrival_stop() against 
 var _primary_display_radius := 0.0
 var _orbit_angle := randf_range(0.0, TAU)  # start partway around the loop, not always fresh at 0
 var _camera_base_forward := Vector3.FORWARD  # fixed reference direction the whole universe layout is seeded from — see _build_universe/_seeded_direction
+
+# User-controlled camera roll around the view axis (A/D), applied only while
+# idle in orbit (see _process's _primary-only branch) — purely a preference
+# for how the ship happens to be rolled while sightseeing, no gameplay
+# effect. Deliberately NOT persisted anywhere (PlayerState, save data, ...)
+# and reset to 0 on every fresh arrival (_build_arrival) — the ask was
+# explicitly "does not persist... every jump defaults to the current orbit
+# setup," i.e. a blank slate each time, not a remembered preference.
+var _roll_angle := 0.0
 
 var _settling := false          # true from arrival (PlayerState.travel_completed, see _begin_orbit_settle) until the lean finishes
 var _lean_started := false      # whether _lean_from_pos/_lean_from_basis have been seeded yet — guards _begin_orbit_settle against firing twice, see its own comment
@@ -394,6 +424,15 @@ func _process(delta: float) -> void:
 		if not _primary_is_universe_body:
 			_primary.rotate_y(SPIN * delta)
 		_orbit_angle += ORBIT_ANGULAR_SPEED * delta
+		# A/D roll — only live here, while genuinely parked in the idle
+		# orbit view (not mid-transit, not mid-settle-lean); see
+		# _roll_angle's own comment for why this is the only place it moves.
+		var roll_input := 0.0
+		if Input.is_physical_key_pressed(KEY_D):
+			roll_input -= 1.0
+		if Input.is_physical_key_pressed(KEY_A):
+			roll_input += 1.0
+		_roll_angle += deg_to_rad(ROLL_SPEED_DEG) * roll_input * delta
 		_update_orbit_camera()
 	for i in _secondaries.size():
 		if not _secondary_is_universe_body[i]:
@@ -705,6 +744,7 @@ func _play_location_music(location_id: String, entry: KnownBodies.Entry) -> void
 func _build_arrival(location_id: String) -> void:
 	var was_in_transit := _in_transit  # see the _point_sun_at call below
 	_in_transit = false
+	_roll_angle = 0.0  # every fresh arrival is a blank slate for the player's A/D roll preference — see its own comment
 	if _warp_points != null:
 		_warp_points.set_target_warp(0.0)
 	var entry := KnownBodies.get_entry(location_id)
@@ -770,7 +810,14 @@ func _build_arrival(location_id: String) -> void:
 func _update_orbit_camera() -> void:
 	if _camera == null or _primary == null:
 		return
-	_camera.transform = _orbit_pose(_orbit_angle, _primary.position, _primary_display_radius)
+	var pose := _orbit_pose(_orbit_angle, _primary.position, _primary_display_radius)
+	# A/D roll (_roll_angle) — rotating the whole basis around its own view
+	# axis (basis.z, "backward") leaves the view direction untouched and
+	# just spins right/up around it, i.e. a pure camera roll layered on top
+	# of the orbit pose rather than a second thing fighting it.
+	if _roll_angle != 0.0:
+		pose.basis = pose.basis.rotated(pose.basis.z.normalized(), _roll_angle)
+	_camera.transform = pose
 
 
 # Pure function: the camera transform for a given point on the orbit around
@@ -893,7 +940,10 @@ func _primary_radius_for(entry: KnownBodies.Entry) -> float:
 	match entry.body_name:
 		"Earth": return EARTH_RADIUS
 		"Luna": return LUNA_RADIUS
-		_: return clampf(2.0 + 3.0 * sqrt(entry.radius_ratio), 1.5, 8.0)
+		_:
+			if entry.parent != "":  # a moon, not a planet — see MOON_MIN_RADIUS's own comment for why this needs its own curve
+				return clampf(MOON_MIN_RADIUS + MOON_RADIUS_SCALE * entry.radius_ratio, MOON_MIN_RADIUS, MOON_MAX_RADIUS)
+			return clampf(2.0 + 3.0 * sqrt(entry.radius_ratio), 1.5, 8.0)
 
 
 # Background dressing for the arrived-at body: orbiting a moon shows just

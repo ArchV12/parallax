@@ -229,18 +229,32 @@ func go_to_planetary_system(planet_name: String) -> void:
 
 
 # --- System / pause menu ---
-# Reached via the console's SYSTEM button, or Esc from Cockpit.
+# Reached via the console's SYSTEM button, or Esc from Cockpit — both a
+# toggle: pressing either again while the menu is already up closes it
+# instead of replaying the open animation on top of itself. _pause_menu.
+# visible goes true the instant open() runs and only goes false once
+# close()'s own animation actually finishes, so it doubles as "is this
+# currently open (or closing)" without a separate state flag.
 func open_system_menu() -> void:
-	_pause_menu.open()
+	if _pause_menu.visible:
+		_pause_menu.close()
+	else:
+		_pause_menu.open()
 
 
 # --- Transition ---
 # Quick flicker/fade of the viewer only (the console stays lit throughout,
 # per the fade/HUD layer split above) — sells "the main viewer just
-# switched feed," not a literal camera move through space.
-func go_to(scene_path: String) -> void:
+# switched feed," not a literal camera move through space. `reveal_time`
+# only stretches the SECOND leg (black -> new scene) — the first leg (old
+# scene -> black) has nothing worth lingering on, so it always stays the
+# quick default. BootSequence's first-ever cockpit reveal is the one caller
+# that wants a long, deliberate reveal instead of a quick flicker (passes
+# its own multi-second value); every ordinary view switch leaves this
+# unset and gets the same snappy fade as before.
+func go_to(scene_path: String, reveal_time: float = TRANSITION_FADE_TIME) -> void:
 	var tw := create_tween()
 	tw.tween_property(_fade_rect, "modulate:a", 1.0, TRANSITION_FADE_TIME)
 	tw.tween_callback(func() -> void: get_tree().change_scene_to_file(scene_path))
 	tw.tween_interval(TRANSITION_HOLD_TIME)
-	tw.tween_property(_fade_rect, "modulate:a", 0.0, TRANSITION_FADE_TIME)
+	tw.tween_property(_fade_rect, "modulate:a", 0.0, reveal_time)

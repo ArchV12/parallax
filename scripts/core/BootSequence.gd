@@ -29,6 +29,7 @@ extends Control
 # files exist, per AudioManager/MusicManager's existing convention.
 
 const FADE_TIME := 1.0
+const COCKPIT_REVEAL_TIME := 4.0  # the sequence's own natural ending (_finish) gets a long, deliberate reveal — skipping (early or via the intro pref) still gets HUD.go_to's normal quick fade, see those call sites
 const TYPE_CHARS_PER_SEC := 35.0
 const TYPE_MIN_TIME := 0.06
 const TYPE_CLICK_STRIDE := 2  # click every Nth typed character — every char at 35cps blurs into a buzz
@@ -48,7 +49,7 @@ func _ready() -> void:
 	# Skip Intro (Options menu) — bail before building any of the sequence's
 	# UI at all, straight to the same destination the manual skip goes to.
 	if _skip_intro_pref():
-		get_tree().change_scene_to_file("res://scenes/cockpit.tscn")
+		HUD.go_to("res://scenes/cockpit.tscn")
 		return
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
@@ -251,7 +252,7 @@ func _wait(seconds: float) -> bool:
 func _finish() -> void:
 	if _skipped:
 		return
-	get_tree().change_scene_to_file("res://scenes/cockpit.tscn")
+	HUD.go_to("res://scenes/cockpit.tscn", COCKPIT_REVEAL_TIME)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -259,7 +260,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if (event is InputEventKey and event.pressed) or (event is InputEventMouseButton and event.pressed):
 		_skipped = true
-		get_tree().change_scene_to_file("res://scenes/cockpit.tscn")
+		HUD.go_to("res://scenes/cockpit.tscn")
 
 
 func _skip_intro_pref() -> bool:

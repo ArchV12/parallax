@@ -79,10 +79,12 @@ var _speed_refresh_elapsed := 0.0
 # _dest_container's own ALIGNMENT_CENTER stack, which visibly shifts up/down
 # depending on how many of ITS OWN rows happen to be visible — ship status
 # needs to stay put regardless of that. Left-aligned, sharing the strip with
-# _ship_distance_label (right-aligned) — the one thing that label ISN'T is
-# always-on: it only has anything meaningful to show while actually en
-# route (a live shrinking distance-to-target), so it stays hidden the rest
-# of the time rather than displaying a stale or zero figure while in orbit.
+# _ship_distance_label (right-aligned) — repurposed depending on what's
+# actually true right now: a live shrinking distance-to-target while en
+# route, or the name of wherever we are for the whole rest of the time,
+# ORBITAL INSERTION included (see _on_location_changed — PlayerState.
+# location_id is already true the instant arrival fires, even while the
+# camera's still settling into orbit), e.g. "SHIP STATUS: IN ORBIT" / "MARS".
 #
 # Split into a static prefix label (SHIP_STATUS_PREFIX, never retyped) and
 # a separate value label that types itself in fresh every time the status
@@ -114,7 +116,16 @@ func _ready() -> void:
 
 	_left_buttons[0].pressed.connect(func() -> void: system_pressed.emit())
 	_left_buttons[1].pressed.connect(_on_go_pressed)
-	_left_buttons[1].press_sfx = "go_button"  # override — the console's own GO pad, like every other GO button, gets its own distinct sound instead of the generic button click
+	# press_sfx itself is kept live by _refresh_destination_readout (called
+	# below, and on every subsequent destination/travel change) rather than
+	# fixed here — it swaps between "go_button" and "error" depending on
+	# whether a destination is actually locked, see that function's comment.
+
+	# COMMAND/RESEARCH/DATABASE have no systems behind them yet (see class
+	# comment) — pressing one is a genuine no-op, so it should sound like
+	# one instead of playing the same click every working button uses.
+	for btn in _right_buttons:
+		btn.press_sfx = "error"
 
 	_build_destination_readout()
 	Destination.destination_changed.connect(_refresh_destination_readout)
@@ -184,7 +195,12 @@ func _on_location_changed() -> void:
 	# screen.
 	_post_arrival_wait_id += 1
 	var my_id := _post_arrival_wait_id
-	_ship_distance_label.visible = false  # no target to show a distance to while in orbit — see _ship_distance_label's own comment
+	# PlayerState.location_id is already true the instant this fires — the
+	# ship has genuinely arrived, even though the camera's still settling
+	# into orbit (ORBITAL INSERTION) — so the name belongs on screen now,
+	# not held back until "IN ORBIT" catches up below.
+	_ship_distance_label.text = PlayerState.location_id.to_upper()
+	_ship_distance_label.visible = true
 	if Destination.locked_id == PlayerState.location_id:
 		Destination.clear()
 	else:
@@ -262,7 +278,11 @@ func _build_destination_readout() -> void:
 	_ship_distance_label.add_theme_font_size_override("font_size", 14)
 	_ship_distance_label.add_theme_color_override("font_color", UITheme.accent)
 	_ship_distance_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_ship_distance_label.visible = false  # en-route only — see the var's own comment
+	# A fresh scene load starts already "IN ORBIT" (see above) — the
+	# right-hand slot repurposes to name wherever we are (see
+	# _on_location_changed) rather than hiding until the first trip.
+	_ship_distance_label.text = PlayerState.location_id.to_upper()
+	_ship_distance_label.visible = true
 	add_child(_ship_distance_label)
 
 	_dest_container = VBoxContainer.new()
@@ -316,6 +336,15 @@ func _build_destination_readout() -> void:
 func _refresh_destination_readout() -> void:
 	var id := Destination.locked_id
 	var has_dest := id != ""
+
+	# GO's own click sound is fixed per-instance (ConsolePadButton.press_sfx,
+	# same override mechanism as go_button/lock_button everywhere else) and
+	# fires unconditionally on click, decoupled from whatever _on_go_pressed
+	# decides to do — so the only way to make a no-destination press SOUND
+	# like a no-op rather than a real GO is to swap which sfx is armed
+	# BEFORE the click, here, rather than trying to override it after the
+	# fact from inside _on_go_pressed.
+	_left_buttons[1].press_sfx = "go_button" if has_dest else "error"
 
 	if PlayerState.is_traveling:
 		_dest_header.text = "EN ROUTE TO %s" % PlayerState.travel_target_id.to_upper()
