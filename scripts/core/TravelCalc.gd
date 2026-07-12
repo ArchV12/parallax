@@ -75,6 +75,21 @@ const DEPARTURE_HOLD_SECONDS := 3.4
 # physics.
 const ARRIVAL_HOLD_SECONDS := 2.0
 
+# How long the camera's reorientation-into-orbit takes, once it starts (see
+# Cockpit.gd's _begin_orbit_settle, fired by PlayerState.travel_completed —
+# i.e., right as ARRIVAL_HOLD_SECONDS ends). Purely a camera/visual timing
+# constant — nothing here computes anything from it — but it lives in
+# TravelCalc rather than Cockpit.gd because ConsolePanel needs the SAME
+# number: PlayerState.travel_completed/location_changed fire the INSTANT
+# this turn starts, not once it finishes, so a naive status readout that
+# switches to "In Orbit" right on that signal would claim "in orbit" for
+# the whole ~2.8s the camera is still visibly swinging around (2026-07-11 —
+# exactly this was reported: "Orbital Insertion" cut to "In Orbit" while
+# still rotating into place). ConsolePanel._on_location_changed holds
+# "Orbital Insertion" for this same duration before switching, so the
+# label and the camera settle together.
+const ORBIT_SETTLE_DURATION := 2.8  # was 4.0, then trimmed once to 2.8 for pacing — tune by eye, but keep Cockpit.gd's own copy (a straight alias) in sync
+
 # --- Testing cheat (F2 in-game, see HUD/PlayerState) ---
 # A flat multiplier on ENGINE_ACCEL_KM_S2, not a separate formula — "a better
 # engine" was already defined as "more acceleration," so the cheat is just a

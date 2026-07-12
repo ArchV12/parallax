@@ -11,43 +11,69 @@ var _pool: Array[AudioStreamPlayer] = []
 var _cache: Dictionary = {}  # path -> AudioStream
 var _warned: Dictionary = {}  # path -> true — a missing sfx only warns once, not on every call
 
+# The travel loop (see travel below) runs continuously for the whole cruise,
+# not a one-shot — it needs its own dedicated player so the pool's
+# oldest-steals-newest logic in _get_free_player() can never cut it off to
+# make room for an unrelated button click or scanner blip mid-flight.
+var _travel_player: AudioStreamPlayer
+
 func _ready() -> void:
 	for i in POOL_SIZE:
 		var p := AudioStreamPlayer.new()
 		p.bus = "SFX"
 		add_child(p)
 		_pool.append(p)
+	_travel_player = AudioStreamPlayer.new()
+	_travel_player.bus = "SFX"
+	add_child(_travel_player)
 
 
-# play("ui/button_click") — omit extension; tries .wav then .ogg.
-func play(sfx_path: String, volume_db: float = 0.0, pitch: float = 1.0) -> void:
+# play("ui/button_click") — omit extension; tries .wav then .ogg. Returns the
+# player the sfx was started on (null if the asset is missing) — launch()
+# below uses this to chain the travel loop off the launch cue's own
+# `finished` signal.
+func play(sfx_path: String, volume_db: float = 0.0, pitch: float = 1.0) -> AudioStreamPlayer:
 	var stream := _load(sfx_path)
 	if stream == null:
 		if not _warned.has(sfx_path):
 			_warned[sfx_path] = true
 			push_warning("AudioManager: sfx not found — %s" % sfx_path)
-		return
+		return null
 	var player := _get_free_player()
 	if player == null:
-		return
+		return null
 	player.stream = stream
 	player.volume_db = volume_db
 	player.pitch_scale = pitch
 	player.play()
+	return player
 
 
 # --- UI semantic sounds ---
 # Every UIButton/UIPanel routes through these instead of hardcoding a path —
-# sound design changes happen in one place. No files exist yet; play()
-# no-ops gracefully on missing assets, so these are safe to call now and
-# start working the day the sfx land in Assets/sfx/ui/.
+# sound design changes happen in one place. ui_confirm() has a real asset
+# (button_general.ogg, directly under Assets/sfx/ — not the ui/ subfolder
+# the rest of these use) and works today; the others don't have files yet,
+# but play() no-ops gracefully on a missing asset, so they're safe to call
+# now and will start working the day their sfx land in Assets/sfx/ui/.
 
 func ui_hover() -> void:
 	play("ui/hover", -6.0)
 
 
-func ui_confirm() -> void:
-	play("ui/confirm")
+# The default press sound for every button in the game (UIButton,
+# ConsolePadButton, and the couple of raw Buttons in LocationsPanel all
+# route through this) — button_general.ogg. `sfx_path` lets a specific
+# button override it with a different sound entirely (see UIButton.press_sfx/
+# ConsolePadButton.press_sfx) while still going through the same call site.
+# Pitch is randomized +/-20% ONLY for the plain button_general click — a
+# generic click benefits from that variation so a rapid run of them doesn't
+# sound identical, but an overridden sfx_path (go_button, lock_button, ...)
+# is a deliberately distinct, branded cue and should always play true, not
+# get randomly detuned along with it.
+func ui_confirm(sfx_path: String = "button_general") -> void:
+	var pitch := randf_range(0.8, 1.2) if sfx_path == "button_general" else 1.0
+	play(sfx_path, 0.0, pitch)
 
 
 func ui_deny() -> void:
@@ -64,10 +90,67 @@ func ui_panel_close() -> void:
 
 # --- Flight sounds ---
 
+# How much of the travel loop's start overlaps the tail of launch.ogg —
+# starting it only once launch.ogg fully finishes read as two disjoint
+# sounds; starting it this far before launch.ogg ends instead blends them
+# into one continuous cue (launch swoosh building into the cruise loop).
+const LAUNCH_OVERLAP_SECONDS := 0.6
+
+# The very start of a trip — fired once, right as _play_departure_maneuver
+# begins (the "Orienting to Target" hold, before the departure maneuver's
+# own rotation tween or the acceleration burn that follows it). Has a real
+# asset (launch.ogg). Schedules the looping travel() cue to start
+# LAUNCH_OVERLAP_SECONDS before launch.ogg's own runtime ends, so the two
+# overlap rather than playing back to back.
+func launch() -> void:
+	var player := play("launch")
+	if player != null and player.stream != null:
+		var launch_length: float = player.stream.get_length()
+		var delay := maxf(launch_length - LAUNCH_OVERLAP_SECONDS, 0.0)
+		get_tree().create_timer(delay).timeout.connect(_start_travel_loop)
+	else:
+		# No launch asset to time the overlap against — start the loop
+		# immediately rather than silently dropping it for the whole trip.
+		_start_travel_loop()
+
+
+# The looping cruise sound — started automatically once launch() finishes
+# (see above), not called directly. Runs on its own dedicated player (not
+# the pool) since it needs to keep looping for the whole flight.
+func _start_travel_loop() -> void:
+	var stream := _load("travelling")
+	if stream == null:
+		if not _warned.has("travelling"):
+			_warned["travelling"] = true
+			push_warning("AudioManager: sfx not found — travelling")
+		return
+	if stream is AudioStreamOggVorbis:
+		stream.loop = true
+	_travel_player.stream = stream
+	_travel_player.play()
+
+
+# Cuts the travel loop — call right as the ship comes to its full stop
+# prior to orbital insertion (see Cockpit.gd's _process, the moment
+# TravelCalc.flight_progress first reaches 1.0), not on travel_completed —
+# that fires only after ARRIVAL_HOLD_SECONDS' full-stop pause has already
+# elapsed, well after the sound should have already changed over.
+func stop_travel_loop() -> void:
+	_travel_player.stop()
+
+
+# The ship reaching a genuine dead stop, right before the arrival hold/
+# orbital insertion lean begins — see stop_travel_loop's comment for exactly
+# when this fires. Cuts the travel loop and plays the one-shot stop cue.
+func arrival_stop() -> void:
+	stop_travel_loop()
+	play("arrival_stop")
+
+
 # Cockpit's departure maneuver (see DEPARTURE_MANEUVER_TIME/
 # _play_departure_maneuver in Cockpit.gd) — fired once, right as the ship
-# starts rotating onto its heading. No asset yet; safe to call now, same as
-# every other sound here.
+# starts rotating onto its heading, same moment as launch() above. No asset
+# yet; safe to call now, same as every other sound here.
 func engine_power_up() -> void:
 	play("engine/power_up")
 

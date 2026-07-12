@@ -49,9 +49,19 @@ var _left_buttons: Array[ConsolePadButton] = []
 var _right_buttons: Array[ConsolePadButton] = []
 
 const SPEED_REFRESH_INTERVAL := 0.1  # updating every frame reads as digit-flicker at this font size — see _process
-const STATUS_STRIP_HEIGHT := 26.0    # fixed reserved band along the top of the center readout — see _ship_status_label
-const STATUS_STRIP_PADDING := 8.0    # horizontal inset off the center band's own edges — _ship_status_label/_ship_distance_label are left/right-aligned now (see _layout_buttons), so text needs breathing room off the bevel instead of running flush to it
+const STATUS_STRIP_HEIGHT := 26.0    # fixed reserved band along the top of the center readout — see _ship_status_prefix_label/_ship_status_value_label
+const STATUS_STRIP_PADDING := 8.0    # horizontal inset off the center band's own edges — the status/distance labels are left/right-aligned now (see _layout_buttons), so text needs breathing room off the bevel instead of running flush to it
 const LOCAL_DISTANCE_THRESHOLD_KM := TravelCalc.AU_KM * 0.05  # below this, the live in-flight distance reads in KM (a same-system hop like Earth<->Luna, ~384K km, would show as "0.00 AU" otherwise); at/above it, AU — see _process
+
+const SHIP_STATUS_PREFIX := "SHIP STATUS: "  # the static, never-typed part — see _ship_status_prefix_label/_ship_status_value_label
+# Noticeably quicker than SystemView/PlanetarySystemView/BootSequence's
+# shared 35 chars/sec — those type out a one-time narrative reveal (a
+# body's name), where a leisurely pace reads as deliberate; this one
+# retypes on EVERY status change (several times over one trip), so it
+# needs to read as "quick instrument update," not "narration," or it'd
+# noticeably lag behind the phase changes it's reporting.
+const STATUS_TYPE_CHARS_PER_SEC := 70.0
+const STATUS_TYPE_MIN_TIME := 0.01
 
 var _dest_container: VBoxContainer
 var _dest_header: Label
@@ -73,7 +83,17 @@ var _speed_refresh_elapsed := 0.0
 # always-on: it only has anything meaningful to show while actually en
 # route (a live shrinking distance-to-target), so it stays hidden the rest
 # of the time rather than displaying a stale or zero figure while in orbit.
-var _ship_status_label: Label
+#
+# Split into a static prefix label (SHIP_STATUS_PREFIX, never retyped) and
+# a separate value label that types itself in fresh every time the status
+# actually changes (see _set_ship_status) — the "SHIP STATUS:" part of the
+# readout isn't new information each time, only the value after it is, so
+# only the value gets the attention-grabbing type-in treatment.
+var _ship_status_prefix_label: Label
+var _ship_status_value_label: Label
+var _ship_status_text := ""    # the last VALUE (not full string) passed to _set_ship_status — used purely to detect an actual change, see there
+var _ship_status_type_id := 0  # bumped on every new type-in request — a running coroutine bails once its captured id goes stale, see _type_ship_status
+var _post_arrival_wait_id := 0 # bumped on every arrival — guards the "hold ORBITAL INSERTION through the camera settle" wait in _on_location_changed against a stale run firing after a newer arrival (or a new trip) has already moved on
 var _ship_distance_label: Label
 
 
@@ -94,6 +114,7 @@ func _ready() -> void:
 
 	_left_buttons[0].pressed.connect(func() -> void: system_pressed.emit())
 	_left_buttons[1].pressed.connect(_on_go_pressed)
+	_left_buttons[1].press_sfx = "go_button"  # override — the console's own GO pad, like every other GO button, gets its own distinct sound instead of the generic button click
 
 	_build_destination_readout()
 	Destination.destination_changed.connect(_refresh_destination_readout)
@@ -112,10 +133,12 @@ func _process(delta: float) -> void:
 	# Continuous, not event-driven — the phase changes (orienting -> burn ->
 	# insertion) happen mid-flight with no signal to hook, purely a function
 	# of elapsed time. Cheap enough to just recompute every frame; see
-	# _on_location_changed for the idle "IN ORBIT" side of this.
-	_ship_status_label.text = "SHIP STATUS: %s" % TravelCalc.ship_status(
+	# _on_location_changed for the idle "IN ORBIT" side of this. _set_ship_status
+	# itself no-ops (no retyping) on the frames where the value hasn't
+	# actually changed — see its own comment.
+	_set_ship_status(TravelCalc.ship_status(
 			PlayerState.travel_distance_km, PlayerState.travel_elapsed,
-			PlayerState.travel_accel_multiplier).to_upper()
+			PlayerState.travel_accel_multiplier).to_upper())
 	_dest_time.text = "ETA: %s" % TravelCalc.format_duration(PlayerState.travel_remaining())
 	_ship_distance_label.visible = true
 
@@ -150,12 +173,26 @@ func _process(delta: float) -> void:
 # lock no longer means anything ("travel to where you already are" doesn't
 # make sense) — clearing it also flips the readout back to its base state.
 func _on_location_changed() -> void:
-	_ship_status_label.text = "SHIP STATUS: IN ORBIT"  # PlayerState.is_traveling is already false by the time this fires, so _process won't touch this label again until the next trip starts
+	# PlayerState.location_changed fires the INSTANT ARRIVAL_HOLD_SECONDS
+	# ends — which is exactly when Cockpit's camera STARTS turning into
+	# orbit (_begin_orbit_settle), not when it finishes. Switching straight
+	# to "IN ORBIT" here used to claim arrival for the whole
+	# ORBIT_SETTLE_DURATION the camera was still visibly rotating — see
+	# TravelCalc.ORBIT_SETTLE_DURATION's comment. Holding "ORBITAL
+	# INSERTION" (already showing — see TravelCalc.ship_status) for that
+	# same duration keeps the label honest about what's still happening on
+	# screen.
+	_post_arrival_wait_id += 1
+	var my_id := _post_arrival_wait_id
 	_ship_distance_label.visible = false  # no target to show a distance to while in orbit — see _ship_distance_label's own comment
 	if Destination.locked_id == PlayerState.location_id:
 		Destination.clear()
 	else:
 		_refresh_destination_readout()
+	await get_tree().create_timer(TravelCalc.ORBIT_SETTLE_DURATION).timeout
+	if _post_arrival_wait_id != my_id or PlayerState.is_traveling:
+		return  # a newer arrival, or an already-started next trip, has moved on since
+	_set_ship_status("IN ORBIT")
 
 
 func _on_go_pressed() -> void:
@@ -163,14 +200,62 @@ func _on_go_pressed() -> void:
 		HUD.go_to("res://scenes/cockpit.tscn")
 
 
+# The one path everything (both _process's per-frame poll and
+# _on_location_changed's one-off arrival) routes the status value through —
+# no-ops if `value` is the same text already showing, so a per-frame caller
+# doesn't restart the type-in 60 times a second for an unchanged status.
+func _set_ship_status(value: String) -> void:
+	if value == _ship_status_text:
+		return
+	_ship_status_text = value
+	_type_ship_status(value)
+
+
+# Same stepped-reveal technique as SystemView/PlanetarySystemView's
+# _type_callout_label (see STATUS_TYPE_CHARS_PER_SEC for why this runs
+# quicker) — types the VALUE label only; SHIP_STATUS_PREFIX never moves or
+# retypes. _ship_status_type_id guards against overlapping coroutines: if
+# the status changes again before a run finishes (a fast cheat-engine trip
+# can blow through a whole phase in well under a type-in's duration), the
+# stale run bails the moment it notices a newer one has started instead of
+# fighting it for the label's text.
+func _type_ship_status(value: String) -> void:
+	_ship_status_type_id += 1
+	var my_id := _ship_status_type_id
+	_ship_status_value_label.text = value
+	var total_len := value.length()
+	if total_len == 0:
+		return
+	_ship_status_value_label.visible_ratio = 0.0
+	var char_time := maxf(1.0 / STATUS_TYPE_CHARS_PER_SEC, STATUS_TYPE_MIN_TIME)
+	for i in range(total_len):
+		if _ship_status_type_id != my_id:
+			return  # a newer status superseded this one mid-type
+		_ship_status_value_label.visible_ratio = float(i + 1) / float(total_len)
+		await get_tree().create_timer(char_time).timeout
+	_ship_status_value_label.visible_ratio = 1.0
+
+
 func _build_destination_readout() -> void:
-	_ship_status_label = Label.new()
-	_ship_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_ship_status_label.add_theme_font_size_override("font_size", 14)
-	_ship_status_label.add_theme_color_override("font_color", UITheme.accent)
-	_ship_status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_ship_status_label.text = "SHIP STATUS: IN ORBIT"
-	add_child(_ship_status_label)
+	_ship_status_prefix_label = Label.new()
+	_ship_status_prefix_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_ship_status_prefix_label.add_theme_font_size_override("font_size", 14)
+	_ship_status_prefix_label.add_theme_color_override("font_color", UITheme.accent)
+	_ship_status_prefix_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ship_status_prefix_label.text = SHIP_STATUS_PREFIX
+	add_child(_ship_status_prefix_label)
+
+	_ship_status_value_label = Label.new()
+	_ship_status_value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_ship_status_value_label.add_theme_font_size_override("font_size", 14)
+	_ship_status_value_label.add_theme_color_override("font_color", UITheme.accent)
+	_ship_status_value_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Starts already fully shown, not typed — there's nothing to announce a
+	# CHANGE from on the very first frame the console exists.
+	_ship_status_text = "IN ORBIT"
+	_ship_status_value_label.text = _ship_status_text
+	_ship_status_value_label.visible_ratio = 1.0
+	add_child(_ship_status_value_label)
 
 	_ship_distance_label = Label.new()
 	_ship_distance_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -305,8 +390,17 @@ func _layout_buttons() -> void:
 		btn.size = Vector2(xb - xa, h)
 		btn.set_top_edge(_right_edge_y(xa, x1, size.x, h), _right_edge_y(xb, x1, size.x, h))
 
-	_ship_status_label.position = Vector2(x0 + STATUS_STRIP_PADDING, 6.0)
-	_ship_status_label.size = Vector2(x1 - x0 - STATUS_STRIP_PADDING * 2.0, STATUS_STRIP_HEIGHT)
+	# Value label starts right where the (fixed-text, so fixed-width) prefix
+	# label's natural width ends — get_minimum_size() works off the font's
+	# own metrics even without either label ever being laid out by a
+	# container, so this stays correct regardless of font/theme changes.
+	var status_prefix_width := _ship_status_prefix_label.get_minimum_size().x
+	_ship_status_prefix_label.position = Vector2(x0 + STATUS_STRIP_PADDING, 6.0)
+	_ship_status_prefix_label.size = Vector2(status_prefix_width, STATUS_STRIP_HEIGHT)
+
+	_ship_status_value_label.position = Vector2(x0 + STATUS_STRIP_PADDING + status_prefix_width, 6.0)
+	_ship_status_value_label.size = Vector2(
+			x1 - x0 - STATUS_STRIP_PADDING * 2.0 - status_prefix_width, STATUS_STRIP_HEIGHT)
 
 	_ship_distance_label.position = Vector2(x0 + STATUS_STRIP_PADDING, 6.0)
 	_ship_distance_label.size = Vector2(x1 - x0 - STATUS_STRIP_PADDING * 2.0, STATUS_STRIP_HEIGHT)

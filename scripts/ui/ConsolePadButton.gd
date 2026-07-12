@@ -23,6 +23,7 @@ const BRACKET_MARGIN := 3.0
 var top_left: float = 0.0   # local-space y of the top edge at x = 0
 var top_right: float = 0.0  # local-space y of the top edge at x = size.x
 var label_text: String = "" : set = set_label_text
+var press_sfx: String = "button_general"  # AudioManager's default press sound unless overridden — see UIButton.press_sfx, same idea
 
 var _hovered := false
 var _label: Label
@@ -70,7 +71,7 @@ func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
-			AudioManager.ui_confirm()
+			AudioManager.ui_confirm(press_sfx)
 			pressed.emit()
 
 

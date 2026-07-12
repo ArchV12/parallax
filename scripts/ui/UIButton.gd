@@ -44,6 +44,11 @@ const HOVER_ANIM_TIME := 0.12
 # Off for dense button clusters (the cockpit console) where a moving sweep
 # on every button at once reads as noisy rather than alive.
 @export var shimmer_enabled: bool = true
+# The sound this button plays on press — button_general.ogg (AudioManager's
+# default) unless a specific instance is set to something else, e.g. a
+# destructive/confirm action that wants its own distinct sound. See
+# _on_pressed.
+@export var press_sfx: String = "button_general"
 
 var _shimmer: ColorRect
 var _shimmer_mat: ShaderMaterial
@@ -224,7 +229,13 @@ func _on_unhover() -> void:
 	queue_redraw()
 
 
+# No `disabled` guard here (unlike _on_hover) — Godot's Button already
+# refuses to emit `pressed` at all while disabled, so by the time this runs
+# the click was already legitimate. Checking `disabled` here instead reads
+# whatever it is NOW, which can already have flipped true as a side effect
+# of another handler on this same signal that happened to run first (e.g.
+# LocationsPanel's GO button flips its own disabled via PlayerState.is_traveling
+# the instant travel_to() starts, all synchronously inside the SAME pressed
+# emission) — silently eating the sound for a click that genuinely happened.
 func _on_pressed() -> void:
-	if disabled:
-		return
-	AudioManager.ui_confirm()
+	AudioManager.ui_confirm(press_sfx)

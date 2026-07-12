@@ -105,6 +105,7 @@ func _ready() -> void:
 	_build_callout()
 	_build_body_panel()
 	_build_back_button()
+	AmbientManager.play_map_ambient()
 	HUD.set_view("%s System" % _planet_name, "planetary")
 
 
@@ -436,6 +437,7 @@ func _build_callout() -> void:
 	_callout_go_btn.custom_minimum_size = Vector2(90.0, 28.0)
 	_callout_go_btn.add_theme_font_size_override("font_size", 12)
 	_callout_go_btn.visible = false
+	_callout_go_btn.press_sfx = "go_button"  # override — see AudioManager.ui_confirm
 	_callout_go_btn.pressed.connect(_on_callout_go_pressed)
 	_overlay_layer.add_child(_callout_go_btn)
 

@@ -28,6 +28,7 @@ func _ready() -> void:
 	_button.custom_minimum_size = BUTTON_SIZE
 	_button.add_theme_font_size_override("font_size", 12)
 	_button.visible = false
+	_button.press_sfx = "lock_button"  # override — LOCK/UNLOCK gets its own distinct sound instead of the generic button click, see AudioManager.ui_confirm
 	_button.pressed.connect(_on_pressed)
 	add_child(_button)
 

@@ -105,7 +105,9 @@ func _build_tab() -> void:
 	_tab.text = "◀"
 	_tab.tooltip_text = "Known Locations"
 	UITheme.style_button(_tab, UITheme.button, UITheme.button_hov, UITheme.border)
-	_tab.pressed.connect(func() -> void: _set_expanded(not _expanded))
+	_tab.pressed.connect(func() -> void:
+		AudioManager.ui_confirm()  # a raw Button, not UIButton/ConsolePadButton — those wire this on their own, this one has to do it itself
+		_set_expanded(not _expanded))
 	_drawer.add_child(_tab)
 
 
@@ -170,6 +172,7 @@ func _build_footer(vbox: VBoxContainer) -> void:
 	_footer_go_btn.shimmer_enabled = false
 	_footer_go_btn.custom_minimum_size = FOOTER_BUTTON_SIZE
 	_footer_go_btn.add_theme_font_size_override("font_size", 12)
+	_footer_go_btn.press_sfx = "go_button"  # override — see AudioManager.ui_confirm
 	_footer_go_btn.pressed.connect(func() -> void: _on_go_pressed(_selected_id))
 	btn_row.add_child(_footer_go_btn)
 
@@ -270,6 +273,7 @@ func _add_row(entry: KnownBodies.Entry) -> void:
 	selected_style.set_border_width_all(1)
 	selected_style.set_corner_radius_all(4)
 	btn.add_theme_stylebox_override("pressed", selected_style)
+	btn.pressed.connect(func() -> void: AudioManager.ui_confirm())  # a raw Button, not UIButton/ConsolePadButton — those wire this on their own, this one has to do it itself
 	_rows_container.add_child(btn)
 
 	var name_box := VBoxContainer.new()

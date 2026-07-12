@@ -129,13 +129,17 @@ const ORBIT_GLANCE_DEG := 50.0                   # 0 = pure tangent (body at 90�
 # flight looks dead-center at the target (Basis.looking_at), while the
 # orbit pose deliberately glances at it off-center (ORBIT_GLANCE_DEG below
 # puts the body ~40° off boresight, not centered) — so there's a real ~40°
-# turn to cover regardless of how flat the approach is. NOT what times the
-# ORBITAL INSERTION status label — that's driven purely by
-# TravelCalc.ship_status's own real t1/t2 boundaries, entirely independent
-# of this constant (purely cosmetic camera timing) — and switches to
-# "IN ORBIT" right at arrival regardless (ConsolePanel._on_travel_completed)
-# — this only paces the camera's own post-arrival visual settle.
-const ORBIT_SETTLE_DURATION := 2.8  # was 4.0 — trimmed to make orbital insertion read a bit snappier, tune by eye
+# turn to cover regardless of how flat the approach is.
+#
+# Lives in TravelCalc, not here, even though only Cockpit's camera reads it
+# directly — ConsolePanel needs the SAME number too (2026-07-11: it used to
+# switch its status readout straight from "Orbital Insertion" to "In Orbit"
+# the instant PlayerState.travel_completed fired, which is exactly when
+# this turn STARTS, not when it finishes — so the label claimed "in orbit"
+# for the full ~2.8s the camera was still visibly swinging around). See
+# ConsolePanel._on_location_changed, which now holds "Orbital Insertion" for
+# this same duration before switching, so the label and the camera agree.
+const ORBIT_SETTLE_DURATION := TravelCalc.ORBIT_SETTLE_DURATION
 
 # Departure maneuver — a real orientation burn, not a flat single-axis
 # swing: the ship starts SUBSTANTIALLY off its heading — target roughly
@@ -156,6 +160,12 @@ const DEPARTURE_YAW_RANGE := Vector2(120.0, 165.0)  # degrees off heading, magni
 const DEPARTURE_PITCH_RANGE := 35.0                 # degrees off heading, +/- — target starts noticeably above or below too
 const DEPARTURE_ROLL_RANGE := 45.0                  # degrees of bank — a real "rolling out of a turn" cue, not a light tilt
 const DEPARTURE_SKIP_AFTER := 0.5                   # trips older than this are a mid-trip re-entry, not a departure — see _build_transit
+
+# arrival_stop.ogg reads as "cutting power to the engines," not "we have
+# stopped" — it needs to land WHILE the ship is still drifting down, this
+# far before the decel burn actually finishes, not once flight_progress
+# hits a genuine 1.0 (see _process's _in_transit branch).
+const ARRIVAL_STOP_LEAD_SECONDS := 1.0
 
 # Floating origin — Godot renders in single-precision floats, and this
 # scene's real-scale layout (PLANET_DIST_AU_TO_UNITS) puts Saturn ~500K
@@ -181,6 +191,7 @@ var _sun: DirectionalLight3D
 var _camera: Camera3D
 var _warp_points: WarpPoints
 var _transit_peak_speed := 1.0  # set per-trip in _build_transit — current_speed_km_s() normalized against this drives warp point intensity, see _process; 1.0 is just a safe non-zero placeholder before the first trip ever sets a real value
+var _transit_burn_duration := 0.0  # set per-trip in _build_transit (flight_profile's t1+t2) — how long the accel+decel burn lasts, used by _process to fire AudioManager.arrival_stop() ARRIVAL_STOP_LEAD_SECONDS before it ends
 var _primary: Node3D
 var _secondaries: Array[Node3D] = []             # background dressing at the arrived-at body — see _secondary_entries_for: every real moon of a planet, or just the parent if orbiting a moon
 var _secondary_is_universe_body: Array[bool] = []  # parallel to _secondaries
@@ -198,6 +209,7 @@ var _transit_target_anchor := Vector3.ZERO  # the destination body's own real po
 var _transit_target_radius := 0.0
 var _in_transit := false
 var _hidden_from_body: Node3D  # the departure body, hidden for the duration of the trip — see _build_transit/_build_arrival
+var _arrival_stop_played := false  # guards AudioManager.arrival_stop() against firing every frame once progress reaches 1.0 — see _process's _in_transit branch; reset per-trip in _build_transit
 
 var _primary_display_radius := 0.0
 var _orbit_angle := randf_range(0.0, TAU)  # start partway around the loop, not always fresh at 0
@@ -214,6 +226,7 @@ var _sun_lean_to_pos := Vector3.ZERO    # position the sun should be aimed at on
 
 
 func _ready() -> void:
+	AmbientManager.play_ship_ambient()
 	_build_environment()
 	_build_universe()
 	if PlayerState.is_traveling:
@@ -291,6 +304,29 @@ func _process(delta: float) -> void:
 		# not two formulas that have to be kept in sync by hand.
 		var progress := TravelCalc.flight_progress(
 				PlayerState.travel_distance_km, approach_elapsed, PlayerState.travel_accel_multiplier)
+
+		# "Cutting power to the engines" — fires ARRIVAL_STOP_LEAD_SECONDS
+		# before the decel burn actually finishes, i.e. while the ship is
+		# still visibly drifting down to rest, not once it's already
+		# stopped. Nowhere near PlayerState.travel_completed, which only
+		# fires after ARRIVAL_HOLD_SECONDS' full-stop pause on top of that.
+		# minf against burn_duration itself covers the rare short/floored
+		# trip whose whole burn is shorter than the lead time — fires at
+		# the very start of the burn rather than never at all.
+		var stop_lead := minf(ARRIVAL_STOP_LEAD_SECONDS, _transit_burn_duration)
+		if not _arrival_stop_played and approach_elapsed >= _transit_burn_duration - stop_lead:
+			_arrival_stop_played = true
+			AudioManager.arrival_stop()
+			# The score should start crossfading to the destination's own
+			# track at this same "cutting power" moment, not wait for
+			# _build_arrival — that only runs once travel_completed fires,
+			# well after ARRIVAL_HOLD_SECONDS' full stop on top of this.
+			# MusicManager's own _play_from no-ops if this happens to already
+			# be playing, so _build_arrival's later call for the cold-load
+			# (non-transit) path is still safe to leave as-is.
+			var target_entry := KnownBodies.get_entry(PlayerState.travel_target_id)
+			if target_entry != null:
+				_play_location_music(PlayerState.travel_target_id, target_entry)
 
 		# Position (and, once past the hold, orientation) are recomputed
 		# fresh from PlayerState every frame — not carried over from
@@ -647,6 +683,25 @@ func _generate_body(entry: KnownBodies.Entry, radius: float) -> Node3D:
 
 # --- Arrival ---
 
+# Per-location score — Luna gets its own track only at Luna itself, Mars
+# gets its track anywhere in the Mars system (Mars itself OR either of its
+# moons, entry.parent == "Mars"), and everywhere else still falls back to
+# Earth Orbit (a placeholder for every other destination — see the rest of
+# this file's "artistic compromise, not complete" comments; more
+# per-location tracks will replace this fallback over time). Called from
+# _process right as arrival_stop plays (the real "arriving here" moment) AND
+# from _build_arrival (the cold-load path with no transit) — MusicManager's
+# own _play_from no-ops if the right track is already playing, so calling
+# this twice for the same arrival is harmless.
+func _play_location_music(location_id: String, entry: KnownBodies.Entry) -> void:
+	if location_id == "Luna":
+		MusicManager.play_the_moon()
+	elif location_id == "Mars" or entry.parent == "Mars":
+		MusicManager.play_mars()
+	else:
+		MusicManager.play_earth_orbit()
+
+
 func _build_arrival(location_id: String) -> void:
 	var was_in_transit := _in_transit  # see the _point_sun_at call below
 	_in_transit = false
@@ -695,11 +750,12 @@ func _build_arrival(location_id: String) -> void:
 		_secondaries_built_for = location_id
 
 	HUD.set_view("%s Orbit" % location_id, "cockpit")
-	# Only track that exists yet — see the "no location system" gap this
-	# leaves for every other destination, same spirit as the rest of this
-	# file's "artistic compromise, not complete" comments.
-	if location_id == "Earth":
-		MusicManager.play_earth_orbit()
+	# Normally already started by _process's arrival_stop trigger, well
+	# before this runs (see that call site's own comment) — this call only
+	# actually does anything for a genuine cold load straight into a
+	# location (_ready with no transit in progress), since MusicManager's
+	# _play_from no-ops once the right track is already playing.
+	_play_location_music(location_id, entry)
 
 	# Camera positioning is the caller's job — a fresh load snaps straight
 	# to orbit (_ready), while arriving from a trip blends into it
@@ -893,6 +949,7 @@ func _build_secondaries(entry: KnownBodies.Entry) -> void:
 
 func _build_transit() -> void:
 	_in_transit = true
+	_arrival_stop_played = false
 	# Just a location-ish readout, same role _view_label always plays — NOT
 	# a status message anymore (see ConsolePanel's always-on ship-status
 	# strip, TravelCalc.ship_status, for "Orienting to Target"/"Acceleration
@@ -909,6 +966,7 @@ func _build_transit() -> void:
 	var speed_profile := TravelCalc.flight_profile(
 			PlayerState.travel_distance_km, PlayerState.travel_accel_multiplier)
 	_transit_peak_speed = maxf(speed_profile["peak_speed"], 1.0)
+	_transit_burn_duration = speed_profile["burn_duration"]
 
 	var target_id := PlayerState.travel_target_id
 	var from_id := PlayerState.location_id
@@ -1050,6 +1108,7 @@ func _build_transit() -> void:
 # top of the yaw sweep, not smeared into it. Position never moves here
 # (held by _process until this finishes); only orientation changes.
 func _play_departure_maneuver() -> void:
+	AudioManager.launch()  # the very start of the trip — see AudioManager.launch's own comment
 	var to_target := _transit_target_anchor - _camera.position
 	var target_basis: Basis
 	if to_target.length() > 0.01:

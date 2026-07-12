@@ -33,7 +33,7 @@ signal scan_finished(id: String)
 
 const PANEL_WIDTH := 300.0
 const LEFT_MARGIN := 32
-const SCAN_DURATION := 1.2
+const SCAN_DURATION := 4.0
 
 var _panel: UIPanel
 var _title_label: Label
@@ -137,6 +137,8 @@ func start_scan(entry: KnownBodies.Entry) -> void:
 
 	if _scan_tween != null:
 		_scan_tween.kill()
+	AudioManager.stop("scanner")  # in case a previous scan's sound is still ringing out — a rescan restarts it cleanly rather than layering
+	AudioManager.play("scanner")
 	_scan_tween = create_tween()
 	_scan_tween.tween_property(_scanning_bar, "value", 1.0, SCAN_DURATION)
 	_scan_tween.tween_callback(func() -> void: _finish_scan(entry))
@@ -154,6 +156,7 @@ func hide_panel() -> void:
 	if _scan_tween != null:
 		_scan_tween.kill()
 		_scan_tween = null
+		AudioManager.stop("scanner")  # scan was still in progress — cut the sound off rather than let it ring out over whatever's shown next
 	if _panel.visible:
 		_panel.close_animated()
 
