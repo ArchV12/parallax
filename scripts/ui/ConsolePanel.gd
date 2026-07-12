@@ -149,8 +149,16 @@ func _process(delta: float) -> void:
 	# actually changed — see its own comment.
 	_set_ship_status(TravelCalc.ship_status(
 			PlayerState.travel_distance_km, PlayerState.travel_elapsed,
-			PlayerState.travel_accel_multiplier).to_upper())
+			PlayerState.travel_accel_km_s2, PlayerState.travel_cruise_cap_km_s).to_upper())
 	_dest_time.text = "ETA: %s" % TravelCalc.format_duration(PlayerState.travel_remaining())
+	# Real-world-scale remaining time for whatever tier was pinned when this
+	# trip started (see PlayerState.travel_real_duration_sec) — shrinks
+	# alongside the gameplay ETA using the SAME progress fraction, rather
+	# than its own independent countdown, so "half the gameplay trip done"
+	# and "half the real duration done" always agree with each other.
+	if PlayerState.travel_real_duration_sec > 0.0:
+		var real_remaining := PlayerState.travel_real_duration_sec * (1.0 - PlayerState.travel_progress())
+		_dest_time.text += "  (REAL: %s)" % TravelCalc.format_duration(real_remaining)
 	_ship_distance_label.visible = true
 
 	# Speed/distance change every frame at full precision, which reads as
@@ -164,7 +172,7 @@ func _process(delta: float) -> void:
 		_speed_refresh_elapsed = 0.0
 		var speed := TravelCalc.current_speed_km_s(
 				PlayerState.travel_distance_km, PlayerState.travel_duration, PlayerState.travel_elapsed,
-				PlayerState.travel_accel_multiplier)
+				PlayerState.travel_accel_km_s2, PlayerState.travel_cruise_cap_km_s)
 		_dest_speed.text = "SPEED: %.1f KM/S" % speed
 
 		# Same motion_elapsed/flight_progress Cockpit's own camera curve
@@ -173,7 +181,8 @@ func _process(delta: float) -> void:
 		# not a second formula that could disagree with it.
 		var motion_elapsed := maxf(PlayerState.travel_elapsed - TravelCalc.DEPARTURE_HOLD_SECONDS, 0.0)
 		var progress := TravelCalc.flight_progress(
-				PlayerState.travel_distance_km, motion_elapsed, PlayerState.travel_accel_multiplier)
+				PlayerState.travel_distance_km, motion_elapsed,
+				PlayerState.travel_accel_km_s2, PlayerState.travel_cruise_cap_km_s)
 		var remaining_km := PlayerState.travel_distance_km * (1.0 - progress)
 		var distance_text := ("%.0f KM" % remaining_km) if PlayerState.travel_distance_km < LOCAL_DISTANCE_THRESHOLD_KM \
 				else ("%.2f AU" % (remaining_km / TravelCalc.AU_KM))
@@ -359,10 +368,16 @@ func _refresh_destination_readout() -> void:
 
 	_dest_header.text = ("DESTINATION: %s" % id.to_upper()) if has_dest else "NO DESTINATION LOCKED"
 	if has_dest:
-		var multiplier := TravelCalc.CHEAT_ENGINE_MULTIPLIER if PlayerState.cheat_engine_enabled else 1.0
-		var est := TravelCalc.estimate(PlayerState.location_id, id, multiplier)
+		# Same resolution GO itself uses (PlayerState.start_travel) — so this
+		# preview never shows a TRAVEL TIME that GO doesn't actually honor,
+		# whether or not a cheat-menu tier is pinned.
+		var engine := PlayerState.resolve_travel_engine(PlayerState.location_id, id)
+		var est := TravelCalc.estimate(PlayerState.location_id, id, engine["accel_km_s2"], engine["cruise_cap_km_s"])
 		_dest_distance.text = TravelCalc.format_distance(est)
 		_dest_time.text = "TRAVEL TIME: %s" % TravelCalc.format_duration(est["duration_sec"])
+		var real_sec: float = engine["real_duration_sec"]
+		if real_sec > 0.0:
+			_dest_time.text += "  (REAL: %s)" % TravelCalc.format_duration(real_sec)
 	_dest_distance.visible = has_dest
 	_dest_time.visible = has_dest
 	_dest_speed.visible = false

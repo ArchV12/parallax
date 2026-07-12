@@ -9,19 +9,21 @@ extends RefCounted
 # merely locked) and PlayerState (the actual travel timer once GO is pressed).
 #
 # A genuine constant-acceleration ("torch drive") model — the ship burns
-# hard to a peak speed, then decelerates at that SAME magnitude all the way
-# back down to a dead stop (v = 0) exactly at the destination, and ONLY
-# THEN is "Orbital Insertion" underway. No cruise coast at the end
-# (2026-07-11, fourth attempt at this shape — the previous version
-# decelerated to a small fixed CRUISE_SPEED_KM_S instead of 0 and coasted
-# the last CRUISE_DISTANCE_KM in at that speed, which read fine in
-# isolation but broke the actual ask: "Orbital Insertion" is supposed to
-# mean the ship has genuinely stopped, and a nonzero cruise speed — even a
-# "small" one like 500 km/s — still reads as "ridiculous" on the HUD right
-# as that label appears). Decelerating to a genuine 0 removes the whole
-# category of problem: there's no separate cruise phase/speed to keep in
-# sync with the label anymore, and "speed reads 0" and "Orbital Insertion"
-# become the same moment by construction.
+# hard toward a peak speed, then decelerates at that SAME magnitude all the
+# way back down to a dead stop (v = 0) exactly at the destination, and ONLY
+# THEN is "Orbital Insertion" underway (2026-07-11, fourth attempt at this
+# shape — an earlier version decelerated to a small fixed nonzero cruise
+# speed instead of 0, which still read as "ridiculous" on the HUD right as
+# "Orbital Insertion" appeared). Decelerating to a genuine 0 means "speed
+# reads 0" and "Orbital Insertion" are the same moment by construction, for
+# EVERY caller — including the gameplay-pacing default (ENGINE_ACCEL_KM_S2,
+# uncapped), which never has a cruise phase at all, just accel then decel.
+#
+# ENGINE_TIERS (below) add an actual, optional CRUISE phase in between —
+# accelerate up to a capped speed, hold it, decelerate — used only when a
+# tier's cruise_cap_km_s is actually reached (see flight_profile); this is
+# a physically-motivated model for real-world-scale distances, entirely
+# separate from the gameplay-pacing default every normal trip still uses.
 #
 # A real symmetric burn: accelerate at `accel` for as long as it takes to
 # reach peak speed, then decelerate at that SAME `accel` for exactly as
@@ -90,18 +92,78 @@ const ARRIVAL_HOLD_SECONDS := 2.0
 # label and the camera settle together.
 const ORBIT_SETTLE_DURATION := 2.8  # was 4.0, then trimmed once to 2.8 for pacing — tune by eye, but keep Cockpit.gd's own copy (a straight alias) in sync
 
-# --- Testing cheat (F2 in-game, see HUD/PlayerState) ---
-# A flat multiplier on ENGINE_ACCEL_KM_S2, not a separate formula — "a better
-# engine" was already defined as "more acceleration," so the cheat is just a
-# very good engine, same math and everything. Calibrated so an Earth->Mars
-# hop (the trip actually complained about) lands at CHEAT_TARGET_SECONDS
-# instead of ~3.5 minutes.
-const CHEAT_TARGET_TRIP_AU := 0.52          # Earth<->Mars real AU separation
-const CHEAT_TARGET_SECONDS := 15.0
-const CHEAT_ENGINE_MULTIPLIER := (4.0 * CHEAT_TARGET_TRIP_AU * AU_KM / (CHEAT_TARGET_SECONDS * CHEAT_TARGET_SECONDS)) / ENGINE_ACCEL_KM_S2
+# --- Engine tiers (F2 cheat menu, see HUD/CheatMenu/PlayerState) ---
+# The player's REAL engine only ever gets this fast in-fiction — see the
+# travel-time-scale brainstorm in parallax-core-design-decisions memory.
+# ENGINE_ACCEL_KM_S2 above is pure gameplay pacing (tuned so a trip feels
+# good in wall-clock seconds) and is NOT physically consistent at
+# interplanetary range — run out to Mars distance, its implied peak speed
+# is already several times the speed of light. These tiers are a genuinely
+# separate, physically-grounded model: modest acceleration up to a capped
+# cruise speed (0 = uncapped), each tier roughly an order of magnitude
+# faster than the last. Tier 4 (0.99c) puts Pluto at ~5.5 hours — right
+# where "distance/c" says it should be. Off by default (PlayerState.
+# engine_tier_override == -1) — with no tier pinned, PlayerState.
+# start_travel uses ENGINE_ACCEL_KM_S2 directly, exactly like before tiers
+# existed. PINNING a tier DOES now drive the actual trip (see
+# compress_by_tier_reach/TIER_REACH_KM below) — these accel/cap numbers
+# feed PlayerState.real_duration_estimate's honest real-world-scale
+# display number, but never touch the camera/flight_profile directly.
+const ENGINE_TIERS: Array[Dictionary] = [
+	{"name": "Tier 0 — Ion Drive", "accel_km_s2": 2.289e-5, "cruise_cap_km_s": 4.33},
+	{"name": "Tier 1 — Fusion Drive", "accel_km_s2": 0.01585, "cruise_cap_km_s": 2997.9},
+	{"name": "Tier 2 — Improved Fusion", "accel_km_s2": 0.1585, "cruise_cap_km_s": 29979.0},
+	{"name": "Tier 3 — Antimatter Drive", "accel_km_s2": 0.7924, "cruise_cap_km_s": 149896.0},
+	{"name": "Tier 4 — Relativistic Cap", "accel_km_s2": 1.5690, "cruise_cap_km_s": 296794.0},
+]
+
+# Each tier's own "comfortable frontier" distance (2026-07-11 design ask:
+# T0 comfortably reaches Luna, Mars is prohibitive; T1 comfortably reaches
+# Mars/Venus/Mercury, not much further; T2 comfortably reaches Jupiter,
+# Saturn's a hike; T3 comfortably reaches the ice giants and Pluto; T4+ is
+# easy everywhere in-system). This can't fall out of ENGINE_TIERS' own
+# accel/cap alone: under the accelerate-cruise-decelerate model, two trips
+# at the SAME tier that are both deep in the cruise phase scale roughly
+# LINEARLY with distance (an 8x-farther body takes ~8x longer, not more) —
+# nowhere near the ~200x-in-distance swing between "comfortable" and
+# "prohibitive" that Tier 0's Luna-vs-Mars ask needed. So reach is its own
+# explicit per-tier number, and compress_by_tier_reach compresses
+# DISTANCE RELATIVE TO IT (not raw real seconds) — a trip AT a tier's own
+# reach distance always compresses to the same gameplay time regardless of
+# which tier or how far that reach physically is, so "T2's own Jupiter"
+# feels exactly as comfortable as "T0's own Luna" did.
+const TIER_REACH_KM: Array[float] = [
+	384400.0,        # Tier 0 — Luna
+	77790893.0,      # Tier 1 — Mars (0.52 AU)
+	628311054.0,     # Tier 2 — Jupiter (4.2 AU)
+	5759517995.0,    # Tier 3 — Pluto (38.5 AU)
+	11519035990.0,   # Tier 4 — beyond Pluto (2x, so even Pluto itself is comfortably inside reach — "easier all around")
+]
+
+# Log-scale compression of (trip distance / this tier's TIER_REACH_KM) —
+# a straight proportional scale-down would still leave "just past the
+# frontier" barely distinguishable from "at the frontier"; log compression
+# is the right tool for "vast multiplicative range -> narrow additive
+# range." _COMPRESS_A is the gameplay duration AT ratio 1.0 (a trip
+# exactly at this tier's own reach) — 120s, the original "Tier 0 to Luna
+# should feel like ~2 minutes" ask. _COMPRESS_B is fitted so ratio 202.4
+# (Tier 0's real Luna-to-Mars distance ratio) lands at 900s (~15 minutes,
+# "prohibitively far" for Tier 0) — every other tier/destination
+# combination falls out of that SAME fit against ITS OWN reach, not a
+# hand-tuned number per pairing. Floored at MIN_DURATION_SECONDS so a
+# trip well inside a tier's reach (Venus at Tier 1, say) can't compress to
+# zero or negative.
+const _COMPRESS_A := 120.0
+const _COMPRESS_B := 146.95
 
 
-static func estimate(from_id: String, to_id: String, accel_multiplier: float = 1.0) -> Dictionary:
+static func compress_by_tier_reach(distance_km: float, tier: int) -> float:
+	var reach_km: float = TIER_REACH_KM[clampi(tier, 0, TIER_REACH_KM.size() - 1)]
+	var ratio := distance_km / maxf(reach_km, 1.0)
+	return maxf(MIN_DURATION_SECONDS, _COMPRESS_A + _COMPRESS_B * log(maxf(ratio, 0.001)))
+
+
+static func estimate(from_id: String, to_id: String, accel_km_s2: float = ENGINE_ACCEL_KM_S2, cruise_cap_km_s: float = 0.0) -> Dictionary:
 	var from_entry := KnownBodies.get_entry(from_id)
 	var to_entry := KnownBodies.get_entry(to_id)
 	if from_entry == null or to_entry == null:
@@ -109,35 +171,53 @@ static func estimate(from_id: String, to_id: String, accel_multiplier: float = 1
 
 	var local := _same_system(from_entry, to_entry)
 	var distance_km := _real_distance_km(from_entry, to_entry)
-	var profile := flight_profile(distance_km, accel_multiplier)
+	var profile := flight_profile(distance_km, accel_km_s2, cruise_cap_km_s)
 	var burn_duration: float = profile["burn_duration"]
 	var duration := maxf(DEPARTURE_HOLD_SECONDS + burn_duration + ARRIVAL_HOLD_SECONDS, MIN_DURATION_SECONDS)
 	return {"local": local, "distance_au": distance_km / AU_KM, "distance_km": distance_km, "duration_sec": duration}
 
 
-# The single source of truth for the whole burn/decel shape of a trip — see
-# the class comment. Burns from rest at `accel` up to a peak speed, covering
-# exactly half the distance, then decelerates at that SAME `accel` back
-# down to a dead stop, covering the other half — arriving at v = 0 exactly
-# at the destination.
+# The single source of truth for the whole burn/cruise/decel shape of a
+# trip — see the class comment. Accelerates from rest at `accel_km_s2`
+# toward a peak speed; if that natural peak would exceed `cruise_cap_km_s`
+# (and a cap is actually set — 0 means uncapped), the ship instead
+# accelerates only up to the cap, CRUISES at that constant speed for
+# whatever distance is left, then decelerates back to a dead stop at that
+# same `accel_km_s2` — arriving at v = 0 exactly at the destination either
+# way. A short hop (Moon-scale, under the gameplay-pacing constant, or any
+# tier's own natural range) never reaches its cap at all and this reduces
+# to the plain symmetric burn/decel shape used everywhere before tiers
+# existed.
 #
-# Derivation: with peak speed V, each phase covers V²/(2*accel) (accel from
-# rest, decel back to rest — the same formula both times, since both start
-# or end at 0). Setting the two halves to sum to distance_km:
-# V²/(2*accel) + V²/(2*accel) = distance_km, i.e. V²/accel = distance_km,
-# so V = sqrt(accel * distance_km). t1 = t2 = V/accel EXACTLY — a true
-# 50/50 split in both distance and time, not just approximately.
-static func flight_profile(distance_km: float, accel_multiplier: float = 1.0) -> Dictionary:
-	var accel := ENGINE_ACCEL_KM_S2 * accel_multiplier
-	var peak_speed := sqrt(maxf(accel * distance_km, 0.0))
-	var t1 := peak_speed / accel     # accel phase: 0 -> peak, first half of the distance
-	var t2 := t1                     # decel phase: peak -> 0, second half — exactly symmetric
+# Uncapped derivation: with peak speed V, each phase covers V²/(2*accel)
+# (accel from rest, decel back to rest — the same formula both times).
+# V²/accel = distance_km, so V = sqrt(accel * distance_km), t1 = t2 = V/accel.
+#
+# Capped derivation: accel phase covers accel_dist = cap²/(2*accel) in
+# t1 = cap/accel; decel mirrors it exactly; whatever distance remains
+# (cruise_dist) is covered at the constant cap speed in cruise_dist/cap.
+static func flight_profile(distance_km: float, accel_km_s2: float, cruise_cap_km_s: float = 0.0) -> Dictionary:
+	var natural_peak := sqrt(maxf(accel_km_s2 * distance_km, 0.0))
+	if cruise_cap_km_s <= 0.0 or natural_peak <= cruise_cap_km_s or accel_km_s2 <= 0.0:
+		var t1 := (natural_peak / accel_km_s2) if accel_km_s2 > 0.0 else 0.0
+		return {
+			"cruise_speed": natural_peak,
+			"t1": t1,
+			"accel_dist": distance_km * 0.5,
+			"cruise_dist": 0.0,
+			"burn_duration": t1 + t1,
+		}
 
+	var t1 := cruise_cap_km_s / accel_km_s2
+	var accel_dist := 0.5 * accel_km_s2 * t1 * t1
+	var cruise_dist := maxf(distance_km - 2.0 * accel_dist, 0.0)
+	var cruise_time := cruise_dist / cruise_cap_km_s
 	return {
-		"peak_speed": peak_speed,
+		"cruise_speed": cruise_cap_km_s,
 		"t1": t1,
-		"t2": t2,
-		"burn_duration": t1 + t2,
+		"accel_dist": accel_dist,
+		"cruise_dist": cruise_dist,
+		"burn_duration": 2.0 * t1 + cruise_time,
 	}
 
 
@@ -145,27 +225,28 @@ static func flight_profile(distance_km: float, accel_multiplier: float = 1.0) ->
 # from the END of the departure hold, i.e. "seconds of actual motion so
 # far") — what Cockpit's camera position curve is driven by directly, so
 # the motion on screen is BY CONSTRUCTION the same shape current_speed_km_s/
-# ship_status describe. Holds at 1.0 once burn+decel naturally finish
-# (ship at rest), even if the game-clock trip (MIN_DURATION_SECONDS floor)
-# runs a little longer — see the class comment on that floor.
-static func flight_progress(distance_km: float, motion_elapsed_sec: float, accel_multiplier: float = 1.0) -> float:
+# ship_status describe. Holds at 1.0 once burn+cruise+decel naturally
+# finish (ship at rest), even if the game-clock trip (MIN_DURATION_SECONDS
+# floor) runs a little longer — see the class comment on that floor.
+static func flight_progress(distance_km: float, motion_elapsed_sec: float, accel_km_s2: float, cruise_cap_km_s: float = 0.0) -> float:
 	if distance_km <= 0.001:
 		return 1.0
-	var profile := flight_profile(distance_km, accel_multiplier)
+	var profile := flight_profile(distance_km, accel_km_s2, cruise_cap_km_s)
 	var t1: float = profile["t1"]
-	var t2: float = profile["t2"]
-	var peak_speed: float = profile["peak_speed"]
-	var accel := ENGINE_ACCEL_KM_S2 * accel_multiplier
-	var burn_duration := t1 + t2
+	var accel_dist: float = profile["accel_dist"]
+	var cruise_dist: float = profile["cruise_dist"]
+	var cruise_speed: float = profile["cruise_speed"]
+	var burn_duration: float = profile["burn_duration"]
+	var cruise_time := burn_duration - 2.0 * t1
 	var t := clampf(motion_elapsed_sec, 0.0, burn_duration)
 	var dist_covered: float
 	if t <= t1:
-		dist_covered = 0.5 * accel * t * t
+		dist_covered = 0.5 * accel_km_s2 * t * t
+	elif t <= t1 + cruise_time:
+		dist_covered = accel_dist + cruise_speed * (t - t1)
 	else:
-		var s := t - t1
-		var accel_dist := 0.5 * accel * t1 * t1
-		var decel_dist := peak_speed * s - 0.5 * accel * s * s
-		dist_covered = accel_dist + decel_dist
+		var s := t - t1 - cruise_time
+		dist_covered = accel_dist + cruise_dist + (cruise_speed * s - 0.5 * accel_km_s2 * s * s)
 	return clampf(dist_covered / distance_km, 0.0, 1.0)
 
 
@@ -207,21 +288,22 @@ static func _anchor_au(entry: KnownBodies.Entry) -> float:
 # Live speed for a trip in progress — reads flight_profile() directly (see
 # class comment) rather than its own formula, so this can never show a
 # number that disagrees with what Cockpit's camera is actually doing.
-static func current_speed_km_s(distance_km: float, duration_sec: float, elapsed_sec: float, accel_multiplier: float = 1.0) -> float:
+static func current_speed_km_s(distance_km: float, duration_sec: float, elapsed_sec: float, accel_km_s2: float, cruise_cap_km_s: float = 0.0) -> float:
 	var motion_elapsed := maxf(elapsed_sec - DEPARTURE_HOLD_SECONDS, 0.0)
 	if distance_km <= 0.001:
 		return 0.0
-	var profile := flight_profile(distance_km, accel_multiplier)
+	var profile := flight_profile(distance_km, accel_km_s2, cruise_cap_km_s)
 	var t1: float = profile["t1"]
-	var t2: float = profile["t2"]
-	var peak_speed: float = profile["peak_speed"]
-	var burn_duration := t1 + t2
+	var cruise_speed: float = profile["cruise_speed"]
+	var burn_duration: float = profile["burn_duration"]
+	var cruise_time := burn_duration - 2.0 * t1
 	var t := clampf(motion_elapsed, 0.0, burn_duration)
-	var accel := ENGINE_ACCEL_KM_S2 * accel_multiplier
 	if t <= t1:
-		return accel * t
-	var s := t - t1
-	return maxf(peak_speed - accel * s, 0.0)
+		return accel_km_s2 * t
+	if t <= t1 + cruise_time:
+		return cruise_speed
+	var s := t - t1 - cruise_time
+	return maxf(cruise_speed - accel_km_s2 * s, 0.0)
 
 
 # The always-on "ship status" readout — ConsolePanel shows whichever of
@@ -248,18 +330,26 @@ static func current_speed_km_s(distance_km: float, duration_sec: float, elapsed_
 # ARRIVAL_HOLD_SECONDS full-stop pause AND the reorientation/settle that
 # follows it (see Cockpit.gd's _begin_orbit_settle) — since from the
 # player's perspective both are just "orbital insertion is underway."
-static func ship_status(distance_km: float, elapsed_sec: float, accel_multiplier: float = 1.0) -> String:
+# A capped tier adds a fourth phase, "Cruise," between the burn and the
+# decel — only ever reached when flight_profile actually hit its cap (see
+# that function), so an uncapped/never-capped trip's cruise_time is exactly
+# 0 and this collapses back to the original three-phase (burn/decel/
+# insertion) reading.
+static func ship_status(distance_km: float, elapsed_sec: float, accel_km_s2: float, cruise_cap_km_s: float = 0.0) -> String:
 	if elapsed_sec < DEPARTURE_HOLD_SECONDS:
 		return "Orienting to Target"
 	if distance_km <= 0.001:
 		return "Orbital Insertion"
-	var profile := flight_profile(distance_km, accel_multiplier)
+	var profile := flight_profile(distance_km, accel_km_s2, cruise_cap_km_s)
 	var t1: float = profile["t1"]
-	var t2: float = profile["t2"]
+	var burn_duration: float = profile["burn_duration"]
+	var cruise_time := burn_duration - 2.0 * t1
 	var motion_elapsed := elapsed_sec - DEPARTURE_HOLD_SECONDS
 	if motion_elapsed <= t1:
 		return "Acceleration Burn"
-	elif motion_elapsed <= t1 + t2:
+	elif motion_elapsed <= t1 + cruise_time:
+		return "Cruise"
+	elif motion_elapsed <= burn_duration:
 		return "Deceleration Burn"
 	return "Orbital Insertion"
 
@@ -270,6 +360,18 @@ static func format_distance(estimate_result: Dictionary) -> String:
 	return "DISTANCE: %.2f AU" % (estimate_result["distance_au"] as float)
 
 
+# Every normal-gameplay-pacing trip stays well under an hour, so this only
+# ever showed MM:SS before tiers existed — a slow tier (see ENGINE_TIERS)
+# can genuinely put a trip in the days/months/years range, where MM:SS
+# would just be an unreadable wall of digits, so this degrades to
+# coarser units the longer the duration actually is.
 static func format_duration(seconds: float) -> String:
 	var s := maxi(0, int(ceil(seconds)))
-	return "%d:%02d" % [s / 60, s % 60]
+	if s < 3600:
+		return "%d:%02d" % [s / 60, s % 60]
+	if s < 86400:
+		return "%dh %02dm" % [s / 3600, (s % 3600) / 60]
+	const SECONDS_PER_YEAR := 31557600  # 365.25 days — close enough for a display readout, not an orbital calculation
+	if s < SECONDS_PER_YEAR:
+		return "%dd %02dh" % [s / 86400, (s % 86400) / 3600]
+	return "%dy %dd" % [s / SECONDS_PER_YEAR, (s % SECONDS_PER_YEAR) / 86400]

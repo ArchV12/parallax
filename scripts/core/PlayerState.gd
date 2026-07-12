@@ -18,19 +18,42 @@ var travel_target_id: String = ""
 var travel_duration: float = 0.0
 var travel_elapsed: float = 0.0
 var travel_distance_km: float = 0.0  # real distance for the CURRENT trip — see TravelCalc; Cockpit derives a live speed readout from this against travel_duration
-var travel_accel_multiplier: float = 1.0  # the multiplier ACTUALLY used for the current trip's flight_profile — see start_travel; NOT the same as re-reading cheat_engine_enabled live, which could've been toggled since departure
+# The accel/cap that actually flies the ship for the CURRENT trip — see
+# start_travel/resolve_travel_engine. With no tier pinned this is just
+# ENGINE_ACCEL_KM_S2 uncapped, exactly like before tiers existed. With a
+# tier pinned, this is a GAMEPLAY-scale accel solved so the trip's own
+# burn_duration lands on TravelCalc.compress_by_tier_reach's compressed
+# number — NOT the tier's own real accel/cap directly (that was tried
+# 2026-07-11 and immediately broken: pinning Tier 0 made an actual Moon
+# trip take real DAYS of wall-clock waiting). The tier's real accel/cap
+# only ever feeds travel_real_duration_sec below, never the camera.
+var travel_accel_km_s2: float = TravelCalc.ENGINE_ACCEL_KM_S2
+var travel_cruise_cap_km_s: float = 0.0
 
-# Testing cheat — F2 in HUD toggles this. Applied at the moment a trip
-# STARTS (see start_travel), not retroactively to one already in progress —
-# toggling mid-flight just means the next GO gets it.
-var cheat_engine_enabled: bool = false
+# What THIS SAME trip takes under the tier's REAL (physically-grounded)
+# physics — display-only (the "(REAL: ...)" annotation in ConsolePanel),
+# computed alongside travel_duration in start_travel but never fed into the
+# actual flight. 0.0 when no tier is selected (engine_tier_override == -1),
+# meaning there's nothing "real" to show. See the travel-time-scale
+# brainstorm in parallax-core-design-decisions memory.
+var travel_real_duration_sec: float = 0.0
+
+# Cheat menu (F2 in HUD) — pins the ship to one of TravelCalc.ENGINE_TIERS.
+# -1 = off, use ENGINE_ACCEL_KM_S2 uncapped exactly like before tiers
+# existed. Applied at the moment a trip STARTS (see start_travel), not
+# retroactively to one already in progress — changing tiers mid-flight just
+# means the next GO gets it.
+var engine_tier_override: int = -1
 
 
 func start_travel(target_id: String) -> void:
 	if is_traveling or target_id == location_id:
 		return
-	travel_accel_multiplier = TravelCalc.CHEAT_ENGINE_MULTIPLIER if cheat_engine_enabled else 1.0
-	var est := TravelCalc.estimate(location_id, target_id, travel_accel_multiplier)
+	var engine := resolve_travel_engine(location_id, target_id)
+	travel_accel_km_s2 = engine["accel_km_s2"]
+	travel_cruise_cap_km_s = engine["cruise_cap_km_s"]
+	travel_real_duration_sec = engine["real_duration_sec"]
+	var est := TravelCalc.estimate(location_id, target_id, travel_accel_km_s2, travel_cruise_cap_km_s)
 	travel_target_id = target_id
 	travel_duration = est["duration_sec"]
 	travel_distance_km = est["distance_km"]
@@ -39,8 +62,50 @@ func start_travel(target_id: String) -> void:
 	travel_started.emit()
 
 
-func toggle_cheat_engine() -> void:
-	cheat_engine_enabled = not cheat_engine_enabled
+# What a from_id -> to_id trip should ACTUALLY fly at right now, given the
+# current engine_tier_override — shared by start_travel (the real snapshot)
+# and ConsolePanel's not-yet-departed ETA preview, so the preview never
+# shows a number GO doesn't honor.
+#
+# No tier pinned: the fixed gameplay-pacing default, unchanged from before
+# tiers existed.
+#
+# Tier pinned: the tier's REAL accel/cap (see ENGINE_TIERS) computes this
+# trip's genuine real-world duration (real_duration_sec, for display only —
+# see travel_real_duration_sec) — but what actually FLIES is a synthetic
+# gameplay accel solved backward from TravelCalc.compress_by_tier_reach's
+# compressed target (distance relative to THIS tier's own comfortable
+# reach, not raw real seconds — see that function's comment for why),
+# using the same uncapped symmetric-burn shape every default trip already
+# uses (burn_duration = 2*sqrt(distance/accel), so
+# accel = 4*distance/burn_duration²) — just aimed at a per-tier, per-trip
+# target instead of whatever the flat default naturally produces. This is
+# what makes each tier's own frontier body feel "comfortable" and anything
+# past it feel like a real stretch, at every tier, not just Tier 0.
+func resolve_travel_engine(from_id: String, to_id: String) -> Dictionary:
+	if engine_tier_override < 0 or engine_tier_override >= TravelCalc.ENGINE_TIERS.size():
+		return {"accel_km_s2": TravelCalc.ENGINE_ACCEL_KM_S2, "cruise_cap_km_s": 0.0, "real_duration_sec": 0.0}
+	var real_sec := real_duration_estimate(from_id, to_id)
+	var distance_km: float = TravelCalc.estimate(from_id, to_id).get("distance_km", 0.0)
+	var gameplay_duration := TravelCalc.compress_by_tier_reach(distance_km, engine_tier_override)
+	var motion_target := maxf(
+			gameplay_duration - TravelCalc.DEPARTURE_HOLD_SECONDS - TravelCalc.ARRIVAL_HOLD_SECONDS, 1.0)
+	var accel_km_s2 := (distance_km * 4.0) / (motion_target * motion_target)
+	return {"accel_km_s2": accel_km_s2, "cruise_cap_km_s": 0.0, "real_duration_sec": real_sec}
+
+
+# What a from_id -> to_id trip would take under the currently cheat-menu-
+# selected engine tier's REAL physics — 0.0 if no tier is selected.
+func real_duration_estimate(from_id: String, to_id: String) -> float:
+	if engine_tier_override < 0 or engine_tier_override >= TravelCalc.ENGINE_TIERS.size():
+		return 0.0
+	var tier: Dictionary = TravelCalc.ENGINE_TIERS[engine_tier_override]
+	var est := TravelCalc.estimate(from_id, to_id, tier["accel_km_s2"], tier["cruise_cap_km_s"])
+	return est["duration_sec"]
+
+
+func set_engine_tier(tier: int) -> void:
+	engine_tier_override = tier
 
 
 # Autoloads persist across change_scene_to_file (that's the whole point of
@@ -57,8 +122,10 @@ func reset_for_new_game() -> void:
 	travel_duration = 0.0
 	travel_elapsed = 0.0
 	travel_distance_km = 0.0
-	travel_accel_multiplier = 1.0
-	cheat_engine_enabled = false
+	travel_accel_km_s2 = TravelCalc.ENGINE_ACCEL_KM_S2
+	travel_cruise_cap_km_s = 0.0
+	travel_real_duration_sec = 0.0
+	engine_tier_override = -1
 	location_changed.emit()
 
 

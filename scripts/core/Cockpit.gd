@@ -333,7 +333,8 @@ func _process(delta: float) -> void:
 		# camera's actual motion and the readout are provably the same thing,
 		# not two formulas that have to be kept in sync by hand.
 		var progress := TravelCalc.flight_progress(
-				PlayerState.travel_distance_km, approach_elapsed, PlayerState.travel_accel_multiplier)
+				PlayerState.travel_distance_km, approach_elapsed,
+				PlayerState.travel_accel_km_s2, PlayerState.travel_cruise_cap_km_s)
 
 		# "Cutting power to the engines" — fires ARRIVAL_STOP_LEAD_SECONDS
 		# before the decel burn actually finishes, i.e. while the ship is
@@ -386,7 +387,7 @@ func _process(delta: float) -> void:
 		if _warp_points != null:
 			var speed := TravelCalc.current_speed_km_s(
 					PlayerState.travel_distance_km, PlayerState.travel_duration,
-					PlayerState.travel_elapsed, PlayerState.travel_accel_multiplier)
+					PlayerState.travel_elapsed, PlayerState.travel_accel_km_s2, PlayerState.travel_cruise_cap_km_s)
 			_warp_points.set_target_warp(speed / _transit_peak_speed)
 
 		if PlayerState.travel_elapsed >= hold_duration:
@@ -1014,8 +1015,8 @@ func _build_transit() -> void:
 	# above 0 purely to avoid a division blowing up for a degenerate
 	# zero-distance profile — real trips always have a real peak speed.
 	var speed_profile := TravelCalc.flight_profile(
-			PlayerState.travel_distance_km, PlayerState.travel_accel_multiplier)
-	_transit_peak_speed = maxf(speed_profile["peak_speed"], 1.0)
+			PlayerState.travel_distance_km, PlayerState.travel_accel_km_s2, PlayerState.travel_cruise_cap_km_s)
+	_transit_peak_speed = maxf(speed_profile["cruise_speed"], 1.0)
 	_transit_burn_duration = speed_profile["burn_duration"]
 
 	var target_id := PlayerState.travel_target_id

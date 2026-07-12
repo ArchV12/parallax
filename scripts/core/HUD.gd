@@ -35,6 +35,7 @@ var _fade_rect: ColorRect
 var _fps_label: Label
 var _cheat_engine_label: Label
 var _pause_menu: PauseMenu
+var _cheat_menu: CheatMenu
 
 
 func _ready() -> void:
@@ -74,6 +75,14 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if _fps_label.visible:
 		_fps_label.text = "FPS: %d" % Engine.get_frames_per_second()
+	# Persistent reminder that a tier is pinned even when the cheat menu
+	# itself is closed — polled rather than signal-driven since PlayerState.
+	# engine_tier_override can also change without the menu's own knowledge
+	# (reset_for_new_game, a future dev console, ...).
+	_cheat_engine_label.visible = PlayerState.engine_tier_override >= 0
+	if _cheat_engine_label.visible:
+		var tier: Dictionary = TravelCalc.ENGINE_TIERS[PlayerState.engine_tier_override]
+		_cheat_engine_label.text = "ENGINE CHEAT: %s" % tier["name"]
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -82,10 +91,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.keycode == KEY_F1:
 		_fps_label.visible = not _fps_label.visible
 	elif event.keycode == KEY_F2:
-		PlayerState.toggle_cheat_engine()
-		_cheat_engine_label.visible = PlayerState.cheat_engine_enabled
-		if PlayerState.cheat_engine_enabled:
-			_cheat_engine_label.text = "CHEAT ENGINE ACTIVE — x%.0f ACCEL" % TravelCalc.CHEAT_ENGINE_MULTIPLIER
+		_cheat_menu.toggle()
 
 
 func _build_fade() -> void:
@@ -150,6 +156,9 @@ func _build_debug() -> void:
 	_cheat_engine_label.add_theme_color_override("font_color", Color.CYAN)
 	_cheat_engine_label.visible = false
 	_debug_layer.add_child(_cheat_engine_label)
+
+	_cheat_menu = CheatMenu.new()
+	_debug_layer.add_child(_cheat_menu)
 
 
 func _make_label(preset: Control.LayoutPreset) -> Label:
