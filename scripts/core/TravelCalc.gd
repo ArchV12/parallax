@@ -109,12 +109,27 @@ const ORBIT_SETTLE_DURATION := 2.8  # was 4.0, then trimmed once to 2.8 for paci
 # compress_by_tier_reach/TIER_REACH_KM below) — these accel/cap numbers
 # feed PlayerState.real_duration_estimate's honest real-world-scale
 # display number, but never touch the camera/flight_profile directly.
+#
+# real_time_scale (2026-07-12): a DISPLAY-ONLY multiplier applied on top of
+# the accel/cap-derived duration, solely in PlayerState.real_duration_estimate
+# — never touches accel_km_s2/cruise_cap_km_s themselves, so it can't affect
+# gameplay pacing (compress_by_tier_reach) or the camera. Needed because this
+# ladder was built top-down from Tier 4's ~0.99c target, stepping each
+# earlier tier down by ~10x — so even "Tier 1 Fusion Drive" implies
+# sustained ~1.6g acceleration to reach 1% of light speed, giving an
+# Earth->Jupiter "real" time of a few DAYS, far faster than any real-or-
+# plausible fusion drive. Tier 0 stays unscaled (its whole trip is spent
+# well under cruise cap, e.g. Jupiter in ~4.6 real years — already a
+# sensible ion-drive number); Tiers 1-4 get a decreasing correction (each
+# was progressively less absurd to begin with) so Earth->Jupiter lands
+# roughly: T1 ~15 months, T2 ~6 weeks, T3 ~6.5 days, T4 ~1.4 days — a
+# believable curve instead of the previous few-day/few-hour cluster.
 const ENGINE_TIERS: Array[Dictionary] = [
-	{"name": "Tier 0 — Ion Drive", "accel_km_s2": 2.289e-5, "cruise_cap_km_s": 4.33},
-	{"name": "Tier 1 — Fusion Drive", "accel_km_s2": 0.01585, "cruise_cap_km_s": 2997.9},
-	{"name": "Tier 2 — Improved Fusion", "accel_km_s2": 0.1585, "cruise_cap_km_s": 29979.0},
-	{"name": "Tier 3 — Antimatter Drive", "accel_km_s2": 0.7924, "cruise_cap_km_s": 149896.0},
-	{"name": "Tier 4 — Relativistic Cap", "accel_km_s2": 1.5690, "cruise_cap_km_s": 296794.0},
+	{"name": "Tier 0 — Ion Drive", "accel_km_s2": 2.289e-5, "cruise_cap_km_s": 4.33, "real_time_scale": 1.0},
+	{"name": "Tier 1 — Fusion Drive", "accel_km_s2": 0.01585, "cruise_cap_km_s": 2997.9, "real_time_scale": 100.0},
+	{"name": "Tier 2 — Improved Fusion", "accel_km_s2": 0.1585, "cruise_cap_km_s": 29979.0, "real_time_scale": 30.0},
+	{"name": "Tier 3 — Antimatter Drive", "accel_km_s2": 0.7924, "cruise_cap_km_s": 149896.0, "real_time_scale": 10.0},
+	{"name": "Tier 4 — Relativistic Cap", "accel_km_s2": 1.5690, "cruise_cap_km_s": 296794.0, "real_time_scale": 3.0},
 ]
 
 # Each tier's own "comfortable frontier" distance (2026-07-11 design ask:

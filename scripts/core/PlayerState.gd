@@ -95,13 +95,18 @@ func resolve_travel_engine(from_id: String, to_id: String) -> Dictionary:
 
 
 # What a from_id -> to_id trip would take under the currently cheat-menu-
-# selected engine tier's REAL physics — 0.0 if no tier is selected.
+# selected engine tier's REAL physics — 0.0 if no tier is selected. Scaled
+# by the tier's own real_time_scale (see TravelCalc.ENGINE_TIERS) — display
+# only, corrects how unrealistically fast the raw accel/cap ladder reads at
+# interplanetary range without touching the accel/cap values that actually
+# drive gameplay pacing.
 func real_duration_estimate(from_id: String, to_id: String) -> float:
 	if engine_tier_override < 0 or engine_tier_override >= TravelCalc.ENGINE_TIERS.size():
 		return 0.0
 	var tier: Dictionary = TravelCalc.ENGINE_TIERS[engine_tier_override]
 	var est := TravelCalc.estimate(from_id, to_id, tier["accel_km_s2"], tier["cruise_cap_km_s"])
-	return est["duration_sec"]
+	var scale: float = tier.get("real_time_scale", 1.0)
+	return est["duration_sec"] * scale
 
 
 func set_engine_tier(tier: int) -> void:
