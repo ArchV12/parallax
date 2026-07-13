@@ -13,10 +13,12 @@ extends Control
 # design conversation in parallax-core-design-decisions memory.
 #
 # Read left to right: SYSTEM, GO on the left wing; COMMAND, RESEARCH,
-# DATABASE on the right (mirrored). GO/COMMAND/RESEARCH/DATABASE have no
-# systems behind them yet — left fully interactive (hover/press feedback)
-# rather than disabled, they just have nothing connected to `pressed`, so a
-# click no-ops (except GO, now wired — see below). GO is the travel-commit
+# DATABASE on the right (mirrored). COMMAND/DATABASE have no systems behind
+# them yet — left fully interactive (hover/press feedback) rather than
+# disabled, they just have nothing connected to `pressed`, so a click
+# no-ops. GO and RESEARCH are wired (RESEARCH opens HUD's ResearchPanel —
+# Docs/Science and Knowledge System - Implementation Roadmap.md, Phase 4).
+# GO is the travel-commit
 # action once a destination is locked (see LockButton.gd / Destination
 # autoload, reached from a target's callout in System/Planetary System view
 # — never from the console itself): pressing it starts a PlayerState trip
@@ -34,6 +36,7 @@ extends Control
 # reflects the standing lock/trip, not whatever's currently focused.
 
 signal system_pressed
+signal research_pressed
 
 const HEIGHT_CENTER := 150.0
 const HEIGHT_EDGE := 56.0
@@ -121,11 +124,15 @@ func _ready() -> void:
 	# fixed here — it swaps between "go_button" and "error" depending on
 	# whether a destination is actually locked, see that function's comment.
 
-	# COMMAND/RESEARCH/DATABASE have no systems behind them yet (see class
-	# comment) — pressing one is a genuine no-op, so it should sound like
-	# one instead of playing the same click every working button uses.
+	# COMMAND/DATABASE have no systems behind them yet (see class comment) —
+	# pressing one is a genuine no-op, so it should sound like one instead of
+	# playing the same click every working button uses. RESEARCH is wired
+	# (Docs/Science and Knowledge System - Implementation Roadmap.md, Phase
+	# 4) — reset back to the default click sound right after this loop.
 	for btn in _right_buttons:
 		btn.press_sfx = "error"
+	_right_buttons[1].press_sfx = "button_general"
+	_right_buttons[1].pressed.connect(func() -> void: research_pressed.emit())
 
 	_build_destination_readout()
 	Destination.destination_changed.connect(_refresh_destination_readout)

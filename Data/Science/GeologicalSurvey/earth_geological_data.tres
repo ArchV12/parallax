@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="GeologicalSurveyData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/GeologicalSurveyData.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+body_id = "Earth"
+composition = Array[String](["Basalt", "Granite", "Sedimentary Rock", "Limestone"])
+major_features = Array[String](["Continental Plates", "Mountain Ranges", "Ocean Basins", "Volcanic Regions"])
+volcanism = "Active"
+tectonics = "Active"
+erosion = "Extensive"
+estimated_age = "4.54 Billion Years"
+notes = Array[String](["Dynamic plate tectonics continuously reshaping the surface.", "Extensive hydrological erosion detected across all continents."])

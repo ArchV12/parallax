@@ -35,6 +35,7 @@ var _fade_rect: ColorRect
 var _fps_label: Label
 var _cheat_engine_label: Label
 var _pause_menu: PauseMenu
+var _research_panel: ResearchPanel
 var _cheat_menu: CheatMenu
 
 
@@ -128,12 +129,15 @@ func _build_hud() -> void:
 
 	_console = ConsolePanel.new()
 	_console.system_pressed.connect(open_system_menu)
+	_console.research_pressed.connect(open_research_panel)
 	_hud_layer.add_child(_console)
 
 
 func _build_pause() -> void:
 	_pause_menu = PauseMenu.new()
 	_pause_layer.add_child(_pause_menu)
+	_research_panel = ResearchPanel.new()
+	_pause_layer.add_child(_research_panel)
 
 
 func _build_debug() -> void:
@@ -184,6 +188,7 @@ func show_hud() -> void:
 func hide_hud() -> void:
 	_hud_layer.visible = false
 	_pause_menu.force_close()
+	_research_panel.force_close()
 
 
 # --- View registration ---
@@ -249,6 +254,16 @@ func open_system_menu() -> void:
 		_pause_menu.close()
 	else:
 		_pause_menu.open()
+
+
+# Reached via the console's RESEARCH button (Docs/Science and Knowledge
+# System - Implementation Roadmap.md, Phase 4) — same open/close toggle
+# shape as open_system_menu above.
+func open_research_panel() -> void:
+	if _research_panel.visible:
+		_research_panel.close()
+	else:
+		_research_panel.open()
 
 
 # --- Transition ---

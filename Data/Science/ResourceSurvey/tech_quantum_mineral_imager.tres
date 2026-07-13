@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/Science/ResourceSurvey/instrument_quantum_mineral_imager.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "quantum_mineral_imager"
+display_name = "Quantum Mineral Imager"
+knowledge_requirements = Dictionary[String, int]({"resource": 600})
+unlock_text = "Commander,\n\nOur engineering division has completed a prototype quantum mineral imager, capable of resolving trace element concentrations invisible to prior instruments.\n\nSpecifications have been uploaded to your vessel.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="GeologicalSurveyData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/GeologicalSurveyData.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+body_id = "Luna"
+composition = Array[String](["Basalt", "Anorthosite", "Regolith"])
+major_features = Array[String](["Impact Craters", "Lava Plains (Maria)", "Mountain Ranges"])
+volcanism = "Inactive"
+tectonics = "Inactive"
+erosion = "Minimal"
+estimated_age = "4.51 Billion Years"
+notes = Array[String](["Extensive impact history detected.", "Evidence of ancient volcanic activity."])

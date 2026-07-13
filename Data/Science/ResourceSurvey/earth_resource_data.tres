@@ -1,0 +1,44 @@
+[gd_resource type="Resource" script_class="ResourceSurveyData" load_steps=8 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/ResourceSurveyData.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/science/ResourceMaterialFinding.gd" id="2"]
+
+[sub_resource type="Resource" id="1"]
+script = ExtResource("2")
+material_name = "Iron"
+abundance = "Common"
+note_label = "Extraction"
+note_value = "Favorable"
+
+[sub_resource type="Resource" id="2"]
+script = ExtResource("2")
+material_name = "Aluminum"
+abundance = "Moderate"
+note_label = "Extraction"
+note_value = "Favorable"
+
+[sub_resource type="Resource" id="3"]
+script = ExtResource("2")
+material_name = "Silicon"
+abundance = "Common"
+note_label = "Extraction"
+note_value = "Favorable"
+
+[sub_resource type="Resource" id="4"]
+script = ExtResource("2")
+material_name = "Titanium"
+abundance = "Trace"
+note_label = "Extraction"
+note_value = "Difficult"
+
+[sub_resource type="Resource" id="5"]
+script = ExtResource("2")
+material_name = "Water Ice"
+abundance = "Confirmed"
+note_label = "Location"
+note_value = "Polar Regions"
+
+[resource]
+script = ExtResource("1")
+body_id = "Earth"
+materials = Array[ResourceMaterialFinding]([SubResource("1"), SubResource("2"), SubResource("3"), SubResource("4"), SubResource("5")])

@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="ActivityDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/ActivityDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/Science/GeologicalSurvey/instrument_geological_imager.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "geological_survey"
+display_name = "Geological Survey"
+knowledge_category = "geological"
+instruments = Array[InstrumentDef]([ExtResource("2")])
+description = "Analyze planetary composition"
+icon = ""
+flavor_duration_seconds = 270
+potential_discoveries = Array[String](["Surface Composition", "Notable Features", "Geological History"])

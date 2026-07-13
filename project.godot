@@ -25,6 +25,7 @@ HUD="*res://scripts/core/HUD.gd"
 Discoveries="*res://scripts/core/Discoveries.gd"
 Destination="*res://scripts/core/Destination.gd"
 PlayerState="*res://scripts/core/PlayerState.gd"
+Research="*res://scripts/core/Research.gd"
 
 [display]
 

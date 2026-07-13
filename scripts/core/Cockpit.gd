@@ -211,6 +211,9 @@ const REBASE_THRESHOLD := 2048.0
 var _sun: DirectionalLight3D
 var _camera: Camera3D
 var _warp_points: WarpPoints
+var _activities_panel: ActivitiesPanel  # right-side "what can I do here" panel — see _build_activities_panel
+var _transmission_banner: EarthTransmissionBanner  # centered milestone notification — see _build_activities_panel
+var _survey_report_panel: SurveyReportPanel  # centered rich survey report (Geological Survey) — see _build_activities_panel
 var _transit_peak_speed := 1.0  # set per-trip in _build_transit — current_speed_km_s() normalized against this drives warp point intensity, see _process; 1.0 is just a safe non-zero placeholder before the first trip ever sets a real value
 var _transit_burn_duration := 0.0  # set per-trip in _build_transit (flight_profile's t1+t2) — how long the accel+decel burn lasts, used by _process to fire AudioManager.arrival_stop() ARRIVAL_STOP_LEAD_SECONDS before it ends
 var _primary: Node3D
@@ -259,12 +262,17 @@ func _ready() -> void:
 	AmbientManager.play_ship_ambient()
 	_build_environment()
 	_build_universe()
+	_build_activities_panel()
 	if PlayerState.is_traveling:
 		_build_transit()
 	else:
 		# Fresh scene load, nothing to blend from — snap straight to orbit.
+		# Already "in orbit" from frame one (no settle to wait through, unlike
+		# a trip arrival — see _process's _settling branch), so the panel
+		# shows immediately here instead of waiting for that event.
 		_build_arrival(PlayerState.location_id)
 		_update_orbit_camera()
+		_activities_panel.refresh()
 	PlayerState.travel_completed.connect(_on_travel_completed)
 
 
@@ -419,6 +427,7 @@ func _process(delta: float) -> void:
 				_secondaries[i].rotate_y(SPIN * 0.5 * delta)
 		if _lean_elapsed >= ORBIT_SETTLE_DURATION:
 			_settling = false
+			_activities_panel.refresh()  # genuinely "in orbit" now — see _build_arrival's comment
 		return
 
 	if _primary != null:
@@ -510,6 +519,33 @@ func _build_environment() -> void:
 	_warp_points = WarpPoints.new()
 	_warp_points.follow = _camera
 	add_child(_warp_points)
+
+
+# Cockpit-only right-side "what can I do here" panel (Docs/Science and
+# Knowledge System - Implementation Roadmap.md, Phase 2), plus the centered
+# "Earth Transmission" milestone notification (Phase 3) it can trigger —
+# deliberately its own CanvasLayer, not routed through HUD (which is shared
+# across every view) or BodyInfoPanel's left-side overlay (a data readout,
+# not an action list). Layer 10 matches SystemView's own overlay: above the
+# 3D scene, below HUD's own layers. Banner is added after the activities
+# panel so it draws on top and intercepts its own DISMISS click.
+func _build_activities_panel() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 10
+	add_child(layer)
+	_activities_panel = ActivitiesPanel.new()
+	layer.add_child(_activities_panel)
+	_transmission_banner = EarthTransmissionBanner.new()
+	# Connected to Research directly (not ActivitiesPanel) — a milestone can
+	# be granted by anything that calls Research.add_knowledge, not only a
+	# RUN SURVEY press (e.g. the F2 Cheat Menu's Science Cheat).
+	Research.milestone_reached.connect(_transmission_banner.show_transmission)
+	layer.add_child(_transmission_banner)
+
+	_survey_report_panel = SurveyReportPanel.new()
+	_activities_panel.geological_report_ready.connect(_survey_report_panel.show_geological_report)
+	_activities_panel.resource_report_ready.connect(_survey_report_panel.show_resource_report)
+	layer.add_child(_survey_report_panel)
 
 
 # --- Universe (Sol + all planets, persistent for the scene's whole life) ---
@@ -791,6 +827,12 @@ func _build_arrival(location_id: String) -> void:
 		_secondaries_built_for = location_id
 
 	HUD.set_view("%s Orbit" % location_id, "cockpit")
+	# Activities panel is NOT refreshed/shown here — a trip arrival still has
+	# _begin_orbit_settle's reorientation left to play (see _on_travel_completed);
+	# popping the panel up mid-turn read as available before the ship was
+	# actually "in orbit." It shows once _process's _settling branch below
+	# finishes; the cold-load path (no transit, see _ready) has no settle to
+	# wait through, so it shows immediately there instead.
 	# Normally already started by _process's arrival_stop trigger, well
 	# before this runs (see that call site's own comment) — this call only
 	# actually does anything for a genuine cold load straight into a
@@ -1001,6 +1043,7 @@ func _build_secondaries(entry: KnownBodies.Entry) -> void:
 func _build_transit() -> void:
 	_in_transit = true
 	_arrival_stop_played = false
+	_activities_panel.hide_panel()
 	# Just a location-ish readout, same role _view_label always plays — NOT
 	# a status message anymore (see ConsolePanel's always-on ship-status
 	# strip, TravelCalc.ship_status, for "Orienting to Target"/"Acceleration

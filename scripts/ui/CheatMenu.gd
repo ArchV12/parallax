@@ -17,6 +17,7 @@ const NORMAL_LABEL := "Normal (Gameplay Pacing)"
 
 var _panel: UIPanel
 var _status_label: Label
+var _science_status_label: Label
 
 
 func _ready() -> void:
@@ -63,6 +64,9 @@ func _ready() -> void:
 		_add_tier_button(vbox, i, tier["name"])
 
 	vbox.add_child(HSeparator.new())
+	_build_science_cheat(vbox)
+
+	vbox.add_child(HSeparator.new())
 	_add_close_button(vbox)
 
 
@@ -70,6 +74,7 @@ func toggle() -> void:
 	visible = not visible
 	if visible:
 		_refresh_status()
+		_refresh_science_status()
 
 
 func _add_tier_button(parent: VBoxContainer, tier: int, label: String) -> void:
@@ -99,3 +104,50 @@ func _refresh_status() -> void:
 		return
 	var tier: Dictionary = TravelCalc.ENGINE_TIERS[PlayerState.engine_tier_override]
 	_status_label.text = "ACTIVE: %s" % tier["name"]
+
+
+# Manual survey clicks only award 10 Knowledge each (Research.
+# SURVEY_KNOWLEDGE_AWARD) — reaching the later resource_survey thresholds
+# (up to 1000) would take dozens of clicks, so this fast-forwards Knowledge
+# directly for testing Phase 3's milestone/instrument-grant pipeline without
+# needing a real save/load or a hundred button presses.
+func _build_science_cheat(parent: VBoxContainer) -> void:
+	var title := Label.new()
+	title.text = "SCIENCE CHEAT"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_color_override("font_color", UITheme.accent)
+	parent.add_child(title)
+
+	_science_status_label = Label.new()
+	_science_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_science_status_label.add_theme_font_size_override("font_size", 12)
+	_science_status_label.add_theme_color_override("font_color", UITheme.dim)
+	parent.add_child(_science_status_label)
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 8)
+	parent.add_child(row)
+	_add_knowledge_button(row, 50)
+	_add_knowledge_button(row, 200)
+
+	_refresh_science_status()
+
+
+func _add_knowledge_button(parent: HBoxContainer, amount: int) -> void:
+	var btn := UIButton.new()
+	btn.text = "+%d Resource" % amount
+	btn.custom_minimum_size = Vector2(0, 32)
+	btn.add_theme_font_size_override("font_size", 13)
+	btn.pressed.connect(func() -> void:
+		Research.add_knowledge("resource", amount)
+		_refresh_science_status())
+	parent.add_child(btn)
+
+
+func _refresh_science_status() -> void:
+	var instrument := Research.current_instrument("resource_survey")
+	_science_status_label.text = "Resource Knowledge: %d — %s" % [
+		Research.knowledge("resource"), instrument.display_name if instrument != null else "—"
+	]

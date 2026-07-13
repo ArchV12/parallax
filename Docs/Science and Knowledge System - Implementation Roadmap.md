@@ -131,3 +131,13 @@ Phases are ordered so nothing is built against a dependency that doesn't exist y
 * Each phase should be its own session/commit — phases are context-heavy and independently verifiable.
 * Nothing in Phases 0-4 depends on Phase 5/6/7 existing; the core science loop is fully playable without crafting, purchasing, or saving.
 * Revisit per-planet-unique discovery text (vs. hand-authored per-instrument-tier text) as a later refinement once the loop is proven — not a blocker for any phase above.
+
+---
+
+# Open Design Question (raised by Knowledge Domains and Tech Catalog.md)
+
+That doc frames Technologies as cross-cutting catalog categories (e.g. "Sensors & Scientific Equipment") spanning multiple Activities and multiple Knowledge Domains at once — different from the model actually built in Phases 0-3, where each Activity owns a private TechnologyDef chain gated on (so far) a single category. `TechnologyDef.knowledge_requirements` was already a generic multi-category dict, so nothing built needs to change to SUPPORT multi-domain gating — this is purely about whether a Technology belongs to one Activity's private ladder (current) or a shared catalog category spanning several Activities (the new doc's framing).
+
+**Deliberately not decided yet** — with only one Activity (Resource Survey) built, both models are indistinguishable in code. Decide this when authoring the SECOND Activity's instrument chain, not before.
+
+Also per this doc: "Robotics," "Computing," and "Engineering" appear as Knowledge Requirements in its Technology Catalog (Part 2) but are not among the 12 defined Knowledge Domains (Part 1) — decided NOT to add them as new Domains. When catalog technologies referencing them are actually authored (Phase 5/6+), map them onto the nearest existing Domain instead.

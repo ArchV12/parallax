@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="GeologicalSurveyData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/GeologicalSurveyData.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+body_id = "Mars"
+composition = Array[String](["Basalt", "Iron Oxide Regolith", "Sedimentary Deposits"])
+major_features = Array[String](["Olympus Mons", "Valles Marineris", "Polar Ice Caps", "Impact Craters"])
+volcanism = "Dormant"
+tectonics = "Inactive"
+erosion = "Minimal (Wind-Driven)"
+estimated_age = "4.6 Billion Years"
+notes = Array[String](["Evidence of ancient water flow detected in surface channels.", "Home to Olympus Mons, the largest known volcano in the solar system."])
