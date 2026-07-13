@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="ActivityDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/ActivityDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/Science/Mining/instrument_precision_mining_laser.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "mining"
+display_name = "Mining"
+knowledge_category = ""
+instruments = Array[InstrumentDef]([ExtResource("2")])
+description = "Extract materials from surveyed deposits"
+icon = ""
+flavor_duration_seconds = 0
+potential_discoveries = Array[String]([])

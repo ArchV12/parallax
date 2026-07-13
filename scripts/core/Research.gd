@@ -22,11 +22,15 @@ signal milestone_reached(tech: TechnologyDef)
 const ACTIVITY_PATHS := {
 	"resource_survey": "res://Data/Science/ResourceSurvey/activity_resource_survey.tres",
 	"geological_survey": "res://Data/Science/GeologicalSurvey/activity_geological_survey.tres",
+	"mining": "res://Data/Science/Mining/activity_mining.tres",
 }
 
 # Activities the player owns a starting (tier 0) instrument for from the very
-# beginning — "tools gate activities, not the reverse" (roadmap doc).
-const STARTING_ACTIVITIES := ["resource_survey", "geological_survey"]
+# beginning — "tools gate activities, not the reverse" (roadmap doc). Mining
+# is owned from the start too, but gated per-location instead by
+# has_resource_survey (see below) — ActivitiesPanel is what actually hides
+# its AVAILABLE row until a Resource Survey has resolved at the current body.
+const STARTING_ACTIVITIES := ["resource_survey", "geological_survey", "mining"]
 
 # Each activity's TechnologyDef chain, in tier order — index N is the tech
 # that advances owned_tier from N to N+1 (there's no entry for tier 0, the
@@ -78,6 +82,12 @@ var _owned_tier: Dictionary = {}
 # (Docs/Science and Knowledge System.md, "Knowledge").
 var _knowledge: Dictionary = {}
 
+# body_id -> true, once a Resource Survey has resolved there. A genuinely new
+# gate — distinct from _owned_tier's instrument-ownership check, which is
+# global, not per-location — needed for Mining's "must survey here first"
+# prerequisite (Docs/Mining.md).
+var _surveyed_locations: Dictionary = {}
+
 
 # Loads eagerly in _init (object construction), not _ready — _ready is
 # deferred a frame relative to when other autoloads' _ready bodies run in at
@@ -101,8 +111,17 @@ func _init() -> void:
 func reset_for_new_game() -> void:
 	_owned_tier.clear()
 	_knowledge.clear()
+	_surveyed_locations.clear()
 	for id: String in _activities:
 		_owned_tier[id] = 0 if id in STARTING_ACTIVITIES else -1
+
+
+func mark_surveyed(body_id: String) -> void:
+	_surveyed_locations[body_id] = true
+
+
+func has_resource_survey(body_id: String) -> bool:
+	return _surveyed_locations.get(body_id, false)
 
 
 func activity_def(activity_id: String) -> ActivityDef:
@@ -233,12 +252,16 @@ const SURVEY_KNOWLEDGE_AWARD := 10
 # awards Knowledge in the activity's category and returns what happened, for
 # the UI to display (including any newly granted TechnologyDefs, under
 # "milestones"). Empty Dictionary (no-op) if the activity isn't unlocked.
-func run_survey(activity_id: String) -> Dictionary:
+# location_id marks that body surveyed (see has_resource_survey) when this
+# was specifically a Resource Survey — Mining's prerequisite gate.
+func run_survey(activity_id: String, location_id: String) -> Dictionary:
 	var instrument := current_instrument(activity_id)
 	var def := activity_def(activity_id)
 	if instrument == null or def == null:
 		return {}
 	var granted := add_knowledge(def.knowledge_category, SURVEY_KNOWLEDGE_AWARD)
+	if activity_id == "resource_survey":
+		mark_surveyed(location_id)
 	return {
 		"instrument": instrument,
 		"knowledge_category": def.knowledge_category,

@@ -145,13 +145,29 @@ func _build_hud() -> void:
 	# the exact bug this whole notification exists to avoid.
 	_operation_toast = OperationToast.new()
 	_hud_layer.add_child(_operation_toast)
+	Operations.operation_started.connect(_on_operation_started)
 	Operations.operation_completed.connect(_on_operation_completed)
+	Operations.operation_stopped.connect(_on_operation_stopped)
 	Research.milestone_reached.connect(_on_milestone_reached)
 
 
-# Text is driven by the ActivityDef's own display_name rather than a
-# hardcoded per-activity_id string — so Mining (Phase 5) gets a correct
-# toast for free, no changes needed here when it's added.
+# Mining-kind only — the mining-start.ogg/mining-loop.ogg cue (see
+# AudioManager.mining_start) needs to fire the instant the operation
+# actually starts, same "regardless of which view is active" reasoning as
+# the rest of this subscription block: Mining can be STARTED only from
+# Cockpit's ActivitiesPanel today, but the player could switch away to
+# System View a moment later while it keeps running, so this can't live in
+# a Cockpit-only script the way a lot of earlier per-scene wiring did.
+func _on_operation_started(op_id: String) -> void:
+	var op := Operations.get_operation(op_id)
+	if op != null and op.activity_id == "mining":
+		AudioManager.mining_start()
+
+
+# Survey-kind only — Mining never reaches operation_completed at all (see
+# Operations.operation_stopped/_on_operation_stopped below). Text is driven
+# by the ActivityDef's own display_name rather than a hardcoded per-
+# activity_id string.
 func _on_operation_completed(op_id: String) -> void:
 	var op := Operations.get_operation(op_id)
 	if op == null:
@@ -159,6 +175,30 @@ func _on_operation_completed(op_id: String) -> void:
 	var def := Research.activity_def(op.activity_id)
 	var name := def.display_name.to_upper() if def != null else op.activity_id.to_upper()
 	_operation_toast.show_toast("%s COMPLETE — %s" % [name, op.location_id])
+
+
+# Mining-kind only — fires the instant a continuous mining operation ends,
+# for any of the three reasons (see Operations._finish_mining). Everything
+# in summary was already committed to the player's inventory as it ticked
+# (see Operations._tick_mining), so this toast is purely informational, not
+# a "come look at this" prompt the way _on_operation_completed's is. Cuts
+# the mining-loop.ogg cue and plays mining-end.ogg (see AudioManager.
+# mining_end) regardless of which of the three reasons ended it — the STOP
+# button doesn't play this itself for exactly that reason (see
+# ActivitiesPanel._build_mining_active_row), this one call site covers it
+# either way.
+func _on_operation_stopped(activity_id: String, location_id: String, summary: Dictionary) -> void:
+	if activity_id != "mining":
+		return
+	AudioManager.mining_end()
+	var reason_text := "STOPPED"
+	match summary.get("reason", ""):
+		"depleted":
+			reason_text = "DEPOSIT DEPLETED"
+		"departed":
+			reason_text = "STOPPED — DEPARTED"
+	_operation_toast.show_toast("MINING %s — %s: +%d %s" % [
+		reason_text, location_id, summary["amount_awarded"], summary["material_name"]])
 
 
 func _on_milestone_reached(tech: TechnologyDef) -> void:

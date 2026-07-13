@@ -17,6 +17,17 @@ var _warned: Dictionary = {}  # path -> true — a missing sfx only warns once, 
 # make room for an unrelated button click or scanner blip mid-flight.
 var _travel_player: AudioStreamPlayer
 
+# Same reasoning as _travel_player, for the mining loop (see mining_start
+# below) — a continuous operation that can run for many minutes, never
+# stolen by the pool.
+var _mining_player: AudioStreamPlayer
+# Guards _start_mining_loop against firing after mining_end() already
+# stopped it — mining_start()'s overlap timer (see MINING_OVERLAP_SECONDS)
+# schedules the loop to begin a fraction of a second in the future, and
+# mining can end faster than that (a quick STOP, or an already-nearly-
+# depleted deposit finishing off).
+var _mining_active := false
+
 func _ready() -> void:
 	for i in POOL_SIZE:
 		var p := AudioStreamPlayer.new()
@@ -26,6 +37,9 @@ func _ready() -> void:
 	_travel_player = AudioStreamPlayer.new()
 	_travel_player.bus = "SFX"
 	add_child(_travel_player)
+	_mining_player = AudioStreamPlayer.new()
+	_mining_player.bus = "SFX"
+	add_child(_mining_player)
 
 
 # play("ui/button_click") — omit extension; tries .wav then .ogg. Returns the
@@ -153,6 +167,65 @@ func arrival_stop() -> void:
 # yet; safe to call now, same as every other sound here.
 func engine_power_up() -> void:
 	play("engine/power_up")
+
+
+# --- Mining sounds ---
+# Same start-cue/looping-cruise/stop shape as the Flight sounds above
+# (launch/_start_travel_loop/stop_travel_loop) — a continuous operation
+# needs the same "one-shot spin-up blending into a loop" treatment a trip
+# does.
+
+# How much of mining-start.ogg's tail overlaps the beginning of mining-loop.
+# ogg — see LAUNCH_OVERLAP_SECONDS' own comment for why (blends into one
+# continuous cue instead of playing back to back).
+const MINING_OVERLAP_SECONDS := 0.6
+
+# Fired once, the instant a mining operation actually starts (see
+# HUD._on_operation_started) — has a real asset (mining-start.ogg).
+# Schedules the looping mining_loop cue to start MINING_OVERLAP_SECONDS
+# before mining-start.ogg's own runtime ends.
+func mining_start() -> void:
+	_mining_active = true
+	var player := play("mining-start")
+	if player != null and player.stream != null:
+		var start_length: float = player.stream.get_length()
+		var delay := maxf(start_length - MINING_OVERLAP_SECONDS, 0.0)
+		get_tree().create_timer(delay).timeout.connect(_start_mining_loop)
+	else:
+		# No start asset to time the overlap against — start the loop
+		# immediately rather than silently dropping it for the whole operation.
+		_start_mining_loop()
+
+
+# The looping "extracting" cue — started automatically once mining_start()
+# finishes (see above), not called directly. Runs on its own dedicated
+# player (not the pool) since it needs to keep looping for however long the
+# operation runs (potentially many minutes — see Deposits.DEPLETE_SECONDS_
+# BY_SIZE).
+func _start_mining_loop() -> void:
+	if not _mining_active:
+		return  # mining_end() already fired before this delayed callback ran
+	var stream := _load("mining-loop")
+	if stream == null:
+		if not _warned.has("mining-loop"):
+			_warned["mining-loop"] = true
+			push_warning("AudioManager: sfx not found — mining-loop")
+		return
+	if stream is AudioStreamOggVorbis:
+		stream.loop = true
+	_mining_player.stream = stream
+	_mining_player.play()
+
+
+# Cuts the mining loop and plays the one-shot end cue — fired once, the
+# instant a mining operation ends, for ANY of its three causes (player STOP,
+# departure, full depletion — see Operations.operation_stopped and
+# HUD._on_operation_stopped, the single call site for this regardless of
+# which cause it was).
+func mining_end() -> void:
+	_mining_active = false
+	_mining_player.stop()
+	play("mining-end")
 
 
 # --- Boot sequence sounds ---

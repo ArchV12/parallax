@@ -26,14 +26,25 @@ extends Control
 # even just switching to System View). This panel is now a pure poller/
 # renderer over Operations, the same relationship ConsolePanel already has
 # to PlayerState.travel_progress() — it never times or resolves anything
-# itself. A running operation shows in ACTIVE OPERATIONS with a live
-# progress bar; once Operations resolves it, it moves to COMPLETED (See
-# Results / ✕) — deliberately NOT an automatic popup, viewing results is the
-# player's own choice, on their own schedule (see _on_see_results_pressed).
+# itself. A running SURVEY shows in ACTIVE OPERATIONS with a live progress
+# bar; once Operations resolves it, it moves to COMPLETED (See Results / ✕)
+# — deliberately NOT an automatic popup, viewing results is the player's own
+# choice, on their own schedule (see _on_see_results_pressed).
 #
-# Availability isn't gated per-location yet (see the roadmap's Phase 2 scope
-# note) — the same list shows at every destination for now; only which
-# instrument tier is owned changes what's on it.
+# Mining is a different shape entirely — CONTINUOUS, not a single resolve
+# (see Operations._tick_mining): its active card (_build_mining_active_row)
+# has no progress bar, just live "+N Material"/"Deposit Remaining: N%"
+# counters and a STOP button, and it never reaches COMPLETED at all — it
+# just disappears the instant it ends (stopped/departed/depleted — see
+# Operations.operation_stopped), with a HUD toast summarizing what was
+# collected. Everything shown was already committed to the player's
+# inventory as it ticked, so there's nothing left to "view" afterward.
+#
+# Availability isn't gated per-location yet for Surveys (see the roadmap's
+# Phase 2 scope note) — the same list shows at every destination for now;
+# only which instrument tier is owned changes what's on it. Mining is the
+# one exception (see _is_available_now) — it needs a Resource Survey to have
+# already resolved at the current body.
 
 # Fired after a Geological or Resource Survey run when hand-authored rich
 # report content exists for the current body (Research.geological_data_for/
@@ -64,6 +75,7 @@ var _completed_box: VBoxContainer
 var _available_box: VBoxContainer
 var _result_label: Label
 var _detail_panel: ActivityDetailPanel
+var _mining_panel: MiningOperationsPanel
 var _expanded := false
 var _traveling := false  # see show_for_travel/refresh — suppresses AVAILABLE while in transit
 
@@ -80,7 +92,7 @@ func _ready() -> void:
 	_drawer.offset_top = TOP_MARGIN
 	_drawer.offset_bottom = -BOTTOM_MARGIN
 	_drawer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_drawer.visible = false  # nothing to show until the first refresh() (arrival) — see hide_panel/refresh
+	_drawer.visible = false  # nothing to show until the first refresh()/show_for_travel() (arrival/departure)
 	add_child(_drawer)
 
 	_build_tab()
@@ -90,6 +102,10 @@ func _ready() -> void:
 	_detail_panel.begin_requested.connect(_start_activity)
 	add_child(_detail_panel)
 
+	_mining_panel = MiningOperationsPanel.new()
+	_mining_panel.begin_requested.connect(_start_mining)
+	add_child(_mining_panel)
+
 	# Operations is the single source of truth for what's running/complete —
 	# any of these can fire from ANYTHING that touches it (this panel's own
 	# BEGIN press, a future different UI, even a debug tool), so the rebuild
@@ -98,6 +114,7 @@ func _ready() -> void:
 	Operations.operation_started.connect(func(_op_id: String) -> void: _rebuild_rows())
 	Operations.operation_completed.connect(func(_op_id: String) -> void: _rebuild_rows())
 	Operations.operation_dismissed.connect(func(_op_id: String) -> void: _rebuild_rows())
+	Operations.operation_stopped.connect(func(_activity_id: String, _location_id: String, _summary: Dictionary) -> void: _rebuild_rows())
 
 	# A milestone can be granted by ANYTHING that calls Research.add_knowledge
 	# — not just a resolved survey (e.g. the F2 Cheat Menu's Science Cheat) —
@@ -108,19 +125,35 @@ func _ready() -> void:
 	_set_expanded(false, false)  # collapsed initial offsets, no animation — refresh() is what actually reveals this
 
 
-# Only ever updates progress bar VALUES for whatever's currently shown in
-# ACTIVE OPERATIONS — full row rebuilds happen exclusively in response to
-# Operations' own signals above, never every frame. At most one row here in
-# practice (Operations.can_start() only allows one RUNNING operation), but
-# iterates generically rather than assuming that, since Operations' own data
-# shape is deliberately ready for more later.
+# Only ever updates VALUES for whatever's currently shown in ACTIVE
+# OPERATIONS — full row rebuilds happen exclusively in response to
+# Operations' own signals above, never every frame. Up to two rows here in
+# practice — a Survey and Mining run as independent tracks (see Operations'
+# own class comment on can_start) and can legitimately both be RUNNING at
+# once — but iterates generically rather than assuming a fixed count, since
+# Operations' own data shape is deliberately ready for more later. Two
+# different live-update shapes share this loop: a Survey card polls a
+# ProgressBar (see "progress" meta); a Mining card has no progress bar at
+# all (continuous, no fixed end — see _build_mining_active_row) and instead
+# polls its own yield/remaining Labels directly (see "mining_op_id" meta).
 func _process(_delta: float) -> void:
 	for row in _active_box.get_children():
-		if not row.has_meta("op_id"):
-			continue
-		var progress: ProgressBar = row.get_meta("progress")
-		if is_instance_valid(progress):
-			progress.value = Operations.progress(row.get_meta("op_id"))
+		if row.has_meta("progress"):
+			var progress: ProgressBar = row.get_meta("progress")
+			if is_instance_valid(progress):
+				progress.value = Operations.progress(row.get_meta("op_id"))
+		elif row.has_meta("mining_op_id"):
+			var op := Operations.get_operation(row.get_meta("mining_op_id"))
+			if op == null:
+				continue
+			var yield_label: Label = row.get_meta("mining_yield_label")
+			if is_instance_valid(yield_label):
+				yield_label.text = "+%d %s" % [op.mining_session_yield, op.deposit_material]
+			var remaining_label: Label = row.get_meta("mining_remaining_label")
+			if is_instance_valid(remaining_label):
+				var deposit := Deposits.deposit_for(op.location_id, op.deposit_material)
+				if deposit != null:
+					remaining_label.text = "Deposit Remaining: %d%%" % roundi(deposit.remaining_fraction * 100.0)
 
 
 # A small grab handle vertically centered on the drawer's left edge — same
@@ -296,11 +329,14 @@ func _rebuild_rows() -> void:
 			# No target body to run anything against mid-flight — an
 			# operation begun before departure still shows below via the
 			# RUNNING/else branches, this only suppresses starting a NEW one.
-			if not _traveling:
+			if not _traveling and _is_available_now(id):
 				_available_box.add_child(_build_available_row(id))
 				shown_available += 1
 		elif op.status == ActiveOperation.Status.RUNNING:
-			_active_box.add_child(_build_active_row(id, op))
+			if id == "mining":
+				_active_box.add_child(_build_mining_active_row(op))
+			else:
+				_active_box.add_child(_build_active_row(id, op))
 			any_active = true
 		else:
 			_completed_box.add_child(_build_completed_row(id, op))
@@ -310,6 +346,16 @@ func _rebuild_rows() -> void:
 	_completed_header.visible = any_completed
 	if shown_available == 0:
 		_add_empty_row()
+
+
+# Mining additionally needs a Resource Survey to have already resolved at
+# the CURRENT location — there's nothing to derive a deposit list from until
+# then (see Deposits.deposits_for). Every other Activity has no such gate
+# yet (roadmap Phase 2 scope note) and is available everywhere once owned.
+func _is_available_now(activity_id: String) -> bool:
+	if activity_id == "mining":
+		return Research.has_resource_survey(PlayerState.location_id)
+	return true
 
 
 func _add_empty_row() -> void:
@@ -375,7 +421,11 @@ func _build_available_row(activity_id: String) -> Control:
 		desc_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		box.add_child(desc_label)
 
-	if def != null:
+	# Guarded on > 0, not just != null — Mining's ActivityDef leaves this at
+	# 0 deliberately (its real duration varies per-deposit, see Deposits.
+	# flavor_duration_seconds, so a single flat number here would just be
+	# wrong; the real figure shows one tap deeper, in DepositDetailPanel).
+	if def != null and def.flavor_duration_seconds > 0:
 		var time_label := Label.new()
 		time_label.text = "Time: %s" % ActivityDef.format_duration(def.flavor_duration_seconds)
 		time_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -387,8 +437,18 @@ func _build_available_row(activity_id: String) -> Control:
 	return wrapper
 
 
+# Mining opens a different gateway (a deposit LIST to choose one material
+# from — see MiningOperationsPanel's own comment on why this is never
+# "extract everything") rather than ActivityDetailPanel's single confirm
+# form. can_start(activity_id) — not a bare can_start() — since Mining and
+# Survey are independent tracks (see Operations' own class comment): mining
+# already running never blocks opening a Survey, and a Survey already
+# running never blocks opening Mining.
 func _on_view_pressed(activity_id: String) -> void:
-	_detail_panel.open_for(activity_id, PlayerState.location_id, not Operations.can_start())
+	if activity_id == "mining":
+		_mining_panel.open_for(PlayerState.location_id, not Operations.can_start("mining"))
+	else:
+		_detail_panel.open_for(activity_id, PlayerState.location_id, not Operations.can_start(activity_id))
 
 
 func _build_active_row(activity_id: String, op: ActiveOperation) -> Control:
@@ -456,7 +516,7 @@ func _build_active_row(activity_id: String, op: ActiveOperation) -> Control:
 	var update_remaining := func(value: float) -> void:
 		if not is_instance_valid(remaining_label):
 			return
-		var remaining_seconds := int(def.flavor_duration_seconds * (1.0 - value))
+		var remaining_seconds := int(op.flavor_duration_seconds * (1.0 - value))
 		remaining_label.text = "Remaining: %s" % ActivityDef.format_duration(remaining_seconds)
 	progress.value_changed.connect(update_remaining)
 	progress.value = op.progress()
@@ -464,6 +524,68 @@ func _build_active_row(activity_id: String, op: ActiveOperation) -> Control:
 
 	card.set_meta("progress", progress)
 	card.set_meta("op_id", op.op_id)
+	return card
+
+
+# Mining's own active-card shape — deliberately NOT _build_active_row's
+# progress-bar/countdown layout: mining is continuous (Operations.
+# _tick_mining), with no fixed end to count down to. Instead shows the
+# running session total and the deposit's live remaining%, both polled
+# directly in _process (see "mining_op_id"/"mining_yield_label"/
+# "mining_remaining_label" meta below), plus a STOP button — the one way
+# the player can end it besides departing or fully depleting the deposit
+# (see Operations.stop_mining/_finish_mining).
+func _build_mining_active_row(op: ActiveOperation) -> Control:
+	var card := PanelContainer.new()
+	var card_style := StyleBoxFlat.new()
+	card_style.bg_color = UITheme.button
+	card_style.border_color = UITheme.border
+	card_style.set_border_width_all(1)
+	card_style.set_corner_radius_all(4)
+	card_style.content_margin_left = 10
+	card_style.content_margin_right = 10
+	card_style.content_margin_top = 8
+	card_style.content_margin_bottom = 8
+	card.add_theme_stylebox_override("panel", card_style)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	card.add_child(box)
+
+	var status_label := Label.new()
+	status_label.text = "MINING - EXTRACTING..."
+	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	status_label.add_theme_font_size_override("font_size", 14)
+	status_label.add_theme_color_override("font_color", UITheme.accent)
+	box.add_child(status_label)
+
+	var yield_label := Label.new()
+	yield_label.text = "+%d %s" % [op.mining_session_yield, op.deposit_material]
+	yield_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	yield_label.add_theme_font_size_override("font_size", 13)
+	yield_label.add_theme_color_override("font_color", UITheme.text)
+	box.add_child(yield_label)
+
+	var remaining_label := Label.new()
+	var deposit := Deposits.deposit_for(op.location_id, op.deposit_material)
+	remaining_label.text = "Deposit Remaining: %d%%" % roundi((deposit.remaining_fraction if deposit != null else 0.0) * 100.0)
+	remaining_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	remaining_label.add_theme_font_size_override("font_size", 11)
+	remaining_label.add_theme_color_override("font_color", UITheme.dim)
+	box.add_child(remaining_label)
+
+	var stop_btn := UIButton.new()
+	stop_btn.text = "STOP"
+	stop_btn.solid = true
+	stop_btn.shimmer_enabled = false
+	stop_btn.custom_minimum_size = Vector2(0, 28)
+	stop_btn.add_theme_font_size_override("font_size", 12)
+	stop_btn.pressed.connect(func() -> void: Operations.stop_mining(op.op_id))
+	box.add_child(stop_btn)
+
+	card.set_meta("mining_op_id", op.op_id)
+	card.set_meta("mining_yield_label", yield_label)
+	card.set_meta("mining_remaining_label", remaining_label)
 	return card
 
 
@@ -527,9 +649,10 @@ func _build_completed_row(activity_id: String, op: ActiveOperation) -> Control:
 	# Knowledge gained shown right on the card now, not just inside the
 	# opt-in results view — with "✕" letting the player skip that entirely,
 	# this is the one thing they'd otherwise never see at all. has() guard:
-	# Mining's future result shape (Phase 5) won't carry knowledge_awarded
-	# at all, so this quietly omits itself for that case rather than
-	# assuming every op.result looks like a survey's.
+	# this row only ever exists for a Survey now — Mining never reaches
+	# COMPLETE at all (see Operations.operation_stopped) — so this quietly
+	# omits itself for anything without a knowledge_awarded key rather than
+	# assuming every op.result looks the same.
 	if op.result.has("knowledge_awarded"):
 		var knowledge_label := Label.new()
 		var category: String = op.result["knowledge_category"]
@@ -607,17 +730,30 @@ func _make_bar_style(col: Color, alpha: float) -> StyleBoxFlat:
 # This function's only job is to hand off the request and get out of the
 # way — no waiting, no local state.
 func _start_activity(activity_id: String) -> void:
-	if not Operations.can_start():
+	if not Operations.can_start(activity_id):
 		return  # BEGIN is disabled while busy (see ActivityDetailPanel.open_for) — defensive only
 	Operations.start_survey(activity_id, PlayerState.location_id)
 	_rebuild_rows()
 
 
+# Mirrors _start_activity — MiningOperationsPanel/DepositDetailPanel's own
+# BEGIN EXTRACTION already checked Operations.can_start("mining") before
+# enabling (see DepositDetailPanel.open_for's ship_busy), this is defensive
+# only.
+func _start_mining(body_id: String, material_name: String) -> void:
+	if not Operations.can_start("mining"):
+		return
+	Operations.start_mining(body_id, material_name)
+	_rebuild_rows()
+
+
 # Reads an already-resolved op.result (Operations._resolve populated it,
 # unconditionally, back when the operation actually finished) — never
-# re-runs Research.run_survey. Uses op.location_id, NOT PlayerState.
-# location_id — the player may have traveled elsewhere since this operation
-# was started, and results belong to wherever they actually happened.
+# re-runs Research.run_survey. Survey-kind only — Mining never reaches
+# COMPLETE, so this row/path never fires for it (see Operations.
+# operation_stopped). Uses op.location_id, NOT PlayerState.location_id —
+# the player may have traveled elsewhere since this operation was started,
+# and results belong to wherever they actually happened.
 func _show_results(op: ActiveOperation) -> void:
 	var result := op.result
 	if result.is_empty():

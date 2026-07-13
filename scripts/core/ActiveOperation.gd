@@ -19,18 +19,30 @@ var activity_id: String = ""
 # regardless of where the player physically is when it resolves.
 var location_id: String = ""
 
+# --- Survey-kind fields (resource_survey/geological_survey) — a single
+# fixed-duration resolve, unused by mining (see below). ---
 var duration: float = 0.0
 var elapsed: float = 0.0
 var status: Status = Status.RUNNING
 
-# Mining-only — empty/0 for survey-kind operations.
-var deposit_material: String = ""
-var expected_yield: int = 0
+# The in-fiction ("flavor") countdown shown to the player — see
+# ActivityDef.flavor_duration_seconds' own comment on the compression
+# principle.
+var flavor_duration_seconds: int = 0
 
 # Populated once, at resolution (Operations._resolve) — never recomputed
-# later. "See Results" (Phase 2) reads this back rather than re-running
-# whatever produced it, so viewing results twice can never double-award.
+# later. "See Results" reads this back rather than re-running whatever
+# produced it, so viewing results twice can never double-award.
 var result: Dictionary = {}
+
+# --- Mining-kind fields — continuous, no fixed duration/elapsed/result at
+# all (Operations._tick_mining ticks this every frame while RUNNING; there
+# is no COMPLETE state, it just runs until stopped/departed/depleted — see
+# Operations.stop_mining/_finish_mining). Empty/0 for survey-kind
+# operations. ---
+var deposit_material: String = ""
+var mining_yield_accumulator: float = 0.0  # fractional progress toward the next whole committed unit
+var mining_session_yield: int = 0          # whole units actually committed to Deposits this session — what the UI displays
 
 
 func progress() -> float:

@@ -167,6 +167,7 @@ func _on_new_game() -> void:
 	Discoveries.reset_for_new_game()
 	Research.reset_for_new_game()
 	Operations.reset_for_new_game()
+	Deposits.reset_for_new_game()
 	HUD.reset_for_new_game()
 	get_tree().change_scene_to_file("res://scenes/boot_sequence.tscn")
 
