@@ -1043,7 +1043,7 @@ func _build_secondaries(entry: KnownBodies.Entry) -> void:
 func _build_transit() -> void:
 	_in_transit = true
 	_arrival_stop_played = false
-	_activities_panel.hide_panel()
+	_activities_panel.show_for_travel()
 	# Just a location-ish readout, same role _view_label always plays — NOT
 	# a status message anymore (see ConsolePanel's always-on ship-status
 	# strip, TravelCalc.ship_status, for "Orienting to Target"/"Acceleration

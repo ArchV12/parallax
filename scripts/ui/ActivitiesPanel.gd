@@ -16,13 +16,20 @@ extends Control
 # see refresh() — since "what can I do here" is the natural first thing to
 # want to see at a new destination, not something to go looking for.
 #
-# Gateway/detail/active-operations flow: an AVAILABLE row (the whole row is
-# the tap target, not a separate VIEW button) opens ActivityDetailPanel
-# (Target/Instrument/Status/Estimated Duration/Potential Discoveries + BEGIN
-# SURVEY); starting one moves it into its own ACTIVE OPERATIONS row with a
-# live progress bar here, then back to AVAILABLE (with a result) once it
-# finishes. Only one operation at a time for now — _running_activity_id —
-# multiple concurrent is future scope.
+# Gateway/detail/active-operations/completed flow: an AVAILABLE row (the
+# whole row is the tap target, not a separate VIEW button) opens
+# ActivityDetailPanel (Target/Instrument/Status/Estimated Duration/Potential
+# Discoveries + BEGIN SURVEY), which starts the operation via the Operations
+# autoload — see that class for why operation TIMING/RESOLUTION lives there
+# now instead of a Tween/coroutine on this Control: it used to be silently
+# abandoned the instant Cockpit's scene tree was freed (GO-ing anywhere, or
+# even just switching to System View). This panel is now a pure poller/
+# renderer over Operations, the same relationship ConsolePanel already has
+# to PlayerState.travel_progress() — it never times or resolves anything
+# itself. A running operation shows in ACTIVE OPERATIONS with a live
+# progress bar; once Operations resolves it, it moves to COMPLETED (See
+# Results / ✕) — deliberately NOT an automatic popup, viewing results is the
+# player's own choice, on their own schedule (see _on_see_results_pressed).
 #
 # Availability isn't gated per-location yet (see the roadmap's Phase 2 scope
 # note) — the same list shows at every destination for now; only which
@@ -34,12 +41,12 @@ extends Control
 # show_*_report entry points, which display the Knowledge-awarded line
 # themselves (category/knowledge_awarded, carried here). Not fired at all
 # for activities/bodies without one — _result_label's flat "+N Knowledge"
-# text is the fallback ONLY for that case now (see _start_activity); showing
+# text is the fallback ONLY for that case now (see _show_results); showing
 # it AND a popup at the same time was redundant.
 signal geological_report_ready(location_id: String, data: GeologicalSurveyData, category: String, knowledge_awarded: int)
 signal resource_report_ready(location_id: String, data: ResourceSurveyData, category: String, knowledge_awarded: int)
 
-const PANEL_WIDTH := 300.0
+const PANEL_WIDTH := 340.0  # roomy enough for "RESOURCE SURVEY RESULTS"-length titles without wrapping
 const TAB_WIDTH := 30.0
 const TAB_HEIGHT := 64.0  # a grab handle, not the full drawer height
 const TOP_MARGIN := 92
@@ -52,12 +59,13 @@ var _tab: Button
 var _panel: UIPanel
 var _active_header: Label
 var _active_box: VBoxContainer
+var _completed_header: Label
+var _completed_box: VBoxContainer
 var _available_box: VBoxContainer
 var _result_label: Label
 var _detail_panel: ActivityDetailPanel
 var _expanded := false
-
-var _running_activity_id: String = ""
+var _traveling := false  # see show_for_travel/refresh — suppresses AVAILABLE while in transit
 
 
 func _ready() -> void:
@@ -82,15 +90,37 @@ func _ready() -> void:
 	_detail_panel.begin_requested.connect(_start_activity)
 	add_child(_detail_panel)
 
+	# Operations is the single source of truth for what's running/complete —
+	# any of these can fire from ANYTHING that touches it (this panel's own
+	# BEGIN press, a future different UI, even a debug tool), so the rebuild
+	# has to be driven by the signal, not just called inline after our own
+	# actions.
+	Operations.operation_started.connect(func(_op_id: String) -> void: _rebuild_rows())
+	Operations.operation_completed.connect(func(_op_id: String) -> void: _rebuild_rows())
+	Operations.operation_dismissed.connect(func(_op_id: String) -> void: _rebuild_rows())
+
 	# A milestone can be granted by ANYTHING that calls Research.add_knowledge
-	# — not just this panel's own survey flow (e.g. the F2 Cheat Menu's
-	# Science Cheat) — so an AVAILABLE row's instrument subtitle stays in
-	# sync regardless of what triggered it. Deliberately only touches the
-	# AVAILABLE section, never the active one — see _rebuild_available_rows'
-	# own comment for why that matters.
-	Research.milestone_reached.connect(func(_tech: TechnologyDef) -> void: _rebuild_available_rows())
+	# — not just a resolved survey (e.g. the F2 Cheat Menu's Science Cheat) —
+	# so an AVAILABLE row's instrument subtitle stays in sync regardless of
+	# what triggered it.
+	Research.milestone_reached.connect(func(_tech: TechnologyDef) -> void: _rebuild_rows())
 
 	_set_expanded(false, false)  # collapsed initial offsets, no animation — refresh() is what actually reveals this
+
+
+# Only ever updates progress bar VALUES for whatever's currently shown in
+# ACTIVE OPERATIONS — full row rebuilds happen exclusively in response to
+# Operations' own signals above, never every frame. At most one row here in
+# practice (Operations.can_start() only allows one RUNNING operation), but
+# iterates generically rather than assuming that, since Operations' own data
+# shape is deliberately ready for more later.
+func _process(_delta: float) -> void:
+	for row in _active_box.get_children():
+		if not row.has_meta("op_id"):
+			continue
+		var progress: ProgressBar = row.get_meta("progress")
+		if is_instance_valid(progress):
+			progress.value = Operations.progress(row.get_meta("op_id"))
 
 
 # A small grab handle vertically centered on the drawer's left edge — same
@@ -106,7 +136,7 @@ func _build_tab() -> void:
 	_tab.offset_top = -TAB_HEIGHT * 0.5
 	_tab.offset_bottom = TAB_HEIGHT * 0.5
 	_tab.text = "◀"
-	_tab.tooltip_text = "Activities"
+	_tab.tooltip_text = "Operations"
 	UITheme.style_button(_tab, UITheme.button, UITheme.button_hov, UITheme.border)
 	_tab.pressed.connect(func() -> void:
 		AudioManager.ui_confirm("menu_slide")  # the drawer's own slide cue, not the generic click — a raw Button, not UIButton/ConsolePadButton, so this has to do it itself
@@ -129,7 +159,7 @@ func _build_panel() -> void:
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 12)
 	_panel.add_child(vbox)
-	vbox.add_child(UIPanel.build_title_header("Activities"))
+	vbox.add_child(UIPanel.build_title_header("Operations"))
 
 	_active_header = _make_section_header("ACTIVE OPERATIONS")
 	_active_header.visible = false
@@ -138,7 +168,14 @@ func _build_panel() -> void:
 	_active_box.add_theme_constant_override("separation", 12)
 	vbox.add_child(_active_box)
 
-	vbox.add_child(_make_section_header("AVAILABLE ACTIVITIES"))
+	_completed_header = _make_section_header("COMPLETED")
+	_completed_header.visible = false
+	vbox.add_child(_completed_header)
+	_completed_box = VBoxContainer.new()
+	_completed_box.add_theme_constant_override("separation", 12)
+	vbox.add_child(_completed_box)
+
+	vbox.add_child(_make_section_header("AVAILABLE OPERATIONS"))
 
 	# Scrollable — same reasoning as LocationsPanel's own rows container:
 	# this list only grows as more Activities get built, and a fixed-height
@@ -199,60 +236,90 @@ func _set_expanded(expanded: bool, animate: bool = true) -> void:
 	tw.tween_property(_drawer, "offset_right", target_right, SLIDE_DURATION)
 
 
-# Rebuilds the AVAILABLE list from Research's current state, reveals the
-# drawer, and resets it to fully expanded — every fresh arrival defaults
-# open regardless of whatever collapsed/expanded state a PREVIOUS visit left
-# it in (collapse-then-reopen gives the same reveal every single time, not
-# just whichever state happened to carry over). Call this on every arrival
-# (_build_arrival). Never touches the active section — a fresh arrival
-# always starts with nothing running (Cockpit rebuilds this whole panel from
-# scratch every scene load).
+# Rebuilds the drawer and reveals it — every fresh arrival defaults OPEN
+# regardless of whatever collapsed/expanded state a PREVIOUS visit left it
+# in, via the collapse-then-reopen slide below. But if the player had
+# already pulled it open themselves before arriving (e.g. checking on a
+# background operation mid-flight via show_for_travel()), it's already
+# sitting exactly where it should be — forcing the same snap-closed/
+# slide-open sequence in that case just replayed the whole reveal animation
+# for no reason, reading as the panel spuriously "reopening" out from under
+# the player. Content still updates either way; only the animation is
+# conditional.
 func refresh() -> void:
+	_traveling = false
 	_drawer.visible = true
-	_rebuild_available_rows()
+	_rebuild_rows()
+	if _expanded:
+		return
 	_set_expanded(false, false)
 	_set_expanded(true)
 
 
-# Rebuilds ONLY the AVAILABLE section — deliberately never touches
-# _active_box. This is what makes it safe to call from the milestone
-# subscription above at any time, including mid-operation: an in-flight
-# tween is still driving the (untouched, still-valid) active row's progress
-# bar, so there's no freed-object risk the way rebuilding it would create
-# (see _start_activity's own comment for that lesson). Shows a placeholder
-# row rather than hiding anything if nothing's available — the drawer and
-# its tab stay reachable regardless, same as LocationsPanel's own empty state.
-func _rebuild_available_rows() -> void:
+# Reachable-but-collapsed for the duration of a trip — unlike refresh()
+# (arrival), this deliberately does NOT force the drawer open: there's
+# nothing new to reveal, just the option to check on a background operation
+# while flying. AVAILABLE stays empty the whole time (see _rebuild_rows) —
+# there's no target body to run anything against mid-flight — but an
+# operation started before departure keeps ticking/resolving via Operations
+# regardless of where the player currently is, so ACTIVE/COMPLETED still
+# need to be reachable here too. Call this from Cockpit's transit build.
+func show_for_travel() -> void:
+	_traveling = true
+	_drawer.visible = true
+	_rebuild_rows()
+	_set_expanded(false, false)
+
+
+# Rebuilds all three sections from Research/Operations' current state — safe
+# to call anytime, including mid-operation: Operations itself owns the
+# actual timing (this just re-reads it), so there's no freed-object risk the
+# way an earlier Tween-based version had to guard against. Shows a
+# placeholder row rather than hiding anything if AVAILABLE is empty — the
+# drawer and its tab stay reachable regardless, same as LocationsPanel's own
+# empty state.
+func _rebuild_rows() -> void:
+	for child in _active_box.get_children():
+		child.queue_free()
+	for child in _completed_box.get_children():
+		child.queue_free()
 	for child in _available_box.get_children():
 		child.queue_free()
 
-	var ids := Research.available_activities()
-	var shown := 0
-	for id: String in ids:
-		if id == _running_activity_id:
-			continue
-		_available_box.add_child(_build_available_row(id))
-		shown += 1
+	var any_active := false
+	var any_completed := false
+	var shown_available := 0
 
-	if shown == 0:
+	for id: String in Research.available_activities():
+		var op := Operations.operation_for_activity(id)
+		if op == null:
+			# No target body to run anything against mid-flight — an
+			# operation begun before departure still shows below via the
+			# RUNNING/else branches, this only suppresses starting a NEW one.
+			if not _traveling:
+				_available_box.add_child(_build_available_row(id))
+				shown_available += 1
+		elif op.status == ActiveOperation.Status.RUNNING:
+			_active_box.add_child(_build_active_row(id, op))
+			any_active = true
+		else:
+			_completed_box.add_child(_build_completed_row(id, op))
+			any_completed = true
+
+	_active_header.visible = any_active
+	_completed_header.visible = any_completed
+	if shown_available == 0:
 		_add_empty_row()
 
 
 func _add_empty_row() -> void:
 	var lbl := Label.new()
-	lbl.text = "Nothing available here yet."
+	lbl.text = "Unavailable during transit." if _traveling else "Nothing available here yet."
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD
 	lbl.add_theme_font_size_override("font_size", 12)
 	lbl.add_theme_color_override("font_color", UITheme.dim)
 	_available_box.add_child(lbl)
-
-
-# Instant, unanimated hide for departure — matches the rest of Cockpit's
-# "moon hidden for the duration of the trip" gameplay-state hides (see
-# Cockpit._hidden_from_body), not the drawer's own interactive slide.
-func hide_panel() -> void:
-	_drawer.visible = false
 
 
 # The whole row is the tap target (no separate VIEW button) — instrument is
@@ -321,12 +388,32 @@ func _build_available_row(activity_id: String) -> Control:
 
 
 func _on_view_pressed(activity_id: String) -> void:
-	_detail_panel.open_for(activity_id, PlayerState.location_id, _running_activity_id != "")
+	_detail_panel.open_for(activity_id, PlayerState.location_id, not Operations.can_start())
 
 
-func _build_active_row(activity_id: String, def: ActivityDef, instrument: InstrumentDef) -> VBoxContainer:
+func _build_active_row(activity_id: String, op: ActiveOperation) -> Control:
+	var def := Research.activity_def(activity_id)
+	var instrument := Research.current_instrument(activity_id)
+
+	# Same bordered card framing as the AVAILABLE/COMPLETED rows (see
+	# _build_completed_row) — this row used to be bare loose text, the one
+	# place left with no card, which read as visually inconsistent next to
+	# the bordered rows above and below it.
+	var card := PanelContainer.new()
+	var card_style := StyleBoxFlat.new()
+	card_style.bg_color = UITheme.button
+	card_style.border_color = UITheme.border
+	card_style.set_border_width_all(1)
+	card_style.set_corner_radius_all(4)
+	card_style.content_margin_left = 10
+	card_style.content_margin_right = 10
+	card_style.content_margin_top = 8
+	card_style.content_margin_bottom = 8
+	card.add_theme_stylebox_override("panel", card_style)
+
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 4)
+	card.add_child(box)
 
 	var name_label := Label.new()
 	var display_name := def.display_name.to_upper()
@@ -353,27 +440,157 @@ func _build_active_row(activity_id: String, def: ActivityDef, instrument: Instru
 	box.add_child(progress)
 
 	var remaining_label := Label.new()
-	remaining_label.text = "Remaining: %s" % ActivityDef.format_duration(def.flavor_duration_seconds)
 	remaining_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	remaining_label.add_theme_font_size_override("font_size", 11)
 	remaining_label.add_theme_color_override("font_color", UITheme.dim)
 	box.add_child(remaining_label)
 
 	# Live "flavor time remaining" countdown — the FULL flavor_duration_seconds
-	# ticking down (e.g. 02:15 -> 00:00) over the SHORT real animation window
-	# (BodyInfoPanel.SCAN_DURATION), same compression principle travel
-	# already uses: the displayed number is in-fiction, the real wait stays
-	# short. is_instance_valid guards are extra insurance, not load-bearing —
-	# progress/remaining_label are always freed together (same `box`,
-	# _finish_activity's single queue_free) so one can't outlive the other.
-	progress.value_changed.connect(func(value: float) -> void:
+	# ticking down (e.g. 02:15 -> 00:00) over Operations' own real elapsed
+	# time, same compression principle travel already uses: the displayed
+	# number is in-fiction, the real wait (BodyInfoPanel.SCAN_DURATION) stays
+	# short. Driven by _process setting progress.value each frame (see that
+	# function) — value_changed fires the same way regardless of whether the
+	# value came from a Tween or a direct assignment, so this wiring is
+	# unchanged from when a Tween drove it.
+	var update_remaining := func(value: float) -> void:
 		if not is_instance_valid(remaining_label):
 			return
 		var remaining_seconds := int(def.flavor_duration_seconds * (1.0 - value))
-		remaining_label.text = "Remaining: %s" % ActivityDef.format_duration(remaining_seconds))
+		remaining_label.text = "Remaining: %s" % ActivityDef.format_duration(remaining_seconds)
+	progress.value_changed.connect(update_remaining)
+	progress.value = op.progress()
+	update_remaining.call(op.progress())  # seed immediately — value_changed doesn't fire if op.progress() already equals the ProgressBar's default 0.0
 
-	box.set_meta("progress", progress)
-	return box
+	card.set_meta("progress", progress)
+	card.set_meta("op_id", op.op_id)
+	return card
+
+
+# COMPLETE-but-undismissed — the whole tile is now the tap target for
+# results (same "whole row taps" idiom AVAILABLE rows use — see
+# _build_available_row's wrapper/btn/content_margin structure, mirrored
+# here), with a small "✕" in the corner for dismissing without ever
+# looking. Shows WHICH location this result belongs to (op.location_id):
+# with results now able to pile up while the player is elsewhere (e.g.
+# mid-flight — see show_for_travel), there was no longer just one obvious
+# candidate, and nothing else on the card distinguished one from another.
+# Neither path can double-award — the reward already happened,
+# unconditionally, back when Operations resolved this (see
+# Operations._resolve) — this row is purely about whether the player
+# bothers to LOOK.
+func _build_completed_row(activity_id: String, op: ActiveOperation) -> Control:
+	var def := Research.activity_def(activity_id)
+
+	var wrapper := MarginContainer.new()
+
+	var btn := Button.new()
+	UITheme.style_button(btn, UITheme.button, UITheme.button_hov, UITheme.border, 4, false)
+	btn.pressed.connect(_on_see_results_pressed.bind(op.op_id))
+	btn.pressed.connect(func() -> void: AudioManager.ui_confirm())  # a raw Button, not UIButton/ConsolePadButton — those wire this on their own, this one has to do it itself
+	wrapper.add_child(btn)
+
+	var content_margin := MarginContainer.new()
+	content_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	content_margin.add_theme_constant_override("margin_top", 8)
+	content_margin.add_theme_constant_override("margin_bottom", 8)
+	content_margin.add_theme_constant_override("margin_left", 10)
+	content_margin.add_theme_constant_override("margin_right", 10)
+	wrapper.add_child(content_margin)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	content_margin.add_child(box)
+
+	# "RESULTS" suffix replaces the old separate "COMPLETED" line (the
+	# section header above already says that) — this instead tells the
+	# player what tapping the tile actually shows them.
+	var name_label := Label.new()
+	var display_name := def.display_name.to_upper() if def != null else activity_id
+	name_label.text = "%s %s RESULTS" % [def.icon, display_name] if def != null and def.icon != "" else "%s RESULTS" % display_name
+	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	name_label.add_theme_font_size_override("font_size", 14)
+	name_label.add_theme_color_override("font_color", UITheme.accent)
+	name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(name_label)
+
+	var location_label := Label.new()
+	location_label.text = op.location_id
+	location_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	location_label.add_theme_font_size_override("font_size", 11)
+	location_label.add_theme_color_override("font_color", UITheme.dim)
+	location_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(location_label)
+
+	# Knowledge gained shown right on the card now, not just inside the
+	# opt-in results view — with "✕" letting the player skip that entirely,
+	# this is the one thing they'd otherwise never see at all. has() guard:
+	# Mining's future result shape (Phase 5) won't carry knowledge_awarded
+	# at all, so this quietly omits itself for that case rather than
+	# assuming every op.result looks like a survey's.
+	if op.result.has("knowledge_awarded"):
+		var knowledge_label := Label.new()
+		var category: String = op.result["knowledge_category"]
+		knowledge_label.text = "+%d %s Knowledge" % [op.result["knowledge_awarded"], category.capitalize()]
+		knowledge_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		knowledge_label.add_theme_font_size_override("font_size", 12)
+		knowledge_label.add_theme_color_override("font_color", UITheme.accent)
+		knowledge_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		box.add_child(knowledge_label)
+
+	# "✕" overlaid in the corner on its own layer, NOT arranged into `box`'s
+	# vertical flow — an earlier version gave it a whole HBoxContainer row of
+	# its own, wasting a full row's height on a 20px glyph. `dismiss_layer`
+	# gets forced to the same full-rect as `btn`/`content_margin` by `wrapper`
+	# (a MarginContainer/Container), then — being a plain Control rather than
+	# a Container itself — lets dismiss_btn's own anchors/offsets place it
+	# directly in the top-right corner without a Container fighting it.
+	# Added last so it draws (and hit-tests) on top of `btn` in that corner —
+	# an IGNORE ancestor only opts ITSELF out of hit-testing, it doesn't
+	# disable a descendant Control's own (default STOP) filter, so this
+	# still catches its own click before it ever reaches `btn` below.
+	var dismiss_layer := Control.new()
+	dismiss_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrapper.add_child(dismiss_layer)
+
+	# Deliberately NOT a UIButton — its corner-bracket frame decoration
+	# (see UIButton._draw_bracket_frame) reads as a boxy, over-decorated
+	# icon at this tiny a size instead of a plain close glyph. A bare flat
+	# Button with every stylebox state forced empty gives just the "✕"
+	# itself, with only its font color shifting on hover for affordance.
+	var dismiss_btn := Button.new()
+	dismiss_btn.text = "✕"
+	dismiss_btn.flat = true
+	dismiss_btn.anchor_left = 1.0
+	dismiss_btn.anchor_right = 1.0
+	dismiss_btn.anchor_top = 0.0
+	dismiss_btn.anchor_bottom = 0.0
+	dismiss_btn.offset_left = -24.0
+	dismiss_btn.offset_right = -4.0
+	dismiss_btn.offset_top = 2.0
+	dismiss_btn.offset_bottom = 22.0
+	for state in ["normal", "hover", "pressed", "focus", "disabled"]:
+		dismiss_btn.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+	dismiss_btn.add_theme_font_size_override("font_size", 13)
+	dismiss_btn.add_theme_color_override("font_color", UITheme.dim)
+	dismiss_btn.add_theme_color_override("font_hover_color", UITheme.text)
+	dismiss_btn.add_theme_color_override("font_pressed_color", UITheme.accent)
+	dismiss_btn.pressed.connect(func() -> void:
+		AudioManager.ui_confirm()  # a raw Button, not UIButton — has to do this itself
+		Operations.dismiss(op.op_id))
+	dismiss_layer.add_child(dismiss_btn)
+
+	return wrapper
+
+
+func _on_see_results_pressed(op_id: String) -> void:
+	var op := Operations.get_operation(op_id)
+	if op == null:
+		return
+	_show_results(op)
+	Operations.dismiss(op_id)
 
 
 func _make_bar_style(col: Color, alpha: float) -> StyleBoxFlat:
@@ -385,73 +602,39 @@ func _make_bar_style(col: Color, alpha: float) -> StyleBoxFlat:
 	return sb
 
 
-# Player selects activity -> confirms in ActivityDetailPanel -> ship begins
-# operation (moves from AVAILABLE to its own ACTIVE OPERATIONS row) ->
-# progress bar -> results generated/Knowledge awarded/possible discoveries
-# (_finish_activity, once the bar fills). Deliberately all the way from here
-# through _finish_activity without ever splitting the running row's Node
-# references across a typed-parameter function-call boundary — a row freed
-# mid-animation (see _rebuild_available_rows' own comment on why THAT stays
-# safe) taught that GDScript hard-errors passing an already-freed Object
-# through ANY typed parameter, even the base Object type, before a callee's
-# body (is_instance_valid included) ever runs. Keeping it one function with
-# only local variables sidesteps that entirely.
+# Player selects activity -> confirms in ActivityDetailPanel -> Operations
+# starts and owns the operation from here on (see class comment for why).
+# This function's only job is to hand off the request and get out of the
+# way — no waiting, no local state.
 func _start_activity(activity_id: String) -> void:
-	if _running_activity_id != "":
+	if not Operations.can_start():
 		return  # BEGIN is disabled while busy (see ActivityDetailPanel.open_for) — defensive only
-	var def := Research.activity_def(activity_id)
-	var instrument := Research.current_instrument(activity_id)
-	if def == null or instrument == null:
-		return
+	Operations.start_survey(activity_id, PlayerState.location_id)
+	_rebuild_rows()
 
-	_running_activity_id = activity_id
-	_result_label.visible = false
-	_rebuild_available_rows()  # removes this activity from AVAILABLE
 
-	_active_header.visible = true
-	var row := _build_active_row(activity_id, def, instrument)
-	_active_box.add_child(row)
-	var progress: ProgressBar = row.get_meta("progress")
-
-	var tw := create_tween()
-	tw.tween_property(progress, "value", 1.0, BodyInfoPanel.SCAN_DURATION)
-	await tw.finished
-
-	if is_instance_valid(row):
-		row.queue_free()
-	_running_activity_id = ""
-	# queue_free is deferred (the row isn't actually gone from
-	# _active_box's children until later this frame) — but only one
-	# operation ever runs at a time, so it's always safe to say the active
-	# section is empty again right here, without re-checking child count.
-	_active_header.visible = false
-
-	var result := Research.run_survey(activity_id)
+# Reads an already-resolved op.result (Operations._resolve populated it,
+# unconditionally, back when the operation actually finished) — never
+# re-runs Research.run_survey. Uses op.location_id, NOT PlayerState.
+# location_id — the player may have traveled elsewhere since this operation
+# was started, and results belong to wherever they actually happened.
+func _show_results(op: ActiveOperation) -> void:
+	var result := op.result
 	if result.is_empty():
-		_rebuild_available_rows()
 		return
 
 	var result_instrument: InstrumentDef = result["instrument"]
 	var capability: String = result_instrument.capabilities[0] if result_instrument.capabilities.size() > 0 else ""
 	var category: String = result["knowledge_category"]
 	var awarded: int = result["knowledge_awarded"]
-	# Research.run_survey's internal add_knowledge call already fired
-	# milestone_reached (synchronously, before this runs) for anything
-	# granted — _rebuild_available_rows below picks up any tier change.
 
-	# A rich report (when one exists for this body) shows the Knowledge
-	# line itself — see SurveyReportPanel.show_*_report. _result_label is
-	# ONLY the fallback for bodies/activities with no report, so Knowledge
-	# never shows in two places for the same survey.
-	var geo_data: GeologicalSurveyData = Research.geological_data_for(PlayerState.location_id) if activity_id == "geological_survey" else null
-	var res_data: ResourceSurveyData = Research.resource_data_for(PlayerState.location_id) if activity_id == "resource_survey" else null
+	var geo_data: GeologicalSurveyData = Research.geological_data_for(op.location_id) if op.activity_id == "geological_survey" else null
+	var res_data: ResourceSurveyData = Research.resource_data_for(op.location_id) if op.activity_id == "resource_survey" else null
 
 	if geo_data != null:
-		geological_report_ready.emit(PlayerState.location_id, geo_data, category, awarded)
+		geological_report_ready.emit(op.location_id, geo_data, category, awarded)
 	elif res_data != null:
-		resource_report_ready.emit(PlayerState.location_id, res_data, category, awarded)
+		resource_report_ready.emit(op.location_id, res_data, category, awarded)
 	else:
 		_result_label.text = "%s\n+%d %s Knowledge" % [capability, awarded, category.capitalize()]
 		_result_label.visible = true
-
-	_rebuild_available_rows()

@@ -37,6 +37,7 @@ var _cheat_engine_label: Label
 var _pause_menu: PauseMenu
 var _research_panel: ResearchPanel
 var _cheat_menu: CheatMenu
+var _operation_toast: OperationToast
 
 
 func _ready() -> void:
@@ -131,6 +132,37 @@ func _build_hud() -> void:
 	_console.system_pressed.connect(open_system_menu)
 	_console.research_pressed.connect(open_research_panel)
 	_hud_layer.add_child(_console)
+
+	# Subscribed directly here, not in a per-scene script like Cockpit.gd's
+	# other Research/Operations wiring — deliberately the first of its kind.
+	# Every other subscription to these signals lives in Cockpit, which is
+	# freed on every scene change; HUD is the one autoload CanvasLayer
+	# guaranteed to exist regardless of which view is active, same reasoning
+	# _process above already uses polling PlayerState.engine_tier_override
+	# regardless of scene. Operations completing or a milestone firing while
+	# the player isn't in Cockpit (now possible now that operations survive
+	# scene changes — see Operations.gd) would otherwise be silently missed,
+	# the exact bug this whole notification exists to avoid.
+	_operation_toast = OperationToast.new()
+	_hud_layer.add_child(_operation_toast)
+	Operations.operation_completed.connect(_on_operation_completed)
+	Research.milestone_reached.connect(_on_milestone_reached)
+
+
+# Text is driven by the ActivityDef's own display_name rather than a
+# hardcoded per-activity_id string — so Mining (Phase 5) gets a correct
+# toast for free, no changes needed here when it's added.
+func _on_operation_completed(op_id: String) -> void:
+	var op := Operations.get_operation(op_id)
+	if op == null:
+		return
+	var def := Research.activity_def(op.activity_id)
+	var name := def.display_name.to_upper() if def != null else op.activity_id.to_upper()
+	_operation_toast.show_toast("%s COMPLETE — %s" % [name, op.location_id])
+
+
+func _on_milestone_reached(tech: TechnologyDef) -> void:
+	_operation_toast.show_toast("MILESTONE: %s" % tech.display_name)
 
 
 func _build_pause() -> void:
