@@ -36,9 +36,33 @@ var locked_distance_km: float = -1.0
 # erroring, and the next System View load re-registers a fresh one.
 var _snapshot_provider: Callable = Callable()
 
+# Live (recomputed every frame, never frozen) distance to whatever's
+# currently FOCUSED in System View — locked or not. Separate from
+# locked_distance_km on purpose: that one is a deliberate one-time snapshot
+# (the "lock it right as it swings by" strategy), while this is the running
+# number that lets you actually watch for the good moment to lock in the
+# first place. -1.0 = nothing to preview (nothing focused, or the current
+# view has no live orbital data — see SystemView._update_callout/_exit_tree,
+# the only writer). Plain fields rather than a Callable like
+# _snapshot_provider: this is pushed every frame instead of pulled on
+# demand, so there's no freed-instance staleness risk to guard against the
+# same way — SystemView explicitly clears it on _exit_tree instead.
+var preview_id: String = ""
+var preview_distance_km: float = -1.0
+
 
 func set_snapshot_provider(provider: Callable) -> void:
 	_snapshot_provider = provider
+
+
+func set_preview(id: String, distance_km: float) -> void:
+	preview_id = id
+	preview_distance_km = distance_km
+
+
+func clear_preview() -> void:
+	preview_id = ""
+	preview_distance_km = -1.0
 
 
 func is_locked(id: String) -> bool:

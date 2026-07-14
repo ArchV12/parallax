@@ -196,6 +196,24 @@ static func estimate(from_id: String, to_id: String, accel_km_s2: float = ENGINE
 	# currently sits, only how far out).
 	if not local and to_id == Destination.locked_id and Destination.locked_distance_km >= 0.0:
 		distance_km = Destination.locked_distance_km
+	return _finish_estimate(local, distance_km, accel_km_s2, cruise_cap_km_s)
+
+
+# A body that's both focused AND locked needs to report two DIFFERENT
+# numbers at once depending on who's asking: the committed destination
+# readout (estimate() above) must keep showing the frozen locked_distance_km
+# it locked in, while the live preview readout (ConsolePanel, via this)
+# needs to keep tracking the body's real current position regardless of
+# whether it's also locked — that's the whole point of it existing (see
+# Destination.preview_id). Routing both through the SAME estimate() call
+# with an implicit global-state lookup can't satisfy both at once, so this
+# takes the distance explicitly instead of resolving it itself.
+static func estimate_for_distance(
+		distance_km: float, accel_km_s2: float = ENGINE_ACCEL_KM_S2, cruise_cap_km_s: float = 0.0) -> Dictionary:
+	return _finish_estimate(false, distance_km, accel_km_s2, cruise_cap_km_s)
+
+
+static func _finish_estimate(local: bool, distance_km: float, accel_km_s2: float, cruise_cap_km_s: float) -> Dictionary:
 	var profile := flight_profile(distance_km, accel_km_s2, cruise_cap_km_s)
 	var burn_duration: float = profile["burn_duration"]
 	var duration := maxf(DEPARTURE_HOLD_SECONDS + burn_duration + ARRIVAL_HOLD_SECONDS, MIN_DURATION_SECONDS)

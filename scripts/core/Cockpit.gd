@@ -125,6 +125,14 @@ const MOON_MIN_CLEARANCE := 6.0            # extra breathing room past the paren
 # keeps the orbit plane from being a flat, perfectly equatorial circle.
 const PLANE_INCLINATION_DEG := 6.0               # max vertical scatter for _seeded_direction — see its comment. Deliberately small and close to real solar-system inclinations (Mercury, the outlier, is ~7°) — the point is keeping every body close to ONE shared near-flat plane, not spreading them realistically.
 const ORBIT_RADIUS_MULT := 1.9                   # closer low orbit — see class comment
+# Asteroids get their OWN, much larger multiplier — irregular Cosmic Forge
+# geometry (elongation up to 0.45, irregularity up to 0.6 — see
+# AsteroidParams/CosmicForge's tightened ranges) means the actual surface
+# can bulge well past the body's own nominal display radius in places, and
+# ORBIT_RADIUS_MULT's already-close 1.9x left almost no margin over that —
+# reads as the camera nearly clipping through jagged terrain rather than a
+# comfortable low orbit. Worth tuning further by feel.
+const ASTEROID_ORBIT_RADIUS_MULT := 4.5
 const ORBIT_ANGULAR_SPEED := -TAU / 60.0         # one full lap every ~60s. Sign is deliberate, not
 # arbitrary — it must match the (also flipped, see flat_tangent in
 # _orbit_pose) nose direction the camera uses to glance at the body.
@@ -243,6 +251,12 @@ var _hidden_from_body: Node3D  # the departure body, hidden for the duration of 
 var _arrival_stop_played := false  # guards AudioManager.arrival_stop() against firing every frame once progress reaches 1.0 — see _process's _in_transit branch; reset per-trip in _build_transit
 
 var _primary_display_radius := 0.0
+# Set alongside _primary_display_radius (_build_arrival) via _orbit_mult_for
+# — ORBIT_RADIUS_MULT for everything except asteroids, which use their own
+# larger ASTEROID_ORBIT_RADIUS_MULT (see that constant's own comment).
+# _orbit_pose takes this as an explicit parameter rather than reaching for
+# it directly, to stay the pure function its own comment describes.
+var _primary_orbit_mult := ORBIT_RADIUS_MULT
 var _orbit_angle := randf_range(0.0, TAU)  # start partway around the loop, not always fresh at 0
 var _camera_base_forward := Vector3.FORWARD  # fixed reference direction the whole universe layout is seeded from — see _build_universe/_seeded_direction
 
@@ -426,7 +440,7 @@ func _process(delta: float) -> void:
 		return
 
 	if _settling:
-		_apply_lean(delta, _primary.position, _primary_display_radius)
+		_apply_lean(delta, _primary.position, _primary_display_radius, _primary_orbit_mult)
 		if _primary != null and not _primary_is_universe_body:
 			_primary.rotate_y(SPIN * delta)
 		for i in _secondaries.size():
@@ -846,6 +860,7 @@ func _build_arrival(location_id: String) -> void:
 		location_id = "Earth"
 
 	_primary_display_radius = _primary_radius_for(entry)
+	_primary_orbit_mult = _orbit_mult_for(entry)
 
 	if _universe_bodies.has(location_id):
 		_primary = _universe_bodies[location_id]
@@ -914,7 +929,7 @@ func _build_arrival(location_id: String) -> void:
 func _update_orbit_camera() -> void:
 	if _camera == null or _primary == null:
 		return
-	var pose := _orbit_pose(_orbit_angle, _primary.position, _primary_display_radius)
+	var pose := _orbit_pose(_orbit_angle, _primary.position, _primary_display_radius, _primary_orbit_mult)
 	# A/D roll (_roll_angle) — rotating the whole basis around its own view
 	# axis (basis.z, "backward") leaves the view direction untouched and
 	# just spins right/up around it, i.e. a pure camera roll layered on top
@@ -927,9 +942,11 @@ func _update_orbit_camera() -> void:
 # Pure function: the camera transform for a given point on the orbit around
 # the given anchor/radius, with no side effects — shared by
 # _update_orbit_camera (continuous per-frame orbiting) and _apply_lean
-# (blended orbiting, both pre- and post-arrival).
-func _orbit_pose(angle: float, anchor: Vector3, radius: float) -> Transform3D:
-	var orbit_radius := radius * ORBIT_RADIUS_MULT
+# (blended orbiting, both pre- and post-arrival). orbit_mult defaults to the
+# ordinary ORBIT_RADIUS_MULT; callers orbiting an asteroid pass
+# _primary_orbit_mult instead — see ASTEROID_ORBIT_RADIUS_MULT's own comment.
+func _orbit_pose(angle: float, anchor: Vector3, radius: float, orbit_mult: float = ORBIT_RADIUS_MULT) -> Transform3D:
+	var orbit_radius := radius * orbit_mult
 
 	# Position: standard tilted circle around the body.
 	var flat := Vector3(cos(angle), 0.0, sin(angle)) * orbit_radius
@@ -980,7 +997,7 @@ func _orbit_pose(angle: float, anchor: Vector3, radius: float) -> Transform3D:
 # one-time snapshot, since the ship is already stationary by then) toward
 # a live-recomputed orbit pose around whatever anchor/radius the caller
 # passes.
-func _apply_lean(delta: float, anchor: Vector3, radius: float) -> void:
+func _apply_lean(delta: float, anchor: Vector3, radius: float, orbit_mult: float = ORBIT_RADIUS_MULT) -> void:
 	_lean_elapsed += delta
 	var t := clampf(_lean_elapsed / ORBIT_SETTLE_DURATION, 0.0, 1.0)
 	# NEITHER smoothstep NOR a pure ease-out curve — both were tried and
@@ -1001,7 +1018,7 @@ func _apply_lean(delta: float, anchor: Vector3, radius: float) -> void:
 	var smooth := t * t * (3.0 - 2.0 * t)
 	var eased_t: float = lerp(t, smooth, 0.85)  # lerp() is generic (float/Vector2/Vector3/Color) so its return is Variant — := can't infer a concrete type from it
 	_orbit_angle += ORBIT_ANGULAR_SPEED * eased_t * delta
-	var target := _orbit_pose(_orbit_angle, anchor, radius)
+	var target := _orbit_pose(_orbit_angle, anchor, radius, orbit_mult)
 	var pos := _lean_from_pos.lerp(target.origin, eased_t)
 	var rot := Quaternion(_lean_from_basis).slerp(Quaternion(target.basis), eased_t)
 	_camera.transform = Transform3D(Basis(rot), pos)
@@ -1060,6 +1077,16 @@ func _primary_radius_for(entry: KnownBodies.Entry) -> float:
 			if entry.parent != "":  # a moon, not a planet — see MOON_MIN_RADIUS's own comment for why this needs its own curve
 				return clampf(MOON_MIN_RADIUS + MOON_RADIUS_SCALE * entry.radius_ratio, MOON_MIN_RADIUS, MOON_MAX_RADIUS)
 			return clampf(2.0 + 3.0 * sqrt(entry.radius_ratio), 1.5, 8.0)
+
+
+# See ASTEROID_ORBIT_RADIUS_MULT's own comment for why asteroids need a
+# bigger orbit-shell multiplier than everything else. Used everywhere a
+# body's camera-orbit distance is derived from its display radius —
+# _build_arrival (steady-state orbit + settle lean) and _build_transit
+# (the transit path's own start/end points, which must agree with where the
+# orbit camera ends up settling or arrival visibly pops).
+func _orbit_mult_for(entry: KnownBodies.Entry) -> float:
+	return ASTEROID_ORBIT_RADIUS_MULT if entry.body_type == "Asteroid" else ORBIT_RADIUS_MULT
 
 
 # Background dressing for the arrived-at body: orbiting a moon shows just
@@ -1208,10 +1235,10 @@ func _build_transit() -> void:
 		# Entry points just outside each body, on the side facing the other
 		# — not the bodies' own positions, which is what the camera
 		# actually orbits/settles around once arrived.
-		_transit_start_pos = from_pos - travel_dir_n * (from_radius * ORBIT_RADIUS_MULT)
+		_transit_start_pos = from_pos - travel_dir_n * (from_radius * _orbit_mult_for(from_entry))
 		_transit_target_anchor = end_pos
 		_transit_target_radius = end_radius
-		_transit_end_pos = end_pos - travel_dir_n * (end_radius * ORBIT_RADIUS_MULT)
+		_transit_end_pos = end_pos - travel_dir_n * (end_radius * _orbit_mult_for(entry))
 		_camera.position = _transit_start_pos
 
 		# Sun direction slews across the WHOLE trip (see _process's _in_transit

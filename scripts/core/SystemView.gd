@@ -169,6 +169,25 @@ const TYPE_CHARS_PER_SEC := 35.0
 const TYPE_MIN_TIME := 0.06
 const TYPE_CLICK_STRIDE := 2
 
+# "YOU ARE HERE" location marker — always on, independent of focus/selection
+# entirely (see _update_location_marker). A pulsing ring around the current-
+# location body when it's on screen; a triangular arrow clamped to the
+# viewport edge, pointing toward it, when it isn't — the free-fly camera can
+# point anywhere, so "just don't draw it" would leave a player exactly as
+# lost as before this existed whenever they aren't already looking the right
+# way. Deliberately a separate small overlay/draw path from the target-
+# designator callout above (_callout_*) rather than folded into it — this
+# tracks PlayerState.location_id, not whatever's focused/selected, and the
+# two can easily be different bodies at once.
+const YOU_ARE_HERE_RING_PAD := 10.0        # px beyond the body's own projected on-screen radius
+const YOU_ARE_HERE_MIN_RING_RADIUS := 14.0 # floor for a body too small/far to measure a meaningful pixel radius
+const YOU_ARE_HERE_PULSE_SPEED := 2.4      # rad/s
+const YOU_ARE_HERE_PULSE_AMOUNT := 0.12    # +/- fraction of ring radius
+const YOU_ARE_HERE_LABEL_GAP := 6.0
+const YOU_ARE_HERE_EDGE_MARGIN := 36.0     # keeps the off-screen arrow/label clear of the viewport edge
+const YOU_ARE_HERE_ARROW_LENGTH := 20.0
+const YOU_ARE_HERE_ARROW_HALF_WIDTH := 10.0
+
 enum CalloutStage { HIDDEN, WAITING_FOR_SWEEP, REVEALING_LINE, TYPING_NAME, DONE }
 
 var _bodies: Array[Node3D] = []
@@ -206,6 +225,14 @@ var _lock_button: LockButton
 var _callout_go_btn: UIButton
 var _locations_panel: LocationsPanel
 
+# --- "YOU ARE HERE" location marker (see its constants' own comment) ---
+var _location_marker_overlay: Control
+var _location_marker_label: Label
+var _location_marker_visible := false      # false only when there's no trackable orbit for the current location at all
+var _location_marker_on_screen := false
+var _location_marker_screen_pos := Vector2.ZERO  # on-screen: the body's own projected center; off-screen: the clamped edge point the arrow sits at
+var _location_marker_ring_radius := 0.0
+
 
 func _ready() -> void:
 	_build_environment()
@@ -213,6 +240,7 @@ func _ready() -> void:
 	_build_system()
 	_build_asteroids()
 	_build_callout()
+	_build_location_marker()
 	_build_body_panel()
 	_build_locations_panel()
 	AmbientManager.play_map_ambient()
@@ -225,6 +253,15 @@ func _ready() -> void:
 	# be a synchronous callback Destination itself calls, not a listener
 	# reacting to its own destination_changed signal.
 	Destination.set_snapshot_provider(_compute_snapshot_distance_km)
+
+
+# Destination.preview_id/preview_distance_km are plain fields (see their own
+# comment for why, unlike _snapshot_provider), not a Callable that naturally
+# goes invalid when this view is freed — leaving this scene with a body
+# still focused would otherwise leave ConsolePanel showing a frozen, wrong
+# live-distance readout forever after, since nothing would ever clear it.
+func _exit_tree() -> void:
+	Destination.clear_preview()
 
 
 func _process(delta: float) -> void:
@@ -346,6 +383,7 @@ func _process(delta: float) -> void:
 		_sweep_elapsed += delta
 
 	_update_callout()
+	_update_location_marker()
 
 
 # --- 3D scene ---
@@ -978,6 +1016,123 @@ func _build_callout() -> void:
 	_overlay_layer.add_child(_callout_go_btn)
 
 
+# --- "You are here" location marker ---
+# See its constants' own comment for why this is entirely separate from the
+# target-designator callout above.
+
+func _build_location_marker() -> void:
+	_location_marker_overlay = Control.new()
+	_location_marker_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_location_marker_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_location_marker_overlay.draw.connect(_draw_location_marker)
+	_overlay_layer.add_child(_location_marker_overlay)
+
+	_location_marker_label = Label.new()
+	_location_marker_label.text = "YOU ARE HERE"
+	_location_marker_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_location_marker_label.add_theme_font_size_override("font_size", 12)
+	_location_marker_label.add_theme_color_override("font_color", UITheme.accent)
+	_location_marker_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_location_marker_label.visible = false
+	_overlay_layer.add_child(_location_marker_label)
+
+
+# Recomputed every frame (camera moves, and the location body itself keeps
+# orbiting) — resolves PlayerState.location_id the same way the snapshot-
+# distance system already does (_current_location_orbit, moon-docked players
+# fall back to their parent planet's orbit, the only one actually tracked
+# here) and projects it to screen space.
+func _update_location_marker() -> void:
+	var orbit := _current_location_orbit()
+	if orbit.is_empty():
+		_location_marker_visible = false
+		_location_marker_label.visible = false
+		_location_marker_overlay.queue_redraw()
+		return
+	_location_marker_visible = true
+
+	var body: Node3D = orbit["body"]
+	var world_pos := body.position
+	var behind := _camera.is_position_behind(world_pos)
+	var viewport_size := _location_marker_overlay.size
+	var center := viewport_size * 0.5
+	var screen_pos := _camera.unproject_position(world_pos)
+	if behind:
+		# unproject_position mirrors a behind-camera point through the screen
+		# center rather than returning something usable directly — flip it
+		# back before treating it as a direction to point the edge arrow in.
+		screen_pos = center + (center - screen_pos)
+
+	var margin := YOU_ARE_HERE_EDGE_MARGIN
+	_location_marker_on_screen = (not behind
+			and screen_pos.x >= margin and screen_pos.x <= viewport_size.x - margin
+			and screen_pos.y >= margin and screen_pos.y <= viewport_size.y - margin)
+
+	if _location_marker_on_screen:
+		_location_marker_screen_pos = screen_pos
+		# Same "project a world-space offset, measure the pixel gap" trick
+		# used nowhere else in this file yet — the body's own display radius
+		# (orbit["body_radius"]) alone doesn't say how BIG that reads on
+		# screen at the camera's current zoom, so an actual second
+		# projection is the only way to get a screen-space ring size that
+		# tracks zoom correctly.
+		var body_radius: float = orbit.get("body_radius", 0.3)
+		var edge_world := world_pos + _camera.global_transform.basis.x * body_radius
+		var px_radius := screen_pos.distance_to(_camera.unproject_position(edge_world))
+		_location_marker_ring_radius = maxf(px_radius + YOU_ARE_HERE_RING_PAD, YOU_ARE_HERE_MIN_RING_RADIUS)
+		_location_marker_label.position = Vector2(
+				screen_pos.x - _location_marker_label.size.x * 0.5,
+				screen_pos.y + _location_marker_ring_radius + YOU_ARE_HERE_LABEL_GAP)
+	else:
+		_location_marker_screen_pos = _clamp_to_edge(center, screen_pos, viewport_size, margin)
+		_location_marker_label.position = Vector2(
+				_location_marker_screen_pos.x - _location_marker_label.size.x * 0.5,
+				_location_marker_screen_pos.y + YOU_ARE_HERE_ARROW_LENGTH + YOU_ARE_HERE_LABEL_GAP)
+
+	_location_marker_label.visible = true
+	_location_marker_overlay.queue_redraw()
+
+
+# Where a ray from `center` through `target` crosses the inset viewport
+# rectangle's boundary — standard AABB ray-clamp, used to place the
+# off-screen arrow. `target` can lie far outside the viewport (an
+# unproject_position result is unbounded), so this only ever uses its
+# DIRECTION from center, never its magnitude.
+func _clamp_to_edge(center: Vector2, target: Vector2, viewport_size: Vector2, margin: float) -> Vector2:
+	var dir := target - center
+	if dir.length() < 0.001:
+		dir = Vector2.UP  # degenerate (dead-on behind/in front of camera) — arbitrary but stable direction
+	dir = dir.normalized()
+	var half := Vector2(viewport_size.x * 0.5 - margin, viewport_size.y * 0.5 - margin)
+	var t := INF
+	if absf(dir.x) > 0.0001:
+		t = minf(t, half.x / absf(dir.x))
+	if absf(dir.y) > 0.0001:
+		t = minf(t, half.y / absf(dir.y))
+	return center + dir * t
+
+
+func _draw_location_marker() -> void:
+	if not _location_marker_visible:
+		return
+	var color := UITheme.accent
+	var pulse := 1.0 + sin(Time.get_ticks_msec() / 1000.0 * YOU_ARE_HERE_PULSE_SPEED) * YOU_ARE_HERE_PULSE_AMOUNT
+
+	if _location_marker_on_screen:
+		_location_marker_overlay.draw_arc(
+				_location_marker_screen_pos, _location_marker_ring_radius * pulse, 0.0, TAU, 48, color, 2.0, true)
+	else:
+		var center := _location_marker_overlay.size * 0.5
+		var dir := (_location_marker_screen_pos - center).normalized()
+		var perp := Vector2(-dir.y, dir.x)
+		var back := _location_marker_screen_pos - dir * YOU_ARE_HERE_ARROW_LENGTH * pulse
+		_location_marker_overlay.draw_colored_polygon(PackedVector2Array([
+			_location_marker_screen_pos,
+			back + perp * YOU_ARE_HERE_ARROW_HALF_WIDTH,
+			back - perp * YOU_ARE_HERE_ARROW_HALF_WIDTH,
+		]), color)
+
+
 # --- Body info panel ---
 # Gated behind ScanPrompt now, not automatic — planets are unknown
 # properties until scanned (see the scanning design conversation in
@@ -1092,6 +1247,19 @@ func _update_callout() -> void:
 	# appears the moment you LOCK, disappears on UNLOCK (or if focus moves to
 	# a different body than the one you locked).
 	var focused_id: String = String(_focused_body.name) if _focused_body != null else ""
+
+	# Live distance-to-focused-body preview (see Destination.preview_id) —
+	# pushed every frame regardless of callout visibility/stage, since the
+	# whole point is watching the number while a body is focused, even
+	# before its callout has finished sweeping in. ConsolePanel is the
+	# reader; ANY focused id works here, not just ones with a callout shown,
+	# since _compute_snapshot_distance_km already no-ops (-1.0) for ids this
+	# view doesn't track.
+	if focused_id != "":
+		Destination.set_preview(focused_id, _compute_snapshot_distance_km(focused_id))
+	else:
+		Destination.clear_preview()
+
 	_callout_go_btn.visible = _callout_visible and Destination.is_locked(focused_id)
 	if _callout_go_btn.visible:
 		var already_here: bool = focused_id == PlayerState.location_id

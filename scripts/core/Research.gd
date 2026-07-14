@@ -243,9 +243,17 @@ func knowledge(category_id: String) -> int:
 	return _knowledge.get(category_id, 0)
 
 
-# Hand-authored rich Geological Survey report for this body, or null if none
-# has been written yet (see GEOLOGICAL_DATA_PATHS).
+# Hand-authored rich Geological Survey report for this body if one exists
+# (see GEOLOGICAL_DATA_PATHS); for an asteroid designation that hasn't been
+# rolled yet, generates and caches one instead — same "generate the first
+# time it's actually asked for, then persist for the rest of the session"
+# shape resource_data_for/_ensure_asteroid_data already use, just for the
+# Geological rather than Resource report (see AsteroidGeologicalGenerator).
+# Still null for anything else (a real moon with no authored survey, a
+# typo, ...) — same honesty as before this existed.
 func geological_data_for(body_id: String) -> GeologicalSurveyData:
+	if not _geological_data.has(body_id) and AsteroidResourceGenerator.looks_like_asteroid_id(body_id):
+		_geological_data[body_id] = AsteroidGeologicalGenerator.generate(body_id)
 	return _geological_data.get(body_id)
 
 

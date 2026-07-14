@@ -57,6 +57,8 @@ const SPEED_REFRESH_INTERVAL := 0.1  # updating every frame reads as digit-flick
 const STATUS_STRIP_HEIGHT := 26.0    # fixed reserved band along the top of the center readout — see _ship_status_prefix_label/_ship_status_value_label
 const STATUS_STRIP_PADDING := 8.0    # horizontal inset off the center band's own edges — the status/distance labels are left/right-aligned now (see _layout_buttons), so text needs breathing room off the bevel instead of running flush to it
 const LOCAL_DISTANCE_THRESHOLD_KM := TravelCalc.AU_KM * 0.05  # below this, the live in-flight distance reads in KM (a same-system hop like Earth<->Luna, ~384K km, would show as "0.00 AU" otherwise); at/above it, AU — see _process
+const LIVE_DISTANCE_LABEL_HEIGHT := 20.0  # see _live_distance_label / _layout_buttons
+const LIVE_DISTANCE_LABEL_GAP := 8.0      # clearance off the panel's own top edge
 
 const SHIP_STATUS_PREFIX := "SHIP STATUS: "  # the static, never-typed part — see _ship_status_prefix_label/_ship_status_value_label
 # Noticeably quicker than SystemView/PlanetarySystemView/BootSequence's
@@ -102,6 +104,17 @@ var _ship_status_text := ""    # the last VALUE (not full string) passed to _set
 var _ship_status_type_id := 0  # bumped on every new type-in request — a running coroutine bails once its captured id goes stale, see _type_ship_status
 var _post_arrival_wait_id := 0 # bumped on every arrival — guards the "hold ORBITAL INSERTION through the camera settle" wait in _on_location_changed against a stale run firing after a newer arrival (or a new trip) has already moved on
 var _ship_distance_label: Label
+
+# Floats just above the console's top edge, centered over the center band —
+# a live (recomputed every frame, never frozen) distance to whatever body is
+# currently focused in System View, locked or not. Deliberately separate
+# from _dest_distance below: that one only ever shows the frozen snapshot
+# for a LOCKED destination, which is the whole point of locking (see
+# Destination.locked_distance_km) — this one is what lets you actually watch
+# for the moment to lock in the first place. Sits above the panel rather
+# than inside the center band alongside _dest_container so the two never
+# read as the same number — see Destination.preview_id's own comment.
+var _live_distance_label: Label
 
 
 func _ready() -> void:
@@ -149,6 +162,8 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	_update_live_distance_preview()
+
 	if not PlayerState.is_traveling:
 		return
 	# Continuous, not event-driven — the phase changes (orienting -> burn ->
@@ -197,6 +212,29 @@ func _process(delta: float) -> void:
 		var distance_text := ("%.0f KM" % remaining_km) if PlayerState.travel_distance_km < LOCAL_DISTANCE_THRESHOLD_KM \
 				else ("%.2f AU" % (remaining_km / TravelCalc.AU_KM))
 		_ship_distance_label.text = "DISTANCE: %s" % distance_text
+
+
+# Hidden whenever nothing's focused (Destination.preview_id == "" — cleared
+# by SystemView the moment focus is lost or the view itself unloads, see
+# its own comments) or mid-trip, where a "distance to the thing you're
+# already flying toward" readout would just be a second, differently-timed
+# copy of the ETA/DISTANCE readout already showing in the center band.
+func _update_live_distance_preview() -> void:
+	var id := Destination.preview_id
+	if id == "" or Destination.preview_distance_km < 0.0 or PlayerState.is_traveling:
+		_live_distance_label.visible = false
+		return
+	# Takes Destination.preview_distance_km directly (TravelCalc.
+	# estimate_for_distance) rather than TravelCalc.estimate(location, id,
+	# ...) — a focused body that's ALSO locked would otherwise resolve
+	# through estimate()'s own locked_id override and silently show the
+	# FROZEN snapshot here instead of the live number this readout exists
+	# to provide. See estimate_for_distance's own comment.
+	var engine := PlayerState.resolve_travel_engine(PlayerState.location_id, id)
+	var est := TravelCalc.estimate_for_distance(
+			Destination.preview_distance_km, engine["accel_km_s2"], engine["cruise_cap_km_s"])
+	_live_distance_label.text = TravelCalc.format_distance(est)
+	_live_distance_label.visible = true
 
 
 # Once you've arrived somewhere you'd already locked as a destination, the
@@ -303,6 +341,14 @@ func _build_destination_readout() -> void:
 	_ship_distance_label.text = PlayerState.location_id.to_upper()
 	_ship_distance_label.visible = true
 	add_child(_ship_distance_label)
+
+	_live_distance_label = Label.new()
+	_live_distance_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_live_distance_label.add_theme_font_size_override("font_size", 14)
+	_live_distance_label.add_theme_color_override("font_color", UITheme.accent)
+	_live_distance_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_live_distance_label.visible = false
+	add_child(_live_distance_label)
 
 	_dest_container = VBoxContainer.new()
 	_dest_container.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -461,6 +507,13 @@ func _layout_buttons() -> void:
 
 	_dest_container.position = Vector2(x0, STATUS_STRIP_HEIGHT)
 	_dest_container.size = Vector2(x1 - x0, h - STATUS_STRIP_HEIGHT)
+
+	# Negative local y — deliberately floats above the panel's own top edge
+	# (local y = 0), over the center band's width, rather than competing for
+	# space inside it. Controls render fine outside their parent's rect;
+	# nothing here clips it.
+	_live_distance_label.position = Vector2(x0, -LIVE_DISTANCE_LABEL_HEIGHT - LIVE_DISTANCE_LABEL_GAP)
+	_live_distance_label.size = Vector2(x1 - x0, LIVE_DISTANCE_LABEL_HEIGHT)
 
 	queue_redraw()
 
