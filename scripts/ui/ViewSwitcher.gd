@@ -15,6 +15,11 @@ extends Control
 # does nothing (UIButton's own press feedback still plays).
 
 signal view_selected(scene_path: String)
+# Fired instead of view_selected when the ALREADY-active tab is clicked
+# again — a same-scene no-op for most tabs, but HUD relays it as a
+# "recenter" request for whichever view actually has one (System view's
+# free-fly camera, see HUD.recenter_requested).
+signal active_tab_reclicked(id: String)
 
 const VIEWS: Array[Dictionary] = [
 	{"id": "cockpit", "label": "COCKPIT", "scene": "res://scenes/cockpit.tscn"},
@@ -80,6 +85,7 @@ func set_active(id: String) -> void:
 
 func _on_tab_pressed(id: String, scene: String) -> void:
 	if id == _active_id:
+		active_tab_reclicked.emit(id)
 		return
 	# PLANETARY jumps straight into whatever planetary system you're
 	# currently relevant to — the planet you're orbiting, or the parent of

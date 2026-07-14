@@ -101,9 +101,53 @@ class Entry:
 static var _catalog: Dictionary = {}  # body_name -> Entry, built once on first access
 
 
+# Curated bodies first; falls through to a lazily-SYNTHESIZED Entry (not
+# cached into _catalog — see _synthesize_asteroid_entry's own comment on
+# why) for a registered asteroid, so Cockpit/TravelCalc/anything else that
+# already assumes "get_entry returns non-null means this is a real body"
+# just works for asteroids too, without them needing to know asteroids are
+# a different kind of thing at all.
 static func get_entry(body_name: String) -> Entry:
 	_ensure_built()
-	return _catalog.get(body_name)
+	if _catalog.has(body_name):
+		return _catalog[body_name]
+	return _synthesize_asteroid_entry(body_name)
+
+
+# Real au_distance/real_radius_km come from Research's registries
+# (populated by SystemView the moment it actually spawns the asteroid —
+# see Research.gd's own comments), NOT independently re-rolled here — the
+# whole point is that every consumer of this Entry sees the EXACT same
+# distance the player already saw placed on the System View map, not a
+# second seeded guess that might not agree with it. Returns null (same as
+# any other unrecognized id) if this asteroid hasn't actually been spawned/
+# registered THIS session yet — an id merely shaped like a designation
+# with no registered orbit isn't a real, travelable body.
+#
+# Deliberately NOT cached into _catalog: entries there get iterated wholesale
+# by planets()/moons_of() (parent == "" would make an asteroid show up as a
+# 9th "planet" in System view's own build loop, complete with a broken
+# texture-less render and an orbit ring it shouldn't have) — asteroids must
+# only ever be reachable by an exact get_entry(id) lookup, never enumerated.
+static func _synthesize_asteroid_entry(body_name: String) -> Entry:
+	if not AsteroidResourceGenerator.looks_like_asteroid_id(body_name):
+		return null
+	var au_distance := Research.asteroid_au_distance_for(body_name)
+	if au_distance <= 0.0:
+		return null
+	var radius_km := Research.asteroid_radius_km_for(body_name)
+	if radius_km <= 0.0:
+		radius_km = 1.0  # defensive only — shouldn't happen once au_distance has resolved
+
+	var e := Entry.new()
+	e.body_name = body_name
+	e.parent = ""  # orbits Sol directly, same as a planet — see Cockpit._asteroid_anchor_pos
+	e.au_distance = au_distance
+	e.body_type = "Asteroid"
+	e.real_radius_km = radius_km
+	e.radius_ratio = radius_km / 6371.0  # Earth-relative, same reference every other entry uses
+	e.use_canonical_art = false
+	return e
 
 
 # All Sol-orbiting bodies (planets + Pluto), in real distance order —

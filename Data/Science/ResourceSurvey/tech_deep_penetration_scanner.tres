@@ -8,5 +8,6 @@ script = ExtResource("1")
 id = "deep_penetration_scanner"
 display_name = "Deep Penetration Scanner"
 knowledge_requirements = Dictionary[String, int]({"resource": 300})
+materials_requirements = Dictionary[String, int]({"Iron": 500, "Titanium": 100})
 unlock_text = "Commander,\n\nSustained resource survey data has enabled a deep penetration scanning array, capable of resolving rare element deposits beneath the surface.\n\nSpecifications have been uploaded to your vessel.\n\n— Earth Science Directorate"
 grants_instrument = ExtResource("2")

@@ -77,6 +77,27 @@ const ENERGY_LABEL_BY_DIFFICULTY := {
 	"Hard": "High",
 }
 
+# --- Body-size yield scaling (2026-07-13) ---
+# A body at exactly this real radius gets multiplier 1.0 — today's already-
+# tuned TOTAL_UNITS_BY_SIZE numbers stay exactly as they are for anything
+# Earth-scale. Smaller/larger real bodies scale their yield by real radius
+# relative to this, so "a big planet has more, a tiny asteroid has way
+# less" falls out of one formula instead of per-body-type special-casing —
+# see _size_multiplier/total_units below, and AsteroidResourceGenerator for
+# where a procedural asteroid's own radius comes from.
+#
+# LINEAR with radius, not real volume (radius CUBED, which is what actual
+# physical mass/volume scaling would be) — literal cubic scaling against
+# Earth crushes anything asteroid-scale (thousands of times smaller by
+# volume) down to fractions of a single unit, reading as broken rather than
+# "tiny." This is the same real-world-INSPIRED-not-LITERAL compromise the
+# rest of the game already makes (compressed AU distances, sped-up orbits,
+# TravelCalc's engine tiers) — directionally correct (bigger body, more
+# material) without collapsing to zero across the many orders of magnitude
+# of real radius a planet-to-asteroid range actually spans.
+const SIZE_REFERENCE_RADIUS_KM := 6371.0  # Earth
+const SIZE_EXPONENT := 1.0
+
 var _remaining_fraction: Dictionary = {}  # "body_id:material_name" -> float
 var _material_amounts: Dictionary = {}    # material_name -> int, player's running inventory
 
@@ -125,9 +146,15 @@ func _build_deposit(body_id: String, finding: ResourceMaterialFinding) -> Deposi
 
 
 # Units per real second a continuous mining operation on this deposit
-# awards — TOTAL_UNITS_BY_SIZE spread evenly across DEPLETE_SECONDS_BY_
-# SIZE's duration for that same tier, so a bigger deposit is both larger
-# AND faster to pull material out of, not just slower to run dry.
+# awards — the BASE tier total spread evenly across the base tier's
+# duration, same as before size-scaling existed. Deliberately NOT run
+# through _size_multiplier: rate is "how fast your equipment pulls out
+# material of this concentration," which doesn't depend on how much total
+# deposit there is to work with — same rate on a planet or a pebble. Size
+# instead shows up in TOTAL (total_units) and therefore in how quickly the
+# deposit actually runs dry (depletion_rate_per_second) — a small deposit
+# empties fast at the same extraction rate, rather than taking the same
+# 5-20 minutes as a planet-scale one for 1000x less material.
 func extraction_rate_per_second(deposit: DepositInfo) -> float:
 	var total: int = TOTAL_UNITS_BY_SIZE.get(deposit.deposit_size, TOTAL_UNITS_BY_SIZE[DEFAULT_DEPOSIT_SIZE])
 	var seconds: int = DEPLETE_SECONDS_BY_SIZE.get(deposit.deposit_size, DEPLETE_SECONDS_BY_SIZE[DEFAULT_DEPOSIT_SIZE])
@@ -137,10 +164,48 @@ func extraction_rate_per_second(deposit: DepositInfo) -> float:
 # Fraction of remaining_fraction consumed per real second — constant
 # regardless of how much is already left, so a half-depleted deposit simply
 # takes half as long (in absolute seconds) to finish, not the same duration
-# every time.
+# every time. Base seconds scaled by the SAME _size_multiplier as
+# total_units, not left alone — a scaled-down total that still took the
+# full base duration to extract would imply an ever-shrinking (and
+# eventually absurdly slow) effective rate; scaling time down alongside
+# total instead keeps extraction_rate_per_second's constant rate the actual
+# truth throughout the operation, with the deposit simply running out sooner.
+# Floored at 1 real second so a vanishingly small deposit still resolves
+# rather than reading as instantaneous/glitchy.
 func depletion_rate_per_second(deposit: DepositInfo) -> float:
 	var seconds: int = DEPLETE_SECONDS_BY_SIZE.get(deposit.deposit_size, DEPLETE_SECONDS_BY_SIZE[DEFAULT_DEPOSIT_SIZE])
-	return 1.0 / float(seconds)
+	var scaled_seconds := maxf(float(seconds) * _size_multiplier(deposit.body_id), 1.0)
+	return 1.0 / scaled_seconds
+
+
+# The actual (size-scaled) total this deposit holds fresh — what
+# DepositDetailPanel's "Total Deposit" readout shows, and the only place
+# TOTAL_UNITS_BY_SIZE's raw tier number gets adjusted for body size. Floored
+# at 1 — a survey that found something at all should never display as a
+# literal zero-unit deposit, even on the smallest possible asteroid.
+func total_units(deposit: DepositInfo) -> int:
+	var base: int = TOTAL_UNITS_BY_SIZE.get(deposit.deposit_size, TOTAL_UNITS_BY_SIZE[DEFAULT_DEPOSIT_SIZE])
+	return maxi(1, roundi(float(base) * _size_multiplier(deposit.body_id)))
+
+
+func _size_multiplier(body_id: String) -> float:
+	var radius_km := _real_radius_km_for(body_id)
+	var ratio := maxf(radius_km, 0.001) / SIZE_REFERENCE_RADIUS_KM
+	return pow(ratio, SIZE_EXPONENT)
+
+
+# Real radius for whatever body_id is. KnownBodies.get_entry now covers
+# both curated bodies AND registered asteroids on its own (it synthesizes
+# an Entry for the latter from Research's registries) — so this no longer
+# needs its own separate asteroid fallback the way it used to. Falls back
+# to SIZE_REFERENCE_RADIUS_KM itself (multiplier 1.0) for anything truly
+# unresolvable, so an unknown body defaults to "no scaling effect" rather
+# than an arbitrary penalty.
+func _real_radius_km_for(body_id: String) -> float:
+	var entry := KnownBodies.get_entry(body_id)
+	if entry != null and entry.real_radius_km > 0.0:
+		return entry.real_radius_km
+	return SIZE_REFERENCE_RADIUS_KM
 
 
 func energy_usage_label(deposit: DepositInfo) -> String:
@@ -167,5 +232,43 @@ func material_amount(material_name: String) -> int:
 	return _material_amounts.get(material_name, 0)
 
 
+# Atomic batch spend for Research.craft_technology — checks every entry is
+# affordable FIRST, and only subtracts anything if all of them are, so a
+# craft attempt can never partially spend materials then fail partway
+# through. Returns false (no-op, nothing spent) if any single one is short.
+func spend_materials(requirements: Dictionary) -> bool:
+	for material_name: String in requirements:
+		if material_amount(material_name) < requirements[material_name]:
+			return false
+	for material_name: String in requirements:
+		_material_amounts[material_name] = material_amount(material_name) - requirements[material_name]
+	return true
+
+
+# The player's whole cargo hold — material_name -> int, ship-wide (not
+# broken down by which body it came from; nothing currently needs that
+# distinction). A copy, not the live Dictionary, so a caller (CargoPanel)
+# can't accidentally mutate inventory state just by iterating it.
+func inventory() -> Dictionary:
+	return _material_amounts.duplicate()
+
+
 func _key(body_id: String, material_name: String) -> String:
 	return "%s:%s" % [body_id, material_name]
+
+
+# Thousands-separated integer — "big numbers feel good for the player" (per
+# the user's own framing when deposits were scaled up), so a bare
+# "1000000" reading as a wall of digits would undercut the whole point.
+# Static, same "shared formatting utility living on the relevant data-model
+# class" idiom as ActivityDef.format_duration.
+static func format_units(n: int) -> String:
+	var digits := str(n)
+	var result := ""
+	var count := 0
+	for i in range(digits.length() - 1, -1, -1):
+		result = digits[i] + result
+		count += 1
+		if count % 3 == 0 and i != 0:
+			result = "," + result
+	return result

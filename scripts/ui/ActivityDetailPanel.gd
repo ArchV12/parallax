@@ -73,6 +73,7 @@ func _ready() -> void:
 	_begin_btn.solid = true
 	_begin_btn.shimmer_enabled = false
 	_begin_btn.custom_minimum_size = Vector2(0, 36)
+	_begin_btn.press_sfx = ""  # no generic click — Operations.operation_started already fires survey_start()/mining_start() via HUD._on_operation_started
 	_begin_btn.pressed.connect(_on_begin_pressed)
 	vbox.add_child(_begin_btn)
 

@@ -28,6 +28,14 @@ var _mining_player: AudioStreamPlayer
 # depleted deposit finishing off).
 var _mining_active := false
 
+# Same reasoning as _mining_player, for the survey ambient (see
+# survey_start below) — a Survey's real wait is short (BodyInfoPanel.
+# SCAN_DURATION) but still needs its own dedicated player so the pool can't
+# steal it out from under survey_complete() mid-wait.
+var _survey_player: AudioStreamPlayer
+# Same reasoning as _mining_active, for the same overlap-timer race.
+var _survey_active := false
+
 func _ready() -> void:
 	for i in POOL_SIZE:
 		var p := AudioStreamPlayer.new()
@@ -40,6 +48,9 @@ func _ready() -> void:
 	_mining_player = AudioStreamPlayer.new()
 	_mining_player.bus = "SFX"
 	add_child(_mining_player)
+	_survey_player = AudioStreamPlayer.new()
+	_survey_player.bus = "SFX"
+	add_child(_survey_player)
 
 
 # play("ui/button_click") — omit extension; tries .wav then .ogg. Returns the
@@ -80,13 +91,13 @@ func ui_hover() -> void:
 # route through this) — button_general.ogg. `sfx_path` lets a specific
 # button override it with a different sound entirely (see UIButton.press_sfx/
 # ConsolePadButton.press_sfx) while still going through the same call site.
-# Pitch is randomized +/-20% ONLY for the plain button_general click — a
+# Pitch is randomized +/-5% ONLY for the plain button_general click — a
 # generic click benefits from that variation so a rapid run of them doesn't
 # sound identical, but an overridden sfx_path (go_button, lock_button, ...)
 # is a deliberately distinct, branded cue and should always play true, not
 # get randomly detuned along with it.
 func ui_confirm(sfx_path: String = "button_general") -> void:
-	var pitch := randf_range(0.8, 1.2) if sfx_path == "button_general" else 1.0
+	var pitch := randf_range(0.95, 1.05) if sfx_path == "button_general" else 1.0
 	play(sfx_path, 0.0, pitch)
 
 
@@ -226,6 +237,69 @@ func mining_end() -> void:
 	_mining_active = false
 	_mining_player.stop()
 	play("mining-end")
+
+
+# --- Survey sounds ---
+# Same start-cue/ambient/stop shape as Flight/Mining above, with one twist:
+# a Survey's real-time wait is fixed and known up front (BodyInfoPanel.
+# SCAN_DURATION — the same constant every Operations.start_survey uses), so
+# unlike the travel/mining loops (which run for an unknown, possibly long
+# duration and always loop), survey.ogg only loops if it would otherwise run
+# out before the wait does; if survey.ogg's own natural length already
+# covers the whole wait, it just plays once and survey_complete() cuts it
+# off directly, same as it would either way.
+
+const SURVEY_OVERLAP_SECONDS := 0.6
+
+# Fired once, the instant a survey operation actually starts (see
+# HUD._on_operation_started) — has a real asset (survey_start.ogg).
+# Schedules the survey ambient to start SURVEY_OVERLAP_SECONDS before
+# survey_start.ogg's own runtime ends, same overlap technique as launch/
+# mining_start.
+func survey_start() -> void:
+	_survey_active = true
+	var player := play("survey_start")
+	if player != null and player.stream != null:
+		var start_length: float = player.stream.get_length()
+		var delay := maxf(start_length - SURVEY_OVERLAP_SECONDS, 0.0)
+		get_tree().create_timer(delay).timeout.connect(_start_survey_ambient)
+	else:
+		# No start asset to time the overlap against — start the ambient
+		# immediately rather than silently dropping it for the whole wait.
+		_start_survey_ambient()
+
+
+# The survey ambient cue — started automatically once survey_start()
+# finishes (see above), not called directly. Runs on its own dedicated
+# player (not the pool) since survey_complete() needs to be able to cut it
+# off cleanly regardless of what else the pool is doing.
+func _start_survey_ambient() -> void:
+	if not _survey_active:
+		return  # survey_complete() already fired before this delayed callback ran
+	var stream := _load("survey")
+	if stream == null:
+		if not _warned.has("survey"):
+			_warned["survey"] = true
+			push_warning("AudioManager: sfx not found — survey")
+		return
+	# Only loop if survey.ogg would otherwise run out before the real wait
+	# does — if its own natural length already covers BodyInfoPanel.
+	# SCAN_DURATION, looping would just mean survey_complete() has to cut it
+	# off mid-loop instead of letting it play through once, which loses
+	# nothing (either way it gets cut off the instant the survey resolves).
+	if stream is AudioStreamOggVorbis:
+		stream.loop = stream.get_length() < BodyInfoPanel.SCAN_DURATION
+	_survey_player.stream = stream
+	_survey_player.play()
+
+
+# Cuts the survey ambient and plays the one-shot completion cue — fired
+# once, the instant a survey operation resolves (see HUD.
+# _on_operation_completed).
+func survey_complete() -> void:
+	_survey_active = false
+	_survey_player.stop()
+	play("survey_complete")
 
 
 # --- Boot sequence sounds ---

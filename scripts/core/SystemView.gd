@@ -44,6 +44,60 @@ const SPIN := 0.03             # rad/s — idle rotation, purely for a "living" 
 # which is itself realistic — outer planets really do move that much slower).
 const ORBIT_SPEED := 0.013
 
+# --- Asteroids (still no survey data — that's the next step; population and
+# orbits are now real seed-derived generation, not fixed dummies) ---
+# Real Main Belt range is ~2.2-3.2 AU (Mars is 1.52, Jupiter 5.2) — reuses
+# the same log-scaled display_r/Kepler speed formulas as planets below, so a
+# belt asteroid drifts at the correct relative pace without a new mechanic.
+const ASTEROID_BELT_AU_MIN := 2.2
+const ASTEROID_BELT_AU_MAX := 3.2
+# Existence + count is free/derived from a seed, never persisted (see the
+# "existence + count" tier in the universe-generation-architecture memory) —
+# _seeded_count below rolls it once per load from a fixed label string
+# rather than a hardcoded number. Sol is the only system today, so a label
+# string stands in for what will eventually be a real per-system seed; the
+# range itself is just the density that already looked/felt right.
+const ASTEROID_BELT_COUNT_MIN := 52
+const ASTEROID_BELT_COUNT_MAX := 68
+# Near-Earth asteroids: real solar orbits that merely happen to sit close to
+# Earth's own (not Earth satellites — see the brainstorm's "asteroids don't
+# orbit planets" note), approximated here as a jitter around Earth's au_distance.
+const NEA_COUNT_MIN := 3
+const NEA_COUNT_MAX := 6
+const NEA_AU_JITTER := 0.15
+const ASTEROID_RADIUS_MIN := 0.05
+const ASTEROID_RADIUS_MAX := 0.16
+# Real Main Belt inclinations mostly run 0-20 degrees (with a long tail
+# beyond that); NEAs get a smaller range here purely so they still read as
+# "near Earth" rather than scattering far off the ecliptic. Signed, not
+# 0..max — the sign plus the independently-random asc_node below is a
+# simpler stand-in for a real (always-positive) inclination + ascending
+# node pair, equivalent in effect for a body with no real orbital history.
+const ASTEROID_BELT_INCLINATION_MAX_DEG := 18.0
+const NEA_INCLINATION_MAX_DEG := 10.0
+
+# Centaurs: icy/rocky bodies scattered between Jupiter and Neptune on
+# unstable, often steeply-inclined orbits (real ones range from Chiron's
+# ~7 degrees to Pholus' ~24 — kept on the high end here since "unstable and
+# scattered" is the whole character of this population).
+const CENTAUR_AU_MIN := 9.5
+const CENTAUR_AU_MAX := 28.0
+const CENTAUR_COUNT_MIN := 6
+const CENTAUR_COUNT_MAX := 12
+const CENTAUR_INCLINATION_MAX_DEG := 28.0
+
+# Jupiter Trojans: NOT their own independent orbit — real Trojans share
+# Jupiter's own semi-major axis and period, clustered in a cloud around the
+# leading (L4, "Greek camp") and trailing (L5, "Trojan camp") Lagrange
+# points, 60 degrees ahead of/behind Jupiter itself. See _spawn_trojan/
+# _spawn_trojans, which anchor off Jupiter's own live _orbits entry instead
+# of an AU range like every other population here.
+const TROJAN_CLUSTER_OFFSET_DEG := 60.0
+const TROJAN_CLUSTER_SPREAD_DEG := 12.0
+const TROJAN_COUNT_MIN := 4  # per cluster (L4 and L5 each roll their own count)
+const TROJAN_COUNT_MAX := 8
+const TROJAN_INCLINATION_MAX_DEG := 20.0
+
 # Orbit/zoom/pan camera rig — same interaction model as Cosmic Forge's
 # viewer, just tuned for this scene's much larger scale (orbits span up to
 # ~41 units, vs. Cosmic Forge's single-object close-ups).
@@ -52,6 +106,19 @@ const MIN_DISTANCE := 1.5
 const MAX_DISTANCE := 150.0
 const ORBIT_SENSITIVITY := 0.008
 const PAN_SENSITIVITY := 0.0012
+# Free-fly: WASD to move, hold RMB to look — unfocused only (see _process/
+# _unhandled_input). Added once the asteroid population made "orbit around a
+# fixed pivot" alone feel tedious for hunting scattered targets across empty
+# space; click-to-focus-and-orbit (unchanged) is still how you examine a
+# specific body once you've found it. Speed scales with current _distance,
+# same reasoning as PAN_SENSITIVITY above — otherwise a speed tuned for
+# close-in maneuvering crawls at system-wide zoom, or a speed tuned for
+# crossing the whole map is unusably twitchy zoomed in on one body. Original
+# first-pass value (1.2) read as way too fast, even after one halving —
+# what used to be the normal (unmodified) speed is now the Shift-boosted
+# speed, and normal is half of that again. Still worth tuning further by feel.
+const FREE_FLY_SPEED_MULT := 0.15
+const FREE_FLY_SHIFT_MULT := 2.0  # hold Shift for a speed boost — see _process
 
 # "Stock" framing — what Esc returns to when nothing's focused, and what
 # every session starts at.
@@ -115,8 +182,16 @@ var _distance := STOCK_DISTANCE
 var _target_distance := STOCK_DISTANCE
 var _orbiting := false
 var _panning := false
+var _looking := false  # RMB held — free-fly mouselook, unfocused only (see _unhandled_input)
 var _left_press_pos := Vector2.ZERO
 var _focused_body: Node3D = null
+var _pan_target := Vector3.ZERO  # where the pivot eases to while unfocused — see _process's pivot-follow lerp
+# Camera's actual current local-Z offset from the pivot — eases toward
+# _distance (orbiting a focused body) or 0.0 (free-fly, rotate in place) each
+# frame; see _process. Starts at 0.0 to match the unfocused starting state —
+# _build_camera bakes the stock "pulled back" framing into _pan_target/
+# _pivot.position instead, not this.
+var _orbit_offset := 0.0
 
 var _overlay_layer: CanvasLayer
 var _callout_overlay: Control
@@ -136,11 +211,20 @@ func _ready() -> void:
 	_build_environment()
 	_build_camera()
 	_build_system()
+	_build_asteroids()
 	_build_callout()
 	_build_body_panel()
 	_build_locations_panel()
 	AmbientManager.play_map_ambient()
 	HUD.set_view("Solar System", "solar_system")
+	# Re-clicking the SOLAR SYSTEM tab while already here recenters instead
+	# of no-opping — see HUD.recenter_requested's own comment.
+	HUD.recenter_requested.connect(_recenter)
+	# Registers this view as the source of truth for a lock's real snapshot
+	# distance — see Destination.lock()'s own comment for why this has to
+	# be a synchronous callback Destination itself calls, not a listener
+	# reacting to its own destination_changed signal.
+	Destination.set_snapshot_provider(_compute_snapshot_distance_km)
 
 
 func _process(delta: float) -> void:
@@ -157,22 +241,72 @@ func _process(delta: float) -> void:
 		orbit["angle"] = angle
 		var radius: float = orbit["radius"]
 		var body: Node3D = orbit["body"]
-		body.position = Vector3(cos(angle) * radius, 0.0, sin(angle) * radius)
+		var local_pos := Vector3(cos(angle) * radius, 0.0, sin(angle) * radius)
+		# Inclination/ascending-node tilt — real Keplerian elements, unlike
+		# the flat circular orbit above. Planets/Sol never set these (default
+		# 0.0 here means no rotation, so they stay exactly on the flat
+		# ecliptic plane as before); asteroids do, see _spawn_dummy_asteroid —
+		# real ones are visibly NOT coplanar the way the planets roughly are,
+		# which reads as flat and wrong once bodies are small enough that a
+		# perfectly flat field is obvious.
+		var inclination: float = orbit.get("inclination", 0.0)
+		var asc_node: float = orbit.get("asc_node", 0.0)
+		if inclination != 0.0 or asc_node != 0.0:
+			local_pos = local_pos.rotated(Vector3.RIGHT, inclination).rotated(Vector3.UP, asc_node)
+		body.position = local_pos
 		var atmo: MeshInstance3D = orbit["atmo"]
 		if atmo != null:
 			(atmo.material_override as ShaderMaterial).set_shader_parameter(
 					"sun_dir", (-body.position).normalized())
 
+	# Free-fly movement — unfocused only (see FREE_FLY_SPEED_MULT's class
+	# comment). Forward/back/strafe move along the CAMERA's current facing
+	# (not a fixed world axis), so pitching down before pressing forward
+	# flies you down-and-forward — ordinary 6DOF free-cam behavior. Keys
+	# come from ControlScheme (WASD or ESDF, player's choice — see Options),
+	# not hardcoded here. Space/Ctrl are the odd ones out, deliberately: they
+	# move along the WORLD up/down axis, not the camera's local up, which is
+	# what "straight up" actually means regardless of which way you're
+	# looking — the usual convention (Blender, Unity's scene view, etc.),
+	# and scheme-agnostic since there's no WASD/ESDF equivalent to remap.
+	# Written straight into both _pivot.position and _pan_target, same
+	# lockstep trick the RMB-drag pan below already uses, so the
+	# pivot-follow lerp just below has nothing to fight.
+	if _focused_body == null:
+		var move := Vector3.ZERO
+		if ControlScheme.is_forward_pressed():
+			move -= _camera.global_basis.z
+		if ControlScheme.is_back_pressed():
+			move += _camera.global_basis.z
+		if ControlScheme.is_right_pressed():
+			move += _camera.global_basis.x
+		if ControlScheme.is_left_pressed():
+			move -= _camera.global_basis.x
+		if Input.is_physical_key_pressed(KEY_SPACE):
+			move += Vector3.UP
+		if Input.is_physical_key_pressed(KEY_CTRL):
+			move += Vector3.DOWN
+		if move.length() > 0.01:
+			var speed_mult := FREE_FLY_SPEED_MULT
+			if Input.is_physical_key_pressed(KEY_SHIFT):
+				speed_mult *= FREE_FLY_SHIFT_MULT
+			var fly_offset := move.normalized() * (_distance * speed_mult) * delta
+			_pivot.position += fly_offset
+			_pan_target += fly_offset
+
 	# Glide the pivot toward wherever it should be — the focused body's live
-	# position, or the origin once nothing's focused — instead of snapping.
+	# position, or _pan_target once nothing's focused — instead of snapping.
 	# Framerate-independent exponential smoothing rather than a fixed-
 	# duration tween: the target itself keeps moving (an orbiting planet),
 	# so a tween-to-a-fixed-point would fall behind by the time it finishes;
 	# this keeps chasing the live position the whole way, decelerating into
 	# it, and handles "switching directly from one planet to another" and
 	# "returning to the stock view" the same way, since both are just "the
-	# target changed" — no separate transition state needed.
-	var pivot_target := _focused_body.position if _focused_body != null else Vector3.ZERO
+	# target changed" — no separate transition state needed. _pan_target
+	# (not a hardcoded Vector3.ZERO) is what makes manual panning stick —
+	# see the mouse-motion handler below, which moves it in lockstep with
+	# the pivot itself so this lerp has nothing left to fight.
+	var pivot_target := _focused_body.position if _focused_body != null else _pan_target
 	var t := 1.0 - exp(-delta * FOCUS_SWEEP_RATE)
 	_pivot.position = _pivot.position.lerp(pivot_target, t)
 
@@ -182,6 +316,31 @@ func _process(delta: float) -> void:
 	if not is_equal_approx(_distance, _target_distance):
 		_distance = lerpf(_distance, _target_distance, t)
 		_update_camera()
+
+	# Camera's local offset from the pivot eases between two very different
+	# meanings depending on focus state: examining a body (offset ~= _distance,
+	# camera orbits/swings around it on rotation — the original, unchanged
+	# feel) vs. free flight (offset ~= 0, camera rotates IN PLACE instead of
+	# sweeping a wide arc around wherever the pivot happens to be). This is
+	# the actual fix for "rotating after flying far away sweeps a huge orbit
+	# that looks like it's circling the Sun" — the camera used to sit
+	# _distance away from the pivot regardless of whether anything was being
+	# examined, so turning to look around always orbited that offset point.
+	# Eased with the same `t` as the pivot-position lerp above so a focus/
+	# unfocus transition glides smoothly between the two instead of popping.
+	#
+	# Targets _target_distance (the FINAL close-up distance _select() just
+	# set), not the live _distance above — _distance is still easing from
+	# wherever it was during free-fly (which doubles as the WASD speed dial,
+	# so it can be large) toward that same target. Chasing _distance instead
+	# of _target_distance meant _orbit_offset ballooned outward first,
+	# tracking that stale large number, before finally shrinking back down
+	# once _distance itself caught up — the camera visibly pulled back
+	# before zooming in, instead of easing straight from "wherever it
+	# already was" to the target.
+	var target_offset := _target_distance if _focused_body != null else 0.0
+	_orbit_offset = lerpf(_orbit_offset, target_offset, t)
+	_camera.position = Vector3(0.0, 0.0, _orbit_offset)
 
 	if _callout_stage == CalloutStage.WAITING_FOR_SWEEP:
 		_sweep_elapsed += delta
@@ -216,7 +375,17 @@ func _build_camera() -> void:
 	_camera = Camera3D.new()
 	_camera.fov = 50.0
 	_pivot.add_child(_camera)
-	_update_camera()
+	_update_camera()  # sets _pivot.rotation from the stock yaw/pitch below
+
+	# Stock framing used to come purely from the camera's own offset
+	# (Vector3(0,0,STOCK_DISTANCE) from a pivot fixed at the origin) — that
+	# offset is now reserved for actually orbiting a focused body (see
+	# _process's _orbit_offset), so the equivalent "pulled back to see the
+	# whole system" starting view has to live in the pivot's own POSITION
+	# instead, or the very first unfocused frame would put the camera
+	# sitting right on top of Sol.
+	_pan_target = _pivot.basis * Vector3(0.0, 0.0, STOCK_DISTANCE)
+	_pivot.position = _pan_target
 
 	var stars := StarfieldStars.new()
 	stars.follow = _camera
@@ -227,7 +396,10 @@ func _update_camera() -> void:
 	_pitch = clampf(_pitch, -1.45, 1.45)
 	_distance = clampf(_distance, MIN_DISTANCE, MAX_DISTANCE)
 	_pivot.rotation = Vector3(_pitch, _yaw, 0)
-	_camera.position = Vector3(0, 0, _distance)
+	# Camera's own local offset from the pivot is NOT set here — see
+	# _process's _orbit_offset easing, which is now the sole owner of
+	# _camera.position (setting it here too would fight that lerp on every
+	# discrete drag/zoom event this function also runs on).
 
 
 func _build_system() -> void:
@@ -289,6 +461,257 @@ func _build_system() -> void:
 		})
 
 
+# Existence + count for a population, purely a function of its own seed
+# label — free/derived, never persisted (see the "existence + count" tier in
+# the universe-generation-architecture memory). Sol is the only system today,
+# so a fixed label string stands in for what will eventually be a real
+# per-system seed once other systems exist.
+func _seeded_count(seed_label: String, min_count: int, max_count: int) -> int:
+	return min_count + posmod(seed_label.hash(), max_count - min_count + 1)
+
+
+# Still no survey data (next step) but population/orbits are now real
+# seed-derived generation (see AU_MIN/MAX/_COUNT_MIN/MAX above and
+# _seeded_count), not fixed dummies, and now cover more than just the Main
+# Belt — real asteroids (as opposed to icy trans-Neptunian objects, a
+# distinct population left for a possible future Kuiper Belt/dwarf-planet
+# feature) are genuinely scattered well beyond it. No orbit ring on any of
+# these (unlike planets/_build_orbit_ring above) — the whole point is a
+# drifting field, not something that reads as a planet or moon.
+func _build_asteroids() -> void:
+	var belt_count := _seeded_count("Sol/AsteroidBelt", ASTEROID_BELT_COUNT_MIN, ASTEROID_BELT_COUNT_MAX)
+	for i in belt_count:
+		_spawn_dummy_asteroid("AST-BELT-%d" % (i + 1),
+				ASTEROID_BELT_AU_MIN, ASTEROID_BELT_AU_MAX, ASTEROID_BELT_INCLINATION_MAX_DEG)
+
+	var earth_au := KnownBodies.get_entry("Earth").au_distance
+	var nea_count := _seeded_count("Sol/NEA", NEA_COUNT_MIN, NEA_COUNT_MAX)
+	for i in nea_count:
+		_spawn_dummy_asteroid("AST-NEA-%d" % (i + 1),
+				earth_au - NEA_AU_JITTER, earth_au + NEA_AU_JITTER, NEA_INCLINATION_MAX_DEG)
+
+	var centaur_count := _seeded_count("Sol/Centaurs", CENTAUR_COUNT_MIN, CENTAUR_COUNT_MAX)
+	for i in centaur_count:
+		_spawn_dummy_asteroid("AST-CENT-%d" % (i + 1),
+				CENTAUR_AU_MIN, CENTAUR_AU_MAX, CENTAUR_INCLINATION_MAX_DEG)
+
+	_spawn_trojans()
+
+
+# Real Trojans aren't on their own AU-band orbit at all — they share
+# Jupiter's own semi-major axis/period, clustered around its L4 (leading)
+# and L5 (trailing) Lagrange points. Reads Jupiter's already-built _orbits
+# entry (from _build_system, which always runs first — see _ready) rather
+# than an independent roll.
+func _spawn_trojans() -> void:
+	var jupiter_orbit := _find_orbit("Jupiter")
+	if jupiter_orbit.is_empty():
+		return
+	var jupiter_angle: float = jupiter_orbit["angle"]
+	var jupiter_radius: float = jupiter_orbit["radius"]
+	var jupiter_speed: float = jupiter_orbit["speed"]
+	# jupiter_radius above is DISPLAY radius (log-scaled units, for the map
+	# itself) — registration needs the real AU distance instead, same as
+	# _spawn_dummy_asteroid registers for its own population.
+	var jupiter_au := KnownBodies.get_entry("Jupiter").au_distance
+
+	for cluster_sign in [1.0, -1.0]:  # L4 leads Jupiter, L5 trails it
+		var label := "L4" if cluster_sign > 0.0 else "L5"
+		var count := _seeded_count("Sol/Trojans/%s" % label, TROJAN_COUNT_MIN, TROJAN_COUNT_MAX)
+		for i in count:
+			_spawn_trojan("AST-TROJ-%s-%d" % [label, i + 1], jupiter_angle, jupiter_radius, jupiter_speed, jupiter_au, cluster_sign)
+
+
+func _find_orbit(body_name: String) -> Dictionary:
+	for orbit: Dictionary in _orbits:
+		var body: Node3D = orbit["body"]
+		if body.name == body_name:
+			return orbit
+	return {}
+
+
+# Called SYNCHRONOUSLY by Destination.lock() itself (see that function's
+# comment, and set_snapshot_provider above) — returns the real snapshot
+# distance for locking `id` right now, using both endpoints' live angle
+# data. -1.0 (Destination's own "no snapshot" default) if either endpoint
+# isn't a body this view is currently tracking — a lock made for a body
+# Planetary System View owns instead, or while docked somewhere with no
+# live orbital data at all, just falls back to TravelCalc's existing
+# radial-only approximation, same as before this existed.
+func _compute_snapshot_distance_km(id: String) -> float:
+	var to_orbit := _find_orbit(id)
+	var from_orbit := _current_location_orbit()
+	if to_orbit.is_empty() or from_orbit.is_empty():
+		return -1.0
+	return _true_distance_km(from_orbit, to_orbit)
+
+
+# Wherever the player currently is, resolved to one of THIS view's tracked
+# orbits — directly if they're at Sol/a planet/an asteroid (all live here),
+# or via its parent planet's orbit if they're docked at a moon (moons
+# aren't individually tracked in System view at all — using the parent's
+# position is a fine stand-in, since a moon-to-planet offset is negligible
+# next to AU-scale distances).
+func _current_location_orbit() -> Dictionary:
+	var direct := _find_orbit(PlayerState.location_id)
+	if not direct.is_empty():
+		return direct
+	var entry := KnownBodies.get_entry(PlayerState.location_id)
+	if entry != null and entry.parent != "":
+		return _find_orbit(entry.parent)
+	return {}
+
+
+# Real straight-line distance (km) between two bodies given their actual
+# CURRENT 3D position, not just how far each is from Sol. Genuinely 3D, not
+# flat law-of-cosines on the pre-tilt angle alone (an earlier version of
+# this function did that and was WRONG for any asteroid with a nonzero
+# ascending node — asc_node rotates the body's position around the
+# vertical axis by up to a full 360 degrees, which measurably swings its
+# true angular position around the Sun, not just its height above/below
+# the ecliptic; ignoring it meant comparing against an angle that had
+# nothing to do with where the body is actually rendered). Planets are
+# unaffected either way (inclination/asc_node are always 0 for them), but
+# every asteroid needs the real rotated position — see
+# _real_orbit_position_au, which applies the exact same rotation _process
+# uses for display, just at real au_distance scale instead of the
+# log-compressed display radius.
+func _true_distance_km(from_orbit: Dictionary, to_orbit: Dictionary) -> float:
+	var from_body: Node3D = from_orbit["body"]
+	var to_body: Node3D = to_orbit["body"]
+	var from_entry := KnownBodies.get_entry(from_body.name)
+	var to_entry := KnownBodies.get_entry(to_body.name)
+	if from_entry == null or to_entry == null:
+		return -1.0
+	var from_pos_au := _real_orbit_position_au(from_orbit, from_entry.au_distance)
+	var to_pos_au := _real_orbit_position_au(to_orbit, to_entry.au_distance)
+	return from_pos_au.distance_to(to_pos_au) * TravelCalc.AU_KM
+
+
+# Real (not display-compressed) 3D position in AU, Sol-centered — the same
+# inclination/ascending-node rotation _process applies when placing the
+# body on screen (see that function's own comment), just computed at real
+# au_distance scale so the RESULT is a genuine AU-space position, not a
+# display-space one.
+func _real_orbit_position_au(orbit: Dictionary, radius_au: float) -> Vector3:
+	var angle: float = orbit["angle"] as float
+	var flat := Vector3(cos(angle) * radius_au, 0.0, sin(angle) * radius_au)
+	var inclination: float = orbit.get("inclination", 0.0)
+	var asc_node: float = orbit.get("asc_node", 0.0)
+	if inclination != 0.0 or asc_node != 0.0:
+		flat = flat.rotated(Vector3.RIGHT, inclination).rotated(Vector3.UP, asc_node)
+	return flat
+
+
+# Shared by every asteroid spawner below — builds the visual + designation,
+# leaving position/orbit-dict entirely to the caller since Trojans place
+# themselves very differently (see _spawn_trojan) from an AU-band population
+# (see _spawn_dummy_asteroid). Returns the built radius alongside the body
+# since AsteroidParams itself isn't otherwise visible to the caller.
+func _build_asteroid_body(rng: RandomNumberGenerator, seed_hash: int) -> Dictionary:
+	var params := AsteroidParams.new()
+	params.seed_value = seed_hash
+	params.radius = rng.randf_range(ASTEROID_RADIUS_MIN, ASTEROID_RADIUS_MAX)
+	# Ranges tightened 2026-07-13 after Cosmic Forge experimentation settled
+	# on new caps (irregularity 0.6, crater density/size 0.25, depth 0.1) —
+	# see CosmicForge.gd's ASTEROID_KNOBS, which these mirror.
+	params.irregularity = rng.randf_range(0.35, 0.6)
+	params.elongation = rng.randf_range(0.15, 0.45)
+	params.crater_density = rng.randf_range(0.1, 0.25)
+	params.crater_size = rng.randf_range(0.12, 0.25)
+	params.crater_depth = rng.randf_range(0.05, 0.1)
+	params.detail = rng.randi_range(3, 5)  # 3-5 all generate fast enough at this scale — only 6 (Cosmic Forge's own cap) was the noticeably slow one
+
+	var body := AsteroidGenerator.generate(params)
+	body.name = AsteroidDesignation.generate(seed_hash)
+	return {"body": body, "radius": params.radius}
+
+
+# `seed_id` is internal only — it seeds the shape/designation below AND now
+# the asteroid's own orbital elements (AU distance, inclination, ascending
+# node), so a given slot's whole identity — not just its name — stays
+# stable across reloads, the way a real cataloged object's orbit wouldn't
+# just change between sessions. body.name (what selection/Discoveries/the
+# callout label all key off, same as every other body in this file) is the
+# generated designation, so two asteroids never collide with each other's
+# seed string either.
+func _spawn_dummy_asteroid(seed_id: String, au_min: float, au_max: float, inclination_max_deg: float) -> void:
+	var seed_hash := seed_id.hash()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_hash
+
+	var au := rng.randf_range(au_min, au_max)
+	var inclination := deg_to_rad(rng.randf_range(-inclination_max_deg, inclination_max_deg))
+	var asc_node := rng.randf_range(0.0, TAU)
+	var built := _build_asteroid_body(rng, seed_hash)
+	var body: Node3D = built["body"]
+	# Registers the EXACT au this asteroid is actually placed at below —
+	# see Research.gd's _asteroid_au_distance comment for why Cockpit/
+	# TravelCalc read this back instead of independently re-rolling their
+	# own guess at the same number.
+	Research.register_asteroid_orbit(body.name, au)
+
+	# Phase along the orbit is the one thing that still rerolls each load —
+	# same "no real ephemeris yet" simplification the planets above already
+	# use (see their own "rerolled each load" comment); everything else
+	# about the orbit itself (au/inclination/asc_node above) is now fixed
+	# per identity, not just the shape/name.
+	var start_angle := randf_range(0.0, TAU)
+	var display_r := BASE_GAP + LOG_SCALE * log(au + 1.0)
+	var flat_pos := Vector3(cos(start_angle) * display_r, 0.0, sin(start_angle) * display_r)
+	body.position = flat_pos.rotated(Vector3.RIGHT, inclination).rotated(Vector3.UP, asc_node)
+	add_child(body)
+	_bodies.append(body)
+
+	_orbits.append({
+		"body": body,
+		"radius": display_r,
+		"body_radius": built["radius"],
+		"angle": start_angle,
+		"speed": ORBIT_SPEED / pow(au, 1.5),
+		"inclination": inclination,
+		"asc_node": asc_node,
+		"atmo": null,
+	})
+
+
+# Co-orbital with Jupiter, not an independent orbit — same radius/speed as
+# Jupiter itself keeps this angular offset fixed forever (a real Lagrange
+# point relationship), not just accurate at the moment of spawn.
+func _spawn_trojan(seed_id: String, jupiter_angle: float, jupiter_radius: float,
+		jupiter_speed: float, jupiter_au: float, cluster_sign: float) -> void:
+	var seed_hash := seed_id.hash()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_hash
+
+	var offset := deg_to_rad(cluster_sign * TROJAN_CLUSTER_OFFSET_DEG
+			+ rng.randf_range(-TROJAN_CLUSTER_SPREAD_DEG, TROJAN_CLUSTER_SPREAD_DEG))
+	var inclination := deg_to_rad(rng.randf_range(-TROJAN_INCLINATION_MAX_DEG, TROJAN_INCLINATION_MAX_DEG))
+	var asc_node := rng.randf_range(0.0, TAU)
+	var built := _build_asteroid_body(rng, seed_hash)
+	var body: Node3D = built["body"]
+	# Co-orbital with Jupiter — registers Jupiter's own real AU distance,
+	# same reasoning as _spawn_dummy_asteroid's own registration.
+	Research.register_asteroid_orbit(body.name, jupiter_au)
+
+	var angle := jupiter_angle + offset
+	var flat_pos := Vector3(cos(angle) * jupiter_radius, 0.0, sin(angle) * jupiter_radius)
+	body.position = flat_pos.rotated(Vector3.RIGHT, inclination).rotated(Vector3.UP, asc_node)
+	add_child(body)
+	_bodies.append(body)
+
+	_orbits.append({
+		"body": body,
+		"radius": jupiter_radius,
+		"body_radius": built["radius"],
+		"angle": angle,
+		"speed": jupiter_speed,
+		"inclination": inclination,
+		"asc_node": asc_node,
+		"atmo": null,
+	})
+
+
 func _build_orbit_ring(radius: float) -> MeshInstance3D:
 	const SEGMENTS := 128
 	var st := SurfaceTool.new()
@@ -324,10 +747,14 @@ func _build_orbit_ring(radius: float) -> MeshInstance3D:
 
 # --- Camera input ---
 # Click a body — select/focus it, camera follows it around its orbit.
-# Drag — orbit · Wheel — zoom · Right/middle-drag — pan (pan is a no-op
-# while focused — _process re-glues the pivot to the body every frame, so
-# any pan gets overwritten the instant it's applied). Esc clears focus, or
-# leaves to Cockpit if nothing's focused.
+# Left-drag or hold RMB — rotate (orbits the focused body if there is one,
+# so you can look at it from any angle; turns the free-fly camera in place
+# otherwise) · Wheel — zoom · Middle-drag — pan · movement keys (WASD or
+# ESDF, see ControlScheme) — free-fly, unfocused only (see
+# FREE_FLY_SPEED_MULT's class comment). Pan/free-fly are no-ops while
+# focused — _process re-glues the pivot to the body every frame, so anything
+# that moves the pivot manually gets overwritten the instant it's applied.
+# Esc clears focus, or leaves to Cockpit if nothing's focused.
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
@@ -356,18 +783,29 @@ func _unhandled_input(event: InputEvent) -> void:
 					# Released close to where it was pressed — a click, not
 					# a drag; try to select whatever's under the cursor.
 					_try_select(mb.position)
-			MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE:
+			MOUSE_BUTTON_RIGHT:
+				_looking = mb.pressed
+			MOUSE_BUTTON_MIDDLE:
 				_panning = mb.pressed
 	elif event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
-		if _orbiting:
+		if _orbiting or _looking:
+			# Left-drag and RMB-drag are two buttons for the same yaw/pitch
+			# rotation — orbiting around the focused body when there is one
+			# (lets you look at it from any angle), or turning the free-fly
+			# camera in place when there isn't (see _process's _orbit_offset,
+			# which is what actually decides "orbit around a point" vs.
+			# "rotate in place" — this input handler doesn't need to care
+			# which one is currently happening).
 			_yaw -= mm.relative.x * ORBIT_SENSITIVITY
 			_pitch -= mm.relative.y * ORBIT_SENSITIVITY
 			_update_camera()
 		elif _panning and _focused_body == null:
 			var scale_factor := _distance * PAN_SENSITIVITY
-			_pivot.position += (-_camera.global_basis.x * mm.relative.x
+			var offset := (-_camera.global_basis.x * mm.relative.x
 					+ _camera.global_basis.y * mm.relative.y) * scale_factor
+			_pivot.position += offset
+			_pan_target += offset  # keep _process's pivot-follow lerp from pulling the pan straight back to Sol
 
 
 # --- Selection ---
@@ -436,13 +874,30 @@ func _select(body: Node3D, body_radius: float) -> void:
 
 
 func _clear_focus() -> void:
-	# Pivot and zoom both ease back the same way; yaw/pitch still reset
-	# immediately for now (only position/zoom sweep was asked for).
+	# Camera stays exactly where it is instead of sweeping back to the
+	# stock Sol-centered view (2026-07-13 feedback: deselecting should just
+	# untarget, not yank you back across the map). While focused, the
+	# camera's actual world position is _pivot.position + _pivot.basis *
+	# Vector3(0,0,_orbit_offset) — the body's position, plus the orbit
+	# offset back out toward the camera (see _process's _orbit_offset
+	# comment). Capturing that as the new _pivot.position, and zeroing
+	# _orbit_offset in the same breath, just re-labels which variables
+	# encode the SAME physical camera position — a pure bookkeeping
+	# handoff, not a move, so there's nothing to visually pop or ease.
+	# Yaw/pitch are left alone for the same reason — you keep looking
+	# exactly the way you were.
+	var camera_world_pos := _pivot.position + _pivot.basis * Vector3(0.0, 0.0, _orbit_offset)
 	_focused_body = null
+	_pivot.position = camera_world_pos
+	_pan_target = camera_world_pos
+	_orbit_offset = 0.0
+	_camera.position = Vector3.ZERO
+	# Distance itself still resets — now that it's purely the free-fly
+	# speed dial once unfocused (see FREE_FLY_SPEED_MULT), not a camera-
+	# position input, resetting it can't reintroduce the sweep above; it
+	# just brings WASD speed back to a sane default instead of staying
+	# crawl-slow from whatever close-up zoom you were just at.
 	_target_distance = STOCK_DISTANCE
-	_yaw = STOCK_YAW
-	_pitch = STOCK_PITCH
-	_update_camera()
 
 	if _line_tween != null:
 		_line_tween.kill()
@@ -453,6 +908,27 @@ func _clear_focus() -> void:
 	_scan_prompt.reset()
 	_lock_button.reset()
 	_callout_go_btn.visible = false
+
+
+# The "I flew off into empty space and got lost" recovery — unlike Esc/
+# _clear_focus above (which now deliberately leaves the camera exactly
+# where it is), this is SUPPOSED to sweep back to the stock Sol-centered
+# view, so it resets yaw/pitch and recomputes the stock pan target the same
+# way _clear_focus used to before that changed. Calls _clear_focus first
+# so a still-focused body gets properly deselected (UI reset, etc.) as
+# part of the same action, then overrides the position/rotation targets
+# it just set.
+func _recenter() -> void:
+	_clear_focus()
+	_yaw = STOCK_YAW
+	_pitch = STOCK_PITCH
+	_update_camera()
+	# Same "pulled back" trick _build_camera uses for the initial view (see
+	# its own comment); _pivot.basis is already correct since _update_camera
+	# just applied the new rotation above. Only _pan_target is set, not
+	# _pivot.position directly — the existing pivot-follow lerp in _process
+	# sweeps there smoothly instead of snapping.
+	_pan_target = _pivot.basis * Vector3(0.0, 0.0, STOCK_DISTANCE)
 
 
 # --- Callout ---
@@ -670,8 +1146,18 @@ func _type_callout_label(for_body: Node3D) -> void:
 		# starts once SCAN is actually pressed (_on_scan_requested).
 		_scan_prompt.present(for_body.name)
 		# LOCK isn't gated behind scanning at all — you can commit to a
-		# destination you've never scanned.
-		_lock_button.present(for_body.name)
+		# destination you've never scanned. It IS gated behind having a real
+		# KnownBodies entry, though — Cockpit's whole transit-build sequence
+		# (_build_transit) looks the destination up via KnownBodies.get_entry
+		# and silently skips building a flight path at all if that's null.
+		# This now passes for asteroids too — get_entry synthesizes a real
+		# Entry for any REGISTERED one (see KnownBodies._synthesize_asteroid_
+		# entry / Research.register_asteroid_orbit, called the instant this
+		# asteroid was actually spawned) — so a body that's visible/
+		# selectable here has always already been registered, and this never
+		# blocks a real, clickable asteroid.
+		if KnownBodies.get_entry(for_body.name) != null:
+			_lock_button.present(for_body.name)
 		if Discoveries.is_scanned(for_body.name):
 			var entry := KnownBodies.get_entry(for_body.name)
 			if entry != null:

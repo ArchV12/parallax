@@ -12,13 +12,14 @@ extends Control
 # layered on top, never absorbed into this shape — see the cockpit-console
 # design conversation in parallax-core-design-decisions memory.
 #
-# Read left to right: SYSTEM, GO on the left wing; COMMAND, RESEARCH,
+# Read left to right: SYSTEM, CARGO, GO on the left wing; COMMAND, RESEARCH,
 # DATABASE on the right (mirrored). COMMAND/DATABASE have no systems behind
 # them yet — left fully interactive (hover/press feedback) rather than
 # disabled, they just have nothing connected to `pressed`, so a click
-# no-ops. GO and RESEARCH are wired (RESEARCH opens HUD's ResearchPanel —
-# Docs/Science and Knowledge System - Implementation Roadmap.md, Phase 4).
-# GO is the travel-commit
+# no-ops. GO, RESEARCH, and CARGO are wired (RESEARCH opens HUD's
+# ResearchPanel — Docs/Science and Knowledge System - Implementation
+# Roadmap.md, Phase 4; CARGO opens HUD's CargoPanel, same shape). GO is the
+# travel-commit
 # action once a destination is locked (see LockButton.gd / Destination
 # autoload, reached from a target's callout in System/Planetary System view
 # — never from the console itself): pressing it starts a PlayerState trip
@@ -37,6 +38,7 @@ extends Control
 
 signal system_pressed
 signal research_pressed
+signal cargo_pressed
 
 const HEIGHT_CENTER := 150.0
 const HEIGHT_EDGE := 56.0
@@ -45,7 +47,7 @@ const CENTER_WIDTH_FRAC := 0.42
 const EDGE_HALO_WIDTH := 6.0
 const EDGE_CORE_WIDTH := 1.5
 
-const LEFT_LABELS := ["SYSTEM", "GO"]
+const LEFT_LABELS := ["SYSTEM", "CARGO", "GO"]
 const RIGHT_LABELS := ["COMMAND", "RESEARCH", "DATABASE"]
 
 var _left_buttons: Array[ConsolePadButton] = []
@@ -118,7 +120,8 @@ func _ready() -> void:
 		add_child(btn)
 
 	_left_buttons[0].pressed.connect(func() -> void: system_pressed.emit())
-	_left_buttons[1].pressed.connect(_on_go_pressed)
+	_left_buttons[1].pressed.connect(func() -> void: cargo_pressed.emit())
+	_left_buttons[2].pressed.connect(_on_go_pressed)
 	# press_sfx itself is kept live by _refresh_destination_readout (called
 	# below, and on every subsequent destination/travel change) rather than
 	# fixed here — it swaps between "go_button" and "error" depending on
@@ -360,7 +363,7 @@ func _refresh_destination_readout() -> void:
 	# like a no-op rather than a real GO is to swap which sfx is armed
 	# BEFORE the click, here, rather than trying to override it after the
 	# fact from inside _on_go_pressed.
-	_left_buttons[1].press_sfx = "go_button" if has_dest else "error"
+	_left_buttons[2].press_sfx = "go_button" if has_dest else "error"
 
 	if PlayerState.is_traveling:
 		_dest_header.text = "EN ROUTE TO %s" % PlayerState.travel_target_id.to_upper()

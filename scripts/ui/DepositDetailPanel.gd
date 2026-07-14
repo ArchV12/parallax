@@ -128,8 +128,10 @@ func open_for(body_id: String, material_name: String, ship_busy: bool) -> void:
 
 	_title_label.text = material_name.to_upper()
 	_size_value.text = deposit.deposit_size
-	var total: int = Deposits.TOTAL_UNITS_BY_SIZE.get(deposit.deposit_size, Deposits.TOTAL_UNITS_BY_SIZE[Deposits.DEFAULT_DEPOSIT_SIZE])
-	_total_value.text = "%s units" % _format_units(total)
+	# Deposits.total_units(), not the raw TOTAL_UNITS_BY_SIZE tier lookup —
+	# the actual (size-scaled) total this specific body's deposit holds, not
+	# the same number every body of this tier would show regardless of size.
+	_total_value.text = "%s units" % Deposits.format_units(Deposits.total_units(deposit))
 	_remaining_value.text = "%d%%" % roundi(deposit.remaining_fraction * 100.0)
 	_difficulty_value.text = deposit.extraction_difficulty
 	var rate := Deposits.extraction_rate_per_second(deposit)
@@ -147,18 +149,3 @@ func open_for(body_id: String, material_name: String, ship_busy: bool) -> void:
 func _on_begin_pressed() -> void:
 	_panel.close_animated()
 	begin_requested.emit(_body_id, _material_name)
-
-
-# Thousands-separated integer — "big numbers feel good for the player"
-# (per the user's own framing), so a bare "1000000" reading as a wall of
-# digits would undercut the whole point of scaling deposits up this far.
-static func _format_units(n: int) -> String:
-	var digits := str(n)
-	var result := ""
-	var count := 0
-	for i in range(digits.length() - 1, -1, -1):
-		result = digits[i] + result
-		count += 1
-		if count % 3 == 0 and i != 0:
-			result = "," + result
-	return result

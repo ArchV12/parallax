@@ -186,6 +186,16 @@ static func estimate(from_id: String, to_id: String, accel_km_s2: float = ENGINE
 
 	var local := _same_system(from_entry, to_entry)
 	var distance_km := _real_distance_km(from_entry, to_entry)
+	# A same-system trip (moon<->parent, etc.) already uses a REAL distance
+	# (parent_distance_km) — never overridden. An interplanetary trip TO
+	# the currently locked destination uses the true snapshot distance
+	# captured the moment it was locked instead — see Destination.
+	# locked_distance_km's own comment for why this beats the radial-only
+	# |au_from - au_to| approximation _real_distance_km falls back to
+	# otherwise (it has no notion of WHERE around its orbit a body
+	# currently sits, only how far out).
+	if not local and to_id == Destination.locked_id and Destination.locked_distance_km >= 0.0:
+		distance_km = Destination.locked_distance_km
 	var profile := flight_profile(distance_km, accel_km_s2, cruise_cap_km_s)
 	var burn_duration: float = profile["burn_duration"]
 	var duration := maxf(DEPARTURE_HOLD_SECONDS + burn_duration + ARRIVAL_HOLD_SECONDS, MIN_DURATION_SECONDS)

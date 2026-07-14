@@ -2,8 +2,22 @@ class_name CraterField
 extends RefCounted
 
 # Shared impact-crater placement + height evaluation, used by any generator
-# with a cratered airless surface (moons, asteroids...) so the profile only
-# has to be tuned in one place.
+# with a cratered airless surface (moons, asteroids, comet nuclei...) so the
+# profile only has to be tuned in one place.
+#
+# make() returns packed arrays ({"centers": PackedVector3Array, "radii":
+# PackedFloat32Array}), not an Array of {"center","radius"} Dictionaries
+# like it used to (2026-07-13). height_at() runs once per mesh VERTEX per
+# crater — at high crater counts (up to 400) and high mesh detail, that's
+# well into the tens of millions of iterations for a single body, and a
+# scene spawning dozens of bodies at once (SystemView's asteroid field) pays
+# that cost dozens of times over in one synchronous burst. Dictionary key
+# lookups in that inner loop turned out to dominate the whole cost — visibly
+# stalling the game for several seconds — where packed-array indexing (flat,
+# contiguous, no per-access hashing) does not. The one-time crater ROLL
+# below still builds/sorts an Array of Dictionaries internally, same as
+# before — that only runs once per body, never per vertex, so it was never
+# the hot path.
 
 # `size` is the MAXIMUM crater radius (as a fraction of body radius), not
 # the average — sizes follow a rough power law below it, like real impact
@@ -14,33 +28,41 @@ extends RefCounted
 # rather than spending the budget on sub-pixel pits. (Earlier version
 # rolled uniform 0.35-1.7x around an average — craters all came out
 # roughly the same middling size, which reads as artificial.)
-static func make(rng: RandomNumberGenerator, density: float, size: float) -> Array:
+static func make(rng: RandomNumberGenerator, density: float, size: float) -> Dictionary:
 	# Ceiling must stay == cratered_surface.gdshader's MAX_CRATERS (its
 	# uniform arrays are fixed-size). 400 because max density should read as
 	# genuinely PEPPERED — the old 140 cap spread over a whole sphere still
 	# looked sparse, especially now that the power-law size roll makes most
 	# craters small.
 	var count := int(lerpf(6.0, 400.0, density))
-	var craters: Array = []
+	var rolled: Array = []
 	for i in count:
 		# Random points on the unit sphere via Marsaglia's method (three
 		# independent normals, normalized) — plain random spherical
 		# coordinates would bunch craters near the poles.
 		var center := Vector3(rng.randfn(), rng.randfn(), rng.randfn()).normalized()
 		var size_frac := lerpf(0.12, 1.0, pow(rng.randf(), 2.5))
-		craters.append({"center": center, "radius": size * size_frac})
+		rolled.append({"center": center, "radius": size * size_frac})
 	# Biggest first: list order is impact order (height_at overwrites in
 	# order, later = younger), and on real bodies the giant impacts are
 	# overwhelmingly ancient — sorting descending means small young craters
 	# pepper the floors and rims of the big old ones (the classic lunar
 	# look), and a late giant never wipes an entire small-crater field.
-	craters.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a["radius"] > b["radius"])
-	return craters
+	rolled.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a["radius"] > b["radius"])
+
+	var centers := PackedVector3Array()
+	var radii := PackedFloat32Array()
+	centers.resize(rolled.size())
+	radii.resize(rolled.size())
+	for i in rolled.size():
+		centers[i] = rolled[i]["center"]
+		radii[i] = rolled[i]["radius"]
+	return {"centers": centers, "radii": radii}
 
 
 # Height contribution (as a fraction of body radius) at a surface point.
-# Craters apply in LIST ORDER, each overwriting whatever is beneath its
-# footprint (list order = impact order; later craters are younger) — real
+# Craters apply in ARRAY ORDER, each overwriting whatever is beneath its
+# footprint (array order = impact order; later craters are younger) — real
 # stratigraphy: a younger impact's bowl erases any older rim arc it lands
 # on, and its own rim cuts cleanly across older bowls. Not a sum (summing
 # overlaps stacks into implausibly deep pits in dense fields), and not
@@ -53,13 +75,16 @@ static func make(rng: RandomNumberGenerator, density: float, size: float) -> Arr
 # The overwrite fades over the outer falloff annulus (x 1.0..1.25) so a
 # young crater's surroundings still blend into the older terrain instead
 # of stamping a hard-edged disc of flatness around itself.
-static func height_at(unit: Vector3, craters: Array, depth: float) -> float:
+#
+# Takes the two packed arrays directly rather than make()'s wrapping
+# Dictionary — callers pull those out ONCE before their vertex loop (see
+# MoonGenerator/AsteroidGenerator/CometGenerator), not once per vertex.
+static func height_at(unit: Vector3, centers: PackedVector3Array, radii: PackedFloat32Array, depth: float) -> float:
 	var h := 0.0
-	for crater: Dictionary in craters:
-		var center: Vector3 = crater["center"]
-		var radius: float = crater["radius"]
+	for i in centers.size():
+		var radius := radii[i]
 		var max_reach := radius * 1.25
-		var d2 := unit.distance_squared_to(center)
+		var d2 := unit.distance_squared_to(centers[i])
 		if d2 > max_reach * max_reach:
 			continue
 		var x := sqrt(d2) / radius

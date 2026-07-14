@@ -7,6 +7,7 @@ var _music_slider:   HSlider
 var _sfx_slider:     HSlider
 var _ambient_slider: HSlider
 var _theme_option:   OptionButton
+var _movement_keys_option: OptionButton
 var _skip_intro_check: CheckBox
 var _panel:          UIPanel
 
@@ -118,6 +119,37 @@ func _build() -> void:
 
 	vbox.add_child(HSeparator.new())
 
+	var controls_title := Label.new()
+	controls_title.text = "CONTROLS"
+	controls_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	controls_title.add_theme_font_size_override("font_size", 13)
+	controls_title.add_theme_color_override("font_color", UITheme.accent)
+	vbox.add_child(controls_title)
+
+	var movement_row := HBoxContainer.new()
+	movement_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(movement_row)
+
+	var movement_lbl := Label.new()
+	movement_lbl.text = "Movement Keys"
+	movement_lbl.add_theme_font_size_override("font_size", 13)
+	movement_lbl.add_theme_color_override("font_color", UITheme.text)
+	movement_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	movement_row.add_child(movement_lbl)
+
+	# Unlike the theme dropdown above, this is safe to change in-game — every
+	# consumer (SystemView's free-fly, Cockpit's roll) reads ControlScheme.
+	# scheme live every frame rather than baking it into a built node, so a
+	# mid-session switch takes effect on the very next frame.
+	_movement_keys_option = OptionButton.new()
+	for scheme_name: String in ControlScheme.scheme_names():
+		_movement_keys_option.add_item(scheme_name)
+	_movement_keys_option.selected = ControlScheme.scheme
+	_movement_keys_option.item_selected.connect(_on_movement_keys_selected)
+	movement_row.add_child(_movement_keys_option)
+
+	vbox.add_child(HSeparator.new())
+
 	var gameplay_title := Label.new()
 	gameplay_title.text = "GAMEPLAY"
 	gameplay_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -198,6 +230,10 @@ func _on_ambient_changed(value: float) -> void:
 
 func _on_skip_intro_toggled(_pressed: bool) -> void:
 	_save()
+
+
+func _on_movement_keys_selected(idx: int) -> void:
+	ControlScheme.set_scheme(idx as ControlScheme.Scheme)
 
 
 # UITheme.set_flavor() notifies listeners immediately, but this panel's own

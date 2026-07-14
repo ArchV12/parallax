@@ -127,14 +127,27 @@ const MOON_KNOBS: Array = [
 ]
 
 # Irregular base shape (not a bumped sphere) plus the same cratering as Moon.
+# Irregularity/elongation max were 1.2/1.5 until 2026-07-13, tightened once
+# to 0.8/0.6 the same day, then to these current caps after further
+# hands-on experimentation settled on what actually looks like a real
+# asteroid rather than a spiky/over-cratered one: irregularity 0.6, crater
+# density and max size both 0.25, crater depth 0.1. SystemView's own
+# in-game rolls (_build_asteroid_body) were tightened to match.
 const ASTEROID_KNOBS: Array = [
 	["radius",         ["Radius",         0.03, 0.3,  0.12, false]],
-	["irregularity",   ["Irregularity",   0.0,  1.2,  0.5,  false]],
-	["elongation",     ["Elongation",     0.0,  1.5,  0.3,  false]],
-	["crater_density", ["Crater Density", 0.0,  1.0,  0.5,  false]],
-	["crater_size",    ["Max Crater Size", 0.05, 0.65, 0.35, false]],
-	["crater_depth",   ["Crater Depth",   0.01, 0.15, 0.08, false]],
-	["detail",         ["Mesh Detail",    3.0,  6.0,  4.0,  true]],
+	["irregularity",   ["Irregularity",   0.0,  0.6,  0.5,  false]],
+	["elongation",     ["Elongation",     0.0,  0.6,  0.3,  false]],
+	["crater_density", ["Crater Density", 0.0,  0.25, 0.15, false]],
+	["crater_size",    ["Max Crater Size", 0.05, 0.25, 0.18, false]],
+	["crater_depth",   ["Crater Depth",   0.01, 0.1,  0.08, false]],
+	# Capped at 5, not 6 like Moon/other bodies — icosphere vertex count
+	# roughly quadruples per detail level, and asteroids need to generate
+	# FAST since a system can spawn 70-100+ of them at once (see SystemView.
+	# _build_asteroids); detail 6 was a noticeable, audible-fan-spin-up jump
+	# in generation time for a body this small on screen anyway. In-game
+	# asteroids use detail 3 regardless (_build_asteroid_body) — this cap is
+	# purely so Cosmic Forge tuning can't wander into that cost by accident.
+	["detail",         ["Mesh Detail",    3.0,  5.0,  4.0,  true]],
 ]
 
 # Self-luminous — no terrain/ocean/atmosphere-day-side concepts apply.
@@ -234,9 +247,12 @@ const PLUTO_KNOBS: Array = [
 
 # Icy irregular nucleus (same deformation technique as Asteroid) + coma +
 # tail. Tail direction is patched in by _regenerate(), not this knob set.
+# Irregularity max tightened alongside ASTEROID_KNOBS' own — same "spiky,
+# not lumpy" failure mode at extreme values, same geometry floor now
+# guarding against it, see CometGenerator._build_nucleus.
 const COMET_KNOBS: Array = [
 	["radius",         ["Radius",         0.03, 0.3,  0.1,  false]],
-	["irregularity",   ["Irregularity",   0.0,  1.2,  0.6,  false]],
+	["irregularity",   ["Irregularity",   0.0,  0.8,  0.6,  false]],
 	["crater_density", ["Crater Density", 0.0,  1.0,  0.3,  false]],
 	["crater_size",    ["Max Crater Size", 0.05, 0.65, 0.32, false]],
 	["crater_depth",   ["Crater Depth",   0.01, 0.15, 0.06, false]],

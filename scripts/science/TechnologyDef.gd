@@ -17,3 +17,11 @@ extends Resource
 @export_multiline var unlock_text: String = ""
 
 @export var grants_instrument: InstrumentDef
+
+# Material name -> required amount, e.g. {"Iron": 200, "Silicon": 150} — same
+# freeform-string-keyed shape as knowledge_requirements, matched against
+# Deposits.material_amount(). Empty (the default) means this tier still
+# auto-grants the instant knowledge_requirements are met, same as before
+# materials existed (see Research._check_milestones) — only a tech with a
+# real cost here needs an explicit Research.craft_technology() call.
+@export var materials_requirements: Dictionary[String, int] = {}

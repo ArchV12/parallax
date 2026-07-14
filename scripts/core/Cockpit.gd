@@ -70,6 +70,13 @@ const LUNA_RADIUS := 4.0
 const MOON_MIN_RADIUS := 0.6
 const MOON_RADIUS_SCALE := 14.0
 const MOON_MAX_RADIUS := 4.5
+# Asteroids' own display-radius range — deliberately smaller than even
+# MOON_MIN_RADIUS above, so the smallest asteroid still reads as clearly
+# tinier than the smallest curated moon. See _primary_radius_for's asteroid
+# branch — real_radius_km (0.3-20km, see AsteroidResourceGenerator) maps
+# linearly onto this range, not real-to-scale.
+const ASTEROID_DISPLAY_RADIUS_MIN := 0.15
+const ASTEROID_DISPLAY_RADIUS_MAX := 0.5
 # Sol's display radius is NOT a hand-tuned constant like every other body
 # here — now that distance is a true linear AU scale (see
 # PLANET_DIST_AU_TO_UNITS below), Sol's real radius can be run through that
@@ -434,13 +441,14 @@ func _process(delta: float) -> void:
 		if not _primary_is_universe_body:
 			_primary.rotate_y(SPIN * delta)
 		_orbit_angle += ORBIT_ANGULAR_SPEED * delta
-		# A/D roll — only live here, while genuinely parked in the idle
-		# orbit view (not mid-transit, not mid-settle-lean); see
-		# _roll_angle's own comment for why this is the only place it moves.
+		# Left/right roll (A/D, or S/F under ESDF — see ControlScheme) — only
+		# live here, while genuinely parked in the idle orbit view (not
+		# mid-transit, not mid-settle-lean); see _roll_angle's own comment
+		# for why this is the only place it moves.
 		var roll_input := 0.0
-		if Input.is_physical_key_pressed(KEY_D):
+		if ControlScheme.is_right_pressed():
 			roll_input -= 1.0
-		if Input.is_physical_key_pressed(KEY_A):
+		if ControlScheme.is_left_pressed():
 			roll_input += 1.0
 		_roll_angle += deg_to_rad(ROLL_SPEED_DEG) * roll_input * delta
 		_update_orbit_camera()
@@ -555,7 +563,7 @@ func _build_universe() -> void:
 	var sol_pos := _camera_base_forward * SOL_DISTANCE
 	_sol_position = sol_pos
 	_universe_positions[sol_entry.body_name] = sol_pos
-	var sol_display_radius := sol_entry.real_radius_km * KM_TO_UNITS
+	var sol_display_radius := _primary_radius_for(sol_entry)
 	var sol_params := sol_entry.to_params(sol_display_radius)
 	# KnownBodies' emission_energy (1.5) is tuned for Cosmic Forge's plain
 	# viewer — barely above env.glow_hdr_threshold there, so bloom would be
@@ -709,11 +717,31 @@ func _moon_anchor_pos(entry: KnownBodies.Entry) -> Vector3:
 	return parent_pos + _seeded_direction(entry.body_name, MOON_ANCHOR_CONE_DEG) * dist
 
 
+# --- Asteroids (never persistent — spawned ad hoc, anchored to Sol like a
+# planet, NOT to a parent like a moon — see KnownBodies._synthesize_
+# asteroid_entry, which is what gives entry.au_distance/body_type here) ---
+
+func _asteroid_anchor_pos(entry: KnownBodies.Entry) -> Vector3:
+	var dist := entry.au_distance * PLANET_DIST_AU_TO_UNITS
+	return _sol_position + _seeded_direction(entry.body_name, PLANET_CONE_DEG) * dist
+
+
+func _spawn_asteroid_body(entry: KnownBodies.Entry) -> Node3D:
+	var radius := _primary_radius_for(entry)
+	var body := _generate_body(entry, radius)
+	body.position = _asteroid_anchor_pos(entry)
+	body.rotation.y = randf_range(0.0, TAU)
+	add_child(body)
+	return body
+
+
 # Position of ANY body, real or moon, WITHOUT spawning anything — used for
 # where we're departing FROM (which never needs its own node during transit).
 func _body_anchor_pos(entry: KnownBodies.Entry) -> Vector3:
 	if _universe_positions.has(entry.body_name):
 		return _universe_positions[entry.body_name]
+	if entry.body_type == "Asteroid":
+		return _asteroid_anchor_pos(entry)
 	return _moon_anchor_pos(entry)
 
 
@@ -737,6 +765,8 @@ func _spawn_moon_body(entry: KnownBodies.Entry) -> Node3D:
 # (it was silently falling back to fallback_color/Color.WHITE, since
 # texture_subdir is only ever set for canonical-art entries).
 func _generate_body(entry: KnownBodies.Entry, radius: float) -> Node3D:
+	if entry.body_type == "Asteroid":
+		return _generate_asteroid_body(entry, radius)
 	if entry.use_canonical_art:
 		return CanonicalBodyGenerator.generate(entry.to_params(radius))
 	var rng := RandomNumberGenerator.new()
@@ -753,6 +783,32 @@ func _generate_body(entry: KnownBodies.Entry, radius: float) -> Node3D:
 	params.crater_depth = rng.randf_range(0.03, 0.08)
 	params.detail = 4
 	var body := MoonGenerator.generate(params)
+	body.name = entry.body_name
+	return body
+
+
+# Same AsteroidGenerator/AsteroidParams SystemView's own map uses, and the
+# same tightened knob ranges (see SystemView.gd's ASTEROID_BELT_
+# INCLINATION_MAX_DEG-era comment) so an asteroid's LOOK stays consistent
+# with what the game has already established, even though this seeds a
+# fresh RNG stream independently rather than replaying SystemView's exact
+# draw sequence — the same asteroid won't render pixel-identical in both
+# views, only similarly-styled, same as this was never a goal for any other
+# body's shape either (only Luna keeps true cross-view identical art).
+func _generate_asteroid_body(entry: KnownBodies.Entry, radius: float) -> Node3D:
+	var seed_hash := entry.body_name.hash()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_hash
+	var params := AsteroidParams.new()
+	params.seed_value = seed_hash
+	params.radius = radius
+	params.irregularity = rng.randf_range(0.35, 0.6)
+	params.elongation = rng.randf_range(0.15, 0.45)
+	params.crater_density = rng.randf_range(0.1, 0.25)
+	params.crater_size = rng.randf_range(0.12, 0.25)
+	params.crater_depth = rng.randf_range(0.05, 0.1)
+	params.detail = 4  # a close-up, one-at-a-time view, unlike SystemView's many-at-once map — affords a bit more detail
+	var body := AsteroidGenerator.generate(params)
 	body.name = entry.body_name
 	return body
 
@@ -795,12 +851,17 @@ func _build_arrival(location_id: String) -> void:
 		_primary = _universe_bodies[location_id]
 		_primary_is_universe_body = true
 	else:
-		# A moon — reuse the node _build_transit already spawned for this
-		# trip if there is one (same object the whole flight, no swap —
-		# what used to be a "reuse_body" hand-off is now just "it was
-		# already real the entire time"); otherwise (a cold load straight
-		# into a moon) spawn fresh.
-		_primary = _transit_body if _transit_body != null else _spawn_moon_body(entry)
+		# A moon or an asteroid — reuse the node _build_transit already
+		# spawned for this trip if there is one (same object the whole
+		# flight, no swap — what used to be a "reuse_body" hand-off is now
+		# just "it was already real the entire time"); otherwise (a cold
+		# load straight into one) spawn fresh.
+		if _transit_body != null:
+			_primary = _transit_body
+		elif entry.body_type == "Asteroid":
+			_primary = _spawn_asteroid_body(entry)
+		else:
+			_primary = _spawn_moon_body(entry)
 		_primary_is_universe_body = false
 	_transit_body = null  # bookkeeping only — if it was just claimed as _primary above, the node itself lives on
 	# Snap the sun instantly only on a genuine cold load (nothing was
@@ -981,9 +1042,21 @@ func _begin_orbit_settle() -> void:
 
 func _primary_radius_for(entry: KnownBodies.Entry) -> float:
 	match entry.body_name:
+		"Sol": return entry.real_radius_km * KM_TO_UNITS  # real-scale, not the generic planet formula below — see _build_universe's sol_display_radius, which shares this
 		"Earth": return EARTH_RADIUS
 		"Luna": return LUNA_RADIUS
 		_:
+			if entry.body_type == "Asteroid":
+				# Stylized, NOT real-to-scale like Sol above — a genuinely
+				# few-km body rendered at this scene's real-world AU/KM
+				# scale would be smaller than a pixel and effectively
+				# invisible on arrival. Same "compressed, not to scale"
+				# precedent moons already set (see MOON_MIN_RADIUS's own
+				# comment) — just a smaller, asteroid-specific range, since
+				# these should read as meaningfully tinier than even the
+				# smallest curated moon.
+				var t := clampf(entry.real_radius_km / AsteroidResourceGenerator.RADIUS_MAX_KM, 0.0, 1.0)
+				return lerpf(ASTEROID_DISPLAY_RADIUS_MIN, ASTEROID_DISPLAY_RADIUS_MAX, t)
 			if entry.parent != "":  # a moon, not a planet — see MOON_MIN_RADIUS's own comment for why this needs its own curve
 				return clampf(MOON_MIN_RADIUS + MOON_RADIUS_SCALE * entry.radius_ratio, MOON_MIN_RADIUS, MOON_MAX_RADIUS)
 			return clampf(2.0 + 3.0 * sqrt(entry.radius_ratio), 1.5, 8.0)
@@ -1072,7 +1145,7 @@ func _build_transit() -> void:
 		if _universe_bodies.has(target_id):
 			end_body = _universe_bodies[target_id]
 		else:
-			end_body = _spawn_moon_body(entry)
+			end_body = _spawn_asteroid_body(entry) if entry.body_type == "Asteroid" else _spawn_moon_body(entry)
 			_transit_body = end_body
 
 		# The destination's moons become real NOW, not at arrival — they're

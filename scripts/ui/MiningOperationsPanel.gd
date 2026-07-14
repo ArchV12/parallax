@@ -94,6 +94,7 @@ func _build_deposit_row(deposit: DepositInfo) -> Control:
 	UITheme.style_button(btn, UITheme.button, UITheme.button_hov, UITheme.border, 4, false)
 	btn.pressed.connect(func() -> void:
 		AudioManager.ui_confirm()  # a raw Button, not UIButton — has to do this itself
+		_panel.close_animated()  # this panel's own list — DepositDetailPanel is a separate popup layered on top, not nested inside it, so it has to close itself explicitly or it just sits there behind/through the detail panel
 		_detail_panel.open_for(_body_id, deposit.material_name, _ship_busy))
 	wrapper.add_child(btn)
 

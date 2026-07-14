@@ -40,15 +40,19 @@ static func generate(params: MoonParams) -> Node3D:
 
 
 static func _build_terrain(params: MoonParams, base_noise: FastNoiseLite,
-		craters: Array, palette: Dictionary, rng: RandomNumberGenerator) -> MeshInstance3D:
+		craters: Dictionary, palette: Dictionary, rng: RandomNumberGenerator) -> MeshInstance3D:
 	var sphere := Icosphere.build(params.detail)
 	var verts: PackedVector3Array = sphere[0]
 	var indices: PackedInt32Array = sphere[1]
+	# Pulled out of the Dictionary ONCE, not once per vertex — see
+	# CraterField's own class comment on why that distinction matters.
+	var centers: PackedVector3Array = craters["centers"]
+	var radii: PackedFloat32Array = craters["radii"]
 
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for unit in verts:
-		var h := _height_at(unit, base_noise, craters, params)
+		var h := _height_at(unit, base_noise, centers, radii, params)
 		st.add_vertex(unit * params.radius * (1.0 + h))
 	for idx in indices:
 		st.add_index(idx)
@@ -57,26 +61,23 @@ static func _build_terrain(params: MoonParams, base_noise: FastNoiseLite,
 	var mi := MeshInstance3D.new()
 	mi.name = "Terrain"
 	mi.mesh = st.commit()
-	mi.material_override = _build_material(params, craters, palette, rng)
+	mi.material_override = _build_material(craters, palette, rng)
 	return mi
 
 
-static func _build_material(params: MoonParams, craters: Array, palette: Dictionary,
-		rng: RandomNumberGenerator) -> ShaderMaterial:
-	# `craters` is at most 400 entries (CraterField.make's own cap, since
-	# crater_density is clamped to [0, 1]) — matches cratered_surface.gdshader's
-	# MAX_CRATERS array size exactly, so every entry here always fits.
-	var centers := PackedVector3Array()
-	var radii := PackedFloat32Array()
-	for crater: Dictionary in craters:
-		centers.append(crater["center"])
-		radii.append(crater["radius"])
+static func _build_material(craters: Dictionary, palette: Dictionary, rng: RandomNumberGenerator) -> ShaderMaterial:
+	# centers/radii are at most 400 entries each (CraterField.make's own cap,
+	# since crater_density is clamped to [0, 1]) — matches
+	# cratered_surface.gdshader's MAX_CRATERS array size exactly, so every
+	# entry here always fits.
+	var centers: PackedVector3Array = craters["centers"]
+	var radii: PackedFloat32Array = craters["radii"]
 
 	var mat := ShaderMaterial.new()
 	mat.shader = TERRAIN_SHADER
 	mat.set_shader_parameter("crater_centers", centers)
 	mat.set_shader_parameter("crater_radii", radii)
-	mat.set_shader_parameter("crater_count", craters.size())
+	mat.set_shader_parameter("crater_count", centers.size())
 	# No crater_depth uniform — the shader shades in raw profile units so the
 	# palette always spans dark bowls to bright rims; crater_depth remains a
 	# pure geometry knob (how deep the mesh displacement actually is).
@@ -90,9 +91,10 @@ static func _build_material(params: MoonParams, craters: Array, palette: Diction
 	return mat
 
 
-static func _height_at(unit: Vector3, base_noise: FastNoiseLite, craters: Array, params: MoonParams) -> float:
+static func _height_at(unit: Vector3, base_noise: FastNoiseLite,
+		centers: PackedVector3Array, radii: PackedFloat32Array, params: MoonParams) -> float:
 	var h := base_noise.get_noise_3dv(unit) * params.surface_roughness
-	return h + CraterField.height_at(unit, craters, params.crater_depth)
+	return h + CraterField.height_at(unit, centers, radii, params.crater_depth)
 
 
 # Seed-derived color scheme. Mostly desaturated grays (regolith), with an

@@ -19,6 +19,14 @@ extends Node
 # being told, and defaults to hidden so a forgotten call fails safe (no HUD)
 # rather than leaking gameplay chrome onto a menu screen.
 
+# Re-clicking the already-active ViewSwitcher tab is a no-op for most views,
+# but System view's free-fly camera has a real use for it — "recenter,"
+# for whenever you've flown off into empty space chasing asteroids and lost
+# track of where you are. Relayed rather than handled here since HUD (an
+# autoload) has no direct reference to whatever view scene is currently
+# loaded; System view connects to this itself in its own _ready().
+signal recenter_requested
+
 const TRANSITION_FADE_TIME := 0.18
 const TRANSITION_HOLD_TIME := 0.05
 
@@ -36,6 +44,7 @@ var _fps_label: Label
 var _cheat_engine_label: Label
 var _pause_menu: PauseMenu
 var _research_panel: ResearchPanel
+var _cargo_panel: CargoPanel
 var _cheat_menu: CheatMenu
 var _operation_toast: OperationToast
 
@@ -126,11 +135,13 @@ func _build_hud() -> void:
 
 	_view_switcher = ViewSwitcher.new()
 	_view_switcher.view_selected.connect(go_to)
+	_view_switcher.active_tab_reclicked.connect(_on_active_tab_reclicked)
 	_hud_layer.add_child(_view_switcher)
 
 	_console = ConsolePanel.new()
 	_console.system_pressed.connect(open_system_menu)
 	_console.research_pressed.connect(open_research_panel)
+	_console.cargo_pressed.connect(open_cargo_panel)
 	_hud_layer.add_child(_console)
 
 	# Subscribed directly here, not in a per-scene script like Cockpit.gd's
@@ -151,27 +162,38 @@ func _build_hud() -> void:
 	Research.milestone_reached.connect(_on_milestone_reached)
 
 
-# Mining-kind only — the mining-start.ogg/mining-loop.ogg cue (see
-# AudioManager.mining_start) needs to fire the instant the operation
-# actually starts, same "regardless of which view is active" reasoning as
-# the rest of this subscription block: Mining can be STARTED only from
-# Cockpit's ActivitiesPanel today, but the player could switch away to
-# System View a moment later while it keeps running, so this can't live in
-# a Cockpit-only script the way a lot of earlier per-scene wiring did.
+# Fires the right start cue (mining-start.ogg/mining-loop.ogg or survey_
+# start.ogg/survey.ogg — see AudioManager.mining_start/survey_start) the
+# instant an operation actually starts, same "regardless of which view is
+# active" reasoning as the rest of this subscription block: an operation
+# can be STARTED only from Cockpit's ActivitiesPanel today, but the player
+# could switch away to System View a moment later while it keeps running,
+# so this can't live in a Cockpit-only script the way a lot of earlier
+# per-scene wiring did. Mining is the one activity_id with its own distinct
+# continuous shape (see Operations' class comment) — everything else that
+# reaches operation_started is survey-kind.
 func _on_operation_started(op_id: String) -> void:
 	var op := Operations.get_operation(op_id)
-	if op != null and op.activity_id == "mining":
+	if op == null:
+		return
+	if op.activity_id == "mining":
 		AudioManager.mining_start()
+	else:
+		AudioManager.survey_start()
 
 
 # Survey-kind only — Mining never reaches operation_completed at all (see
 # Operations.operation_stopped/_on_operation_stopped below). Text is driven
 # by the ActivityDef's own display_name rather than a hardcoded per-
-# activity_id string.
+# activity_id string. Cuts the survey.ogg ambient and plays survey_complete.
+# ogg (see AudioManager.survey_complete) — this handler being survey-kind-
+# only already is exactly why that call doesn't need its own activity_id
+# check here.
 func _on_operation_completed(op_id: String) -> void:
 	var op := Operations.get_operation(op_id)
 	if op == null:
 		return
+	AudioManager.survey_complete()
 	var def := Research.activity_def(op.activity_id)
 	var name := def.display_name.to_upper() if def != null else op.activity_id.to_upper()
 	_operation_toast.show_toast("%s COMPLETE — %s" % [name, op.location_id])
@@ -210,6 +232,8 @@ func _build_pause() -> void:
 	_pause_layer.add_child(_pause_menu)
 	_research_panel = ResearchPanel.new()
 	_pause_layer.add_child(_research_panel)
+	_cargo_panel = CargoPanel.new()
+	_pause_layer.add_child(_cargo_panel)
 
 
 func _build_debug() -> void:
@@ -261,6 +285,7 @@ func hide_hud() -> void:
 	_hud_layer.visible = false
 	_pause_menu.force_close()
 	_research_panel.force_close()
+	_cargo_panel.force_close()
 
 
 # --- View registration ---
@@ -276,6 +301,13 @@ func set_view(view_name: String, view_id: String) -> void:
 	show_hud()
 	_view_label.text = view_name.to_upper()
 	_view_switcher.set_active(view_id)
+
+
+# Only System view actually has a "recenter" concept today — a reclick on
+# any other already-active tab stays a genuine no-op.
+func _on_active_tab_reclicked(id: String) -> void:
+	if id == "solar_system":
+		recenter_requested.emit()
 
 
 # --- Parameterized navigation ---
@@ -336,6 +368,15 @@ func open_research_panel() -> void:
 		_research_panel.close()
 	else:
 		_research_panel.open()
+
+
+# Reached via the console's CARGO button — same open/close toggle shape as
+# open_system_menu/open_research_panel above.
+func open_cargo_panel() -> void:
+	if _cargo_panel.visible:
+		_cargo_panel.close()
+	else:
+		_cargo_panel.open()
 
 
 # --- Transition ---

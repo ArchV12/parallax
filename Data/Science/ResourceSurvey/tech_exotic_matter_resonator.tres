@@ -8,5 +8,6 @@ script = ExtResource("1")
 id = "exotic_matter_resonator"
 display_name = "Exotic Matter Resonator"
 knowledge_requirements = Dictionary[String, int]({"resource": 1000})
+materials_requirements = Dictionary[String, int]({"Titanium": 600, "Water Ice": 500})
 unlock_text = "Commander,\n\nDecades of resource survey data have culminated in the exotic matter resonator, the first instrument capable of detecting exotic materials at a distance.\n\nSpecifications have been uploaded to your vessel.\n\n— Earth Science Directorate"
 grants_instrument = ExtResource("2")

@@ -64,6 +64,10 @@ const TOP_MARGIN := 92
 const RIGHT_MARGIN := 24
 const BOTTOM_MARGIN := 210  # stays clear of ConsolePanel's center band
 const SLIDE_DURATION := 0.28
+# Godot's default ScrollContainer scrollbar overlays content instead of
+# reserving space for it — this much right margin on the AVAILABLE list
+# keeps the scrollbar thumb clear of each row card's own right edge/border.
+const SCROLLBAR_GUTTER := 16
 
 var _drawer: Control
 var _tab: Button
@@ -218,10 +222,15 @@ func _build_panel() -> void:
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	vbox.add_child(scroll)
 
+	var scroll_margin := MarginContainer.new()
+	scroll_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll_margin.add_theme_constant_override("margin_right", SCROLLBAR_GUTTER)
+	scroll.add_child(scroll_margin)
+
 	_available_box = VBoxContainer.new()
 	_available_box.add_theme_constant_override("separation", 12)
 	_available_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(_available_box)
+	scroll_margin.add_child(_available_box)
 
 	_result_label = Label.new()
 	_result_label.autowrap_mode = TextServer.AUTOWRAP_WORD
@@ -330,7 +339,10 @@ func _rebuild_rows() -> void:
 			# operation begun before departure still shows below via the
 			# RUNNING/else branches, this only suppresses starting a NEW one.
 			if not _traveling and _is_available_now(id):
-				_available_box.add_child(_build_available_row(id))
+				if _is_survey_kind(id) and not Research.can_survey_for_new_info(id, PlayerState.location_id):
+					_available_box.add_child(_build_show_results_row(id))
+				else:
+					_available_box.add_child(_build_available_row(id))
 				shown_available += 1
 		elif op.status == ActiveOperation.Status.RUNNING:
 			if id == "mining":
@@ -356,6 +368,14 @@ func _is_available_now(activity_id: String) -> bool:
 	if activity_id == "mining":
 		return Research.has_resource_survey(PlayerState.location_id)
 	return true
+
+
+# Resource/Geological Survey specifically — the two activities that award
+# Knowledge via Research.run_survey and can go stale at a body (see
+# Research.can_survey_for_new_info). Mining never re-shows as "Show
+# Results" this way; it has its own entirely different flow.
+func _is_survey_kind(activity_id: String) -> bool:
+	return activity_id == "resource_survey" or activity_id == "geological_survey"
 
 
 func _add_empty_row() -> void:
@@ -433,6 +453,61 @@ func _build_available_row(activity_id: String) -> Control:
 		time_label.add_theme_color_override("font_color", UITheme.dim)
 		time_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		box.add_child(time_label)
+
+	return wrapper
+
+
+# Shown instead of _build_available_row once Research.can_survey_for_new_info
+# is false for this body — re-running the same survey at the same (or worse)
+# instrument tier wouldn't teach anything new (see Research.run_survey), so
+# rather than let the player spend a real wait to learn that, the whole tile
+# becomes a direct "go look at what you already found" shortcut: no
+# Operation, no wait, straight to the report. Same wrapper/btn/content_margin
+# whole-tile-tappable idiom as _build_available_row, just a different label
+# and a different press handler (_on_show_results_pressed instead of
+# _on_view_pressed). Re-enables itself back to the normal tappable row
+# automatically the moment a better instrument tier is owned (this function
+# isn't even called in that case — see _rebuild_rows' branch).
+func _build_show_results_row(activity_id: String) -> Control:
+	var def := Research.activity_def(activity_id)
+
+	var wrapper := MarginContainer.new()
+
+	var btn := Button.new()
+	UITheme.style_button(btn, UITheme.button, UITheme.button_hov, UITheme.border, 4, false)
+	btn.pressed.connect(_on_show_results_pressed.bind(activity_id))
+	btn.pressed.connect(func() -> void: AudioManager.ui_confirm())  # a raw Button, not UIButton/ConsolePadButton — those wire this on their own, this one has to do it itself
+	wrapper.add_child(btn)
+
+	var content_margin := MarginContainer.new()
+	content_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	content_margin.add_theme_constant_override("margin_top", 8)
+	content_margin.add_theme_constant_override("margin_bottom", 8)
+	content_margin.add_theme_constant_override("margin_left", 10)
+	content_margin.add_theme_constant_override("margin_right", 10)
+	wrapper.add_child(content_margin)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	content_margin.add_child(box)
+
+	var name_label := Label.new()
+	var display_name := def.display_name.to_upper() if def != null else activity_id
+	name_label.text = "%s %s" % [def.icon, display_name] if def != null and def.icon != "" else display_name
+	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_label.add_theme_font_size_override("font_size", 14)
+	name_label.add_theme_color_override("font_color", UITheme.text)
+	name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(name_label)
+
+	var status_label := Label.new()
+	status_label.text = "Show Results"
+	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	status_label.add_theme_font_size_override("font_size", 10)
+	status_label.add_theme_color_override("font_color", UITheme.dim)
+	status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(status_label)
 
 	return wrapper
 
@@ -773,4 +848,29 @@ func _show_results(op: ActiveOperation) -> void:
 		resource_report_ready.emit(op.location_id, res_data, category, awarded)
 	else:
 		_result_label.text = "%s\n+%d %s Knowledge" % [capability, awarded, category.capitalize()]
+		_result_label.visible = true
+
+
+# The no-operation counterpart to _show_results — reached only via
+# _build_show_results_row's tile (Research.can_survey_for_new_info already
+# false for this body, so there's nothing to run and nothing new to award).
+# Just re-displays the same report the last real survey produced here,
+# reading Research's cached data directly instead of an ActiveOperation's
+# result. knowledge_awarded is always 0 — SurveyReportPanel/the fallback
+# label both know to show that as "already surveyed," not "+0 Knowledge."
+func _on_show_results_pressed(activity_id: String) -> void:
+	var def := Research.activity_def(activity_id)
+	if def == null:
+		return
+	var location_id := PlayerState.location_id
+
+	var geo_data: GeologicalSurveyData = Research.geological_data_for(location_id) if activity_id == "geological_survey" else null
+	var res_data: ResourceSurveyData = Research.resource_data_for(location_id) if activity_id == "resource_survey" else null
+
+	if geo_data != null:
+		geological_report_ready.emit(location_id, geo_data, def.knowledge_category, 0)
+	elif res_data != null:
+		resource_report_ready.emit(location_id, res_data, def.knowledge_category, 0)
+	else:
+		_result_label.text = "Already surveyed — no new %s Knowledge available." % def.knowledge_category.capitalize()
 		_result_label.visible = true

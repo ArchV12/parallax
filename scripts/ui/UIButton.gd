@@ -46,7 +46,11 @@ const HOVER_ANIM_TIME := 0.12
 @export var shimmer_enabled: bool = true
 # The sound this button plays on press — button_general.ogg (AudioManager's
 # default) unless a specific instance is set to something else, e.g. a
-# destructive/confirm action that wants its own distinct sound. See
+# destructive/confirm action that wants its own distinct sound. Set to ""
+# to suppress the click entirely — for a button whose action already
+# triggers its own dedicated cue elsewhere (e.g. ActivityDetailPanel's
+# BEGIN SURVEY, which relies on HUD._on_operation_started's survey_start()/
+# mining_start() instead) so it isn't layered under the generic click. See
 # _on_pressed.
 @export var press_sfx: String = "button_general"
 
@@ -238,4 +242,5 @@ func _on_unhover() -> void:
 # the instant travel_to() starts, all synchronously inside the SAME pressed
 # emission) — silently eating the sound for a click that genuinely happened.
 func _on_pressed() -> void:
-	AudioManager.ui_confirm(press_sfx)
+	if press_sfx != "":
+		AudioManager.ui_confirm(press_sfx)

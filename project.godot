@@ -28,6 +28,7 @@ PlayerState="*res://scripts/core/PlayerState.gd"
 Research="*res://scripts/core/Research.gd"
 Operations="*res://scripts/core/Operations.gd"
 Deposits="*res://scripts/core/Deposits.gd"
+ControlScheme="*res://scripts/core/ControlScheme.gd"
 
 [display]
 

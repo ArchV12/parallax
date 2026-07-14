@@ -44,10 +44,14 @@ static func generate(params: CometParams) -> Node3D:
 
 
 static func _build_nucleus(params: CometParams, shape_noise: FastNoiseLite,
-		craters: Array, palette: Dictionary) -> MeshInstance3D:
+		craters: Dictionary, palette: Dictionary) -> MeshInstance3D:
 	var sphere := Icosphere.build(params.detail)
 	var verts: PackedVector3Array = sphere[0]
 	var indices: PackedInt32Array = sphere[1]
+	# Pulled out of the Dictionary ONCE, not once per vertex — see
+	# CraterField's own class comment on why that distinction matters.
+	var centers: PackedVector3Array = craters["centers"]
+	var radii: PackedFloat32Array = craters["radii"]
 
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -55,10 +59,15 @@ static func _build_nucleus(params: CometParams, shape_noise: FastNoiseLite,
 		# Same "FBM shape noise, not ridged" lesson as AsteroidGenerator —
 		# ridged noise's thin ridge lines read as spikes at high amplitude.
 		var shape_h := shape_noise.get_noise_3dv(unit) * params.irregularity
-		var crater_h := CraterField.height_at(unit, craters, params.crater_depth)
+		var crater_h := CraterField.height_at(unit, centers, radii, params.crater_depth)
 		var h := shape_h + crater_h
 		st.set_color(_height_color(h, palette))
-		st.add_vertex(unit * params.radius * (1.0 + h))
+		# Floored well above 0 — see AsteroidGenerator's identical clamp for
+		# why: at extreme irregularity, shape noise alone can push h below
+		# -1, flipping (1.0+h) negative and turning the surface inside-out
+		# at that vertex instead of just deeply dented.
+		var radial_scale := maxf(1.0 + h, 0.1)
+		st.add_vertex(unit * params.radius * radial_scale)
 	for idx in indices:
 		st.add_index(idx)
 	st.generate_normals()

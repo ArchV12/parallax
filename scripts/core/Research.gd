@@ -72,7 +72,29 @@ const RESOURCE_DATA_PATHS := {
 var _activities: Dictionary = {}  # activity_id -> ActivityDef, loaded once at startup
 var _technologies: Dictionary = {}  # activity_id -> Array[TechnologyDef], loaded once at startup, tier order
 var _geological_data: Dictionary = {}  # body_id -> GeologicalSurveyData, loaded once at startup
-var _resource_data: Dictionary = {}  # body_id -> ResourceSurveyData, loaded once at startup
+# body_id -> ResourceSurveyData — the curated 3 (Earth/Mars/Luna) loaded
+# once at startup below; any asteroid designation gets added lazily the
+# first time resource_data_for() sees it (see that function) and stays
+# cached here for the rest of the session, same "generate once, persist"
+# shape as the curated entries, just generated instead of authored.
+var _resource_data: Dictionary = {}
+# body_id -> real radius in km, ONLY for the lazily-generated asteroid
+# entries above (curated bodies already have this on their KnownBodies.
+# Entry) — KnownBodies.get_entry synthesizes a real Entry for an asteroid
+# id from this (and _asteroid_au_distance below), which is what actually
+# lets Cockpit/TravelCalc treat a registered asteroid like any other body.
+var _asteroid_radius_km: Dictionary = {}
+# body_id -> real AU distance from Sol, registered by SystemView the
+# instant it actually spawns an asteroid (see SystemView._spawn_dummy_
+# asteroid/_spawn_trojan) — NOT independently rolled here the way radius_km
+# above is. AU distance depends on which population (Main Belt/NEA/
+# Centaur/Trojan) an asteroid belongs to, which only SystemView's spawn
+# logic actually knows; re-deriving it from just the id elsewhere would risk
+# landing on a DIFFERENT number than what the player actually saw on the
+# map — the exact "oh that's close by!" inconsistency this registry exists
+# to prevent. An asteroid with no entry here has simply never been spawned/
+# seen yet, and is correctly treated as not a real, travelable body still.
+var _asteroid_au_distance: Dictionary = {}
 
 # activity_id -> owned instrument tier index. -1 means the activity hasn't
 # been unlocked at all yet (no instrument owned); 0 is the first, free tier.
@@ -82,11 +104,19 @@ var _owned_tier: Dictionary = {}
 # (Docs/Science and Knowledge System.md, "Knowledge").
 var _knowledge: Dictionary = {}
 
-# body_id -> true, once a Resource Survey has resolved there. A genuinely new
-# gate — distinct from _owned_tier's instrument-ownership check, which is
-# global, not per-location — needed for Mining's "must survey here first"
-# prerequisite (Docs/Mining.md).
-var _surveyed_locations: Dictionary = {}
+# "activity_id:body_id" -> the highest instrument tier a survey has ever
+# resolved there with. Two jobs: (1) Mining's "must survey here first"
+# prerequisite (Docs/Mining.md) — has_resource_survey below, resource_survey
+# specifically — and (2) the Knowledge-award gate in run_survey — re-running
+# the SAME survey at a body you've already covered with your CURRENT tier
+# awards nothing (there's nothing new to learn re-scanning with the same
+# equipment), but a genuinely better tier than whatever was used last time
+# re-opens it, since better equipment really would find something new. Flat
+# "surveyed or not" was the original shape here and let a player rack up
+# infinite Knowledge just re-running the same survey forever — this is the
+# fix for that, general across both survey activities, not resource_survey-
+# only the way the old boolean was.
+var _surveyed_tier: Dictionary = {}
 
 
 # Loads eagerly in _init (object construction), not _ready — _ready is
@@ -111,17 +141,36 @@ func _init() -> void:
 func reset_for_new_game() -> void:
 	_owned_tier.clear()
 	_knowledge.clear()
-	_surveyed_locations.clear()
+	_surveyed_tier.clear()
 	for id: String in _activities:
 		_owned_tier[id] = 0 if id in STARTING_ACTIVITIES else -1
 
 
-func mark_surveyed(body_id: String) -> void:
-	_surveyed_locations[body_id] = true
+func _survey_key(activity_id: String, body_id: String) -> String:
+	return "%s:%s" % [activity_id, body_id]
 
 
+# The highest instrument tier this activity has ever surveyed body_id with,
+# or -1 if never.
+func tier_surveyed_at(activity_id: String, body_id: String) -> int:
+	return _surveyed_tier.get(_survey_key(activity_id, body_id), -1)
+
+
+# True once resource_survey has EVER resolved here, regardless of tier —
+# Mining's prerequisite only cares that deposits have been identified at
+# all, not which instrument found them.
 func has_resource_survey(body_id: String) -> bool:
-	return _surveyed_locations.get(body_id, false)
+	return tier_surveyed_at("resource_survey", body_id) >= 0
+
+
+# True when surveying body_id with this activity right now would actually
+# teach something new — never surveyed before, OR the player's CURRENT
+# instrument tier is strictly better than whatever tier was used last time
+# here. This is the gate ActivitiesPanel uses to decide between a normal
+# tappable (re-)survey row and a passive "Show Results" row for a body
+# already fully covered at the player's present equipment level.
+func can_survey_for_new_info(activity_id: String, body_id: String) -> bool:
+	return owned_tier(activity_id) > tier_surveyed_at(activity_id, body_id)
 
 
 func activity_def(activity_id: String) -> ActivityDef:
@@ -200,10 +249,60 @@ func geological_data_for(body_id: String) -> GeologicalSurveyData:
 	return _geological_data.get(body_id)
 
 
-# Hand-authored rich Resource Survey report for this body, or null if none
-# has been written yet (see RESOURCE_DATA_PATHS).
+# Hand-authored rich Resource Survey report for this body if one exists
+# (see RESOURCE_DATA_PATHS); for an asteroid designation (see
+# AsteroidResourceGenerator.looks_like_asteroid_id) that hasn't been rolled
+# yet, generates and caches one instead — there's no way to hand-author a
+# file for an id that doesn't exist until a seeded population rolls it at
+# runtime (see the universe-generation-architecture memory's "generate each
+# tier of a body's data only when first needed" rule). Still null for
+# anything else (a real moon with no authored survey, a typo, ...) — same
+# honesty as before this existed.
 func resource_data_for(body_id: String) -> ResourceSurveyData:
+	if not _resource_data.has(body_id):
+		_ensure_asteroid_data(body_id)
 	return _resource_data.get(body_id)
+
+
+# Real radius (km) for a procedurally-generated asteroid, or 0.0 if
+# body_id isn't one. Independent of whether a Resource Survey has ever
+# actually run there — KnownBodies.get_entry needs this for DISPLAY
+# purposes (Cockpit's arrival size) the moment an asteroid is first seen,
+# not only once a player has surveyed it — so this rolls/caches the same
+# data resource_data_for does, just via the shared _ensure_asteroid_data
+# rather than depending on that function having been called first.
+func asteroid_radius_km_for(body_id: String) -> float:
+	if not _asteroid_radius_km.has(body_id):
+		_ensure_asteroid_data(body_id)
+	return _asteroid_radius_km.get(body_id, 0.0)
+
+
+# Shared by resource_data_for/asteroid_radius_km_for — rolls+caches BOTH
+# pieces of an asteroid's procedural data together in one pass (same seed,
+# same generate() call — see AsteroidResourceGenerator), regardless of
+# which one was asked for first. No-ops for anything already cached or
+# that doesn't look like an asteroid id at all.
+func _ensure_asteroid_data(body_id: String) -> void:
+	if _resource_data.has(body_id) or not AsteroidResourceGenerator.looks_like_asteroid_id(body_id):
+		return
+	var rolled := AsteroidResourceGenerator.generate(body_id)
+	_resource_data[body_id] = rolled["survey"]
+	_asteroid_radius_km[body_id] = rolled["radius_km"]
+
+
+# Registered by SystemView the instant it actually spawns an asteroid — see
+# _asteroid_au_distance's own comment on why this is a registry, not
+# something re-derived from the id like radius_km is.
+func register_asteroid_orbit(body_id: String, au_distance: float) -> void:
+	_asteroid_au_distance[body_id] = au_distance
+
+
+# Real AU distance from Sol for a REGISTERED asteroid (see
+# register_asteroid_orbit), or 0.0 if this id has never actually been
+# spawned/seen yet — KnownBodies.get_entry treats 0.0 as "not a real body,"
+# same as null everywhere else in this game.
+func asteroid_au_distance_for(body_id: String) -> float:
+	return _asteroid_au_distance.get(body_id, 0.0)
 
 
 # Adds Knowledge and checks every activity's next TechnologyDef against the
@@ -219,7 +318,12 @@ func add_knowledge(category_id: String, amount: int) -> Array[TechnologyDef]:
 # (in order) any TechnologyDef whose knowledge_requirements are now fully
 # met — a `while`, not a single `if`, so a large-enough Knowledge jump can
 # clear more than one tier in one call rather than needing a second
-# add_knowledge to notice the next one.
+# add_knowledge to notice the next one. A tech with a real materials_
+# requirements cost stops the walk instead of auto-granting (see
+# craft_technology below for the explicit path that actually grants it) —
+# can't skip past an un-crafted prototype to check the tier after it, so
+# this also means further tiers in THAT chain wait until the materials-
+# gated one is crafted, even if their own Knowledge is already satisfied.
 func _check_milestones() -> Array[TechnologyDef]:
 	var granted: Array[TechnologyDef] = []
 	for activity_id: String in _technologies:
@@ -228,6 +332,8 @@ func _check_milestones() -> Array[TechnologyDef]:
 		while tier >= 0 and tier < techs.size():
 			var tech: TechnologyDef = techs[tier]
 			if not _requirements_met(tech):
+				break
+			if not tech.materials_requirements.is_empty():
 				break
 			grant_tier(activity_id, tier + 1)
 			granted.append(tech)
@@ -243,6 +349,55 @@ func _requirements_met(tech: TechnologyDef) -> bool:
 	return true
 
 
+# Knowledge-only check on the activity's next tier — true the instant
+# _check_milestones would have auto-granted it, HAD it no materials cost.
+# Distinct from can_craft below (which also requires materials to be
+# affordable) so a Craft screen can show "requirements met, but you can't
+# afford it yet" instead of just a flat locked/unlocked state.
+func is_craftable(activity_id: String) -> bool:
+	var tech := next_technology(activity_id)
+	return tech != null and _requirements_met(tech)
+
+
+# Whether craft_technology(activity_id) would actually succeed right now —
+# Knowledge requirements met AND every material in materials_requirements
+# is currently affordable (Deposits.material_amount).
+func can_craft(activity_id: String) -> bool:
+	var tech := next_technology(activity_id)
+	if tech == null or not _requirements_met(tech):
+		return false
+	for material_name: String in tech.materials_requirements:
+		if Deposits.material_amount(material_name) < tech.materials_requirements[material_name]:
+			return false
+	return true
+
+
+# The explicit, player-triggered counterpart to _check_milestones' auto-
+# grant — spends the next tier's materials_requirements (Deposits.
+# spend_materials — atomic, no-ops entirely if anything's unaffordable) and
+# grants it: same grant_tier + milestone_reached.emit _check_milestones
+# already does for a materials-free tech, just behind a manual call instead
+# of firing the instant Knowledge alone is satisfied. Re-checks can_craft
+# itself (defensive — a caller may have last checked it some UI frames ago,
+# e.g. a button press after the panel rendered). Re-runs _check_milestones
+# afterward (not add_knowledge — no Knowledge changed) so that if the NEXT
+# tier in the chain is materials-free and its own Knowledge is already
+# satisfied, it cascades and auto-grants immediately rather than waiting on
+# some unrelated future Knowledge change to notice it. Returns null if
+# can_craft was false.
+func craft_technology(activity_id: String) -> TechnologyDef:
+	if not can_craft(activity_id):
+		return null
+	var tech := next_technology(activity_id)
+	if not Deposits.spend_materials(tech.materials_requirements):
+		return null  # can_craft already checked this — defensive only
+	var tier := owned_tier(activity_id)
+	grant_tier(activity_id, tier + 1)
+	milestone_reached.emit(tech)
+	_check_milestones()
+	return tech
+
+
 # Flat award per survey run, regardless of instrument tier or activity —
 # a placeholder (roadmap Phase 2 scope note), same spirit as Phase 0's
 # placeholder TechnologyDef thresholds. Real balancing is a later pass.
@@ -252,19 +407,30 @@ const SURVEY_KNOWLEDGE_AWARD := 10
 # awards Knowledge in the activity's category and returns what happened, for
 # the UI to display (including any newly granted TechnologyDefs, under
 # "milestones"). Empty Dictionary (no-op) if the activity isn't unlocked.
-# location_id marks that body surveyed (see has_resource_survey) when this
-# was specifically a Resource Survey — Mining's prerequisite gate.
+#
+# Knowledge is only actually awarded if can_survey_for_new_info was true
+# going in (re-checked here, defensively — ActivitiesPanel's UI is what
+# normally prevents starting a survey at all once a body's fully covered at
+# the current tier, replacing the row with "Show Results" instead of BEGIN
+# SURVEY, but this stays the real source of truth regardless of what UI
+# path reached it). Either way, records the CURRENT tier as the highest
+# that's surveyed this body — including a 0-Knowledge re-run, so repeatedly
+# re-running at the same tier can never re-trigger the award.
 func run_survey(activity_id: String, location_id: String) -> Dictionary:
 	var instrument := current_instrument(activity_id)
 	var def := activity_def(activity_id)
 	if instrument == null or def == null:
 		return {}
-	var granted := add_knowledge(def.knowledge_category, SURVEY_KNOWLEDGE_AWARD)
-	if activity_id == "resource_survey":
-		mark_surveyed(location_id)
+	var current_tier := owned_tier(activity_id)
+	var awarded := SURVEY_KNOWLEDGE_AWARD if can_survey_for_new_info(activity_id, location_id) else 0
+	var granted: Array[TechnologyDef] = []
+	if awarded > 0:
+		granted = add_knowledge(def.knowledge_category, awarded)
+	var key := _survey_key(activity_id, location_id)
+	_surveyed_tier[key] = maxi(current_tier, _surveyed_tier.get(key, -1))
 	return {
 		"instrument": instrument,
 		"knowledge_category": def.knowledge_category,
-		"knowledge_awarded": SURVEY_KNOWLEDGE_AWARD,
+		"knowledge_awarded": awarded,
 		"milestones": granted,
 	}

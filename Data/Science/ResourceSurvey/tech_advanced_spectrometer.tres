@@ -8,5 +8,6 @@ script = ExtResource("1")
 id = "advanced_spectrometer"
 display_name = "Advanced Spectrometer"
 knowledge_requirements = Dictionary[String, int]({"resource": 50, "geological": 25})
+materials_requirements = Dictionary[String, int]({"Iron": 200, "Silicon": 150})
 unlock_text = "Commander,\n\nCombined advances in resource and geological surveying have yielded a refined spectrometer design capable of resolving common ore signatures.\n\nSpecifications have been uploaded to your vessel.\n\n— Earth Science Directorate"
 grants_instrument = ExtResource("2")

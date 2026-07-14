@@ -3,19 +3,30 @@ extends Control
 
 # The in-game Research dashboard — reached via the console's RESEARCH button
 # (Docs/Science and Knowledge System - Implementation Roadmap.md, Phase 4).
-# Read-only: surfaces exactly what Research.gd already tracks (Knowledge per
-# category, current instrument, next milestone + requirement progress) — no
-# new mechanics, all of it built by Phases 1-3. Same full-rect
+# Surfaces exactly what Research.gd already tracks (Knowledge per category,
+# current instrument, next milestone + requirement progress). Same full-rect
 # backdrop+centered UIPanel shape as PauseMenu/CheatMenu.
+#
+# A materials-free tech is still purely passive here — it auto-grants the
+# instant its Knowledge requirements are met (Research._check_milestones),
+# nothing to press. A tech WITH a materials_requirements cost (Phase 5,
+# Docs/Science and Knowledge System - Implementation Roadmap.md) is where
+# this panel becomes interactive: a MATERIALS REQUIRED section (mirroring
+# the Knowledge rows, sourced from Deposits.gd) plus a CRAFT button, enabled
+# only once BOTH gates are satisfied (Research.can_craft) — see
+# Research.craft_technology for what actually happens on press.
 #
 # Lists every KNOWN activity (Research.known_activities()), not just
 # unlocked ones — an activity with no starting instrument still gets a card
 # here (shown LOCKED), matching the vision doc's framing that a category's
-# progress is visible even before you can act on it. Only Resource Survey
-# exists so far, so there's nothing yet to demonstrate that with.
+# progress is visible even before you can act on it.
 
 const PANEL_WIDTH := 420.0
 const LIST_HEIGHT := 420.0
+# Godot's default ScrollContainer scrollbar overlays content instead of
+# reserving space for it — this much right margin on the scrolled content
+# keeps the scrollbar thumb clear of anything right-aligned.
+const SCROLLBAR_GUTTER := 16
 
 var _panel: UIPanel
 var _cards_box: VBoxContainer
@@ -50,12 +61,35 @@ func _ready() -> void:
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	outer_vbox.add_child(scroll)
 
+	# ScrollContainer's own vertical scrollbar overlays its content rather
+	# than reserving space for it — without this margin, right-aligned
+	# values (CURRENT KNOWLEDGE's numbers, etc.) sat right at the content
+	# edge and the scrollbar thumb visibly covered/clipped them whenever the
+	# list was actually tall enough to need scrolling.
+	var scroll_margin := MarginContainer.new()
+	scroll_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll_margin.add_theme_constant_override("margin_right", SCROLLBAR_GUTTER)
+	scroll.add_child(scroll_margin)
+
 	_cards_box = VBoxContainer.new()
 	_cards_box.add_theme_constant_override("separation", 16)
 	_cards_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(_cards_box)
+	scroll_margin.add_child(_cards_box)
 
 	_add_close_button(outer_vbox)
+
+	# Refresh while open, not just on open() — a materials-gated tech's
+	# Knowledge requirement can become newly met (operation_completed, a
+	# survey resolving) or a material can become newly affordable (operation_
+	# stopped, mining ending) while this panel is already sitting open;
+	# without this the MATERIALS REQUIRED rows and CRAFT button would read
+	# stale until closed and reopened. Same three-signal precedent
+	# ActivitiesPanel._ready() already uses for the identical reason.
+	# Rebuilding while hidden is harmless (cheap, small list) — no visible
+	# guard needed, same as ActivitiesPanel's own equivalent subscriptions.
+	Operations.operation_completed.connect(func(_op_id: String) -> void: _rebuild())
+	Operations.operation_stopped.connect(func(_activity_id: String, _location_id: String, _summary: Dictionary) -> void: _rebuild())
+	Research.milestone_reached.connect(func(_tech: TechnologyDef) -> void: _rebuild())
 
 
 func open() -> void:
@@ -83,6 +117,15 @@ func _add_close_button(parent: VBoxContainer) -> void:
 	btn.add_theme_font_size_override("font_size", 14)
 	btn.pressed.connect(close)
 	parent.add_child(btn)
+
+
+# _rebuild() unconditionally, regardless of Research.craft_technology's
+# return value — it returns null (a no-op) if state changed between this
+# card being rendered and the button actually being pressed (can_craft was
+# re-checked and failed), and the rebuild is what shows the player why.
+func _on_craft_pressed(activity_id: String) -> void:
+	Research.craft_technology(activity_id)
+	_rebuild()
 
 
 func _rebuild() -> void:
@@ -139,6 +182,38 @@ func _build_card(activity_id: String) -> Control:
 		_add_stat_row(box, "%s %s" % ["✓" if met else "□", category_id.capitalize()], "%d / %d" % [have, required])
 
 	box.add_child(_make_note("%d / %d Requirements Met" % [met_count, requirements.size()], UITheme.dim))
+
+	# A materials-free tech still just auto-grants the instant Knowledge is
+	# met (see Research._check_milestones) — nothing more to show or do here.
+	# A tech WITH a cost stops short of auto-granting; this is where the
+	# player explicitly spends materials to actually craft it.
+	if not next_tech.materials_requirements.is_empty():
+		box.add_child(HSeparator.new())
+		box.add_child(_make_note("MATERIALS REQUIRED", UITheme.accent))
+
+		var materials_met_count := 0
+		var materials: Dictionary = next_tech.materials_requirements
+		for material_name: String in materials:
+			var required_amount: int = materials[material_name]
+			var have_amount := Deposits.material_amount(material_name)
+			var met := have_amount >= required_amount
+			if met:
+				materials_met_count += 1
+			_add_stat_row(box, "%s %s" % ["✓" if met else "□", material_name],
+					"%s / %s" % [Deposits.format_units(have_amount), Deposits.format_units(required_amount)])
+
+		box.add_child(_make_note("%d / %d Materials Met" % [materials_met_count, materials.size()], UITheme.dim))
+
+		var craft_btn := UIButton.new()
+		craft_btn.text = "CRAFT"
+		craft_btn.solid = true
+		craft_btn.shimmer_enabled = false
+		craft_btn.custom_minimum_size = Vector2(0, 32)
+		craft_btn.add_theme_font_size_override("font_size", 13)
+		craft_btn.disabled = not Research.can_craft(activity_id)
+		craft_btn.pressed.connect(_on_craft_pressed.bind(activity_id))
+		box.add_child(craft_btn)
+
 	return box
 
 

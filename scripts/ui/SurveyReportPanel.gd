@@ -97,7 +97,7 @@ func _ready() -> void:
 func show_geological_report(location_id: String, data: GeologicalSurveyData, category: String, knowledge_awarded: int) -> void:
 	_title_label.text = "GEOLOGICAL SURVEY RESULTS"
 	_target_label.text = "Target: %s" % location_id
-	_knowledge_label.text = "+%d %s Knowledge" % [knowledge_awarded, category.capitalize()]
+	_set_knowledge_label(knowledge_awarded, category)
 	_clear_body()
 
 	_add_section("SURFACE COMPOSITION", data.composition)
@@ -126,7 +126,7 @@ func show_geological_report(location_id: String, data: GeologicalSurveyData, cat
 func show_resource_report(location_id: String, data: ResourceSurveyData, category: String, knowledge_awarded: int) -> void:
 	_title_label.text = "RESOURCE SURVEY RESULTS"
 	_target_label.text = "Target: %s" % location_id
-	_knowledge_label.text = "+%d %s Knowledge" % [knowledge_awarded, category.capitalize()]
+	_set_knowledge_label(knowledge_awarded, category)
 	_clear_body()
 
 	_add_section_header("DETECTED MATERIALS")
@@ -142,6 +142,20 @@ func show_resource_report(location_id: String, data: ResourceSurveyData, categor
 			_body_box.add_child(spacer)
 
 	_panel.open_animated()
+
+
+# knowledge_awarded == 0 happens when this report is reached via
+# ActivitiesPanel's "Show Results" tile (Research.can_survey_for_new_info
+# already false at this body — see that function) rather than a real just-
+# resolved survey. "+0 Resource Knowledge" would read as a bug; this is the
+# honest version of that same fact.
+func _set_knowledge_label(knowledge_awarded: int, category: String) -> void:
+	if knowledge_awarded > 0:
+		_knowledge_label.text = "+%d %s Knowledge" % [knowledge_awarded, category.capitalize()]
+		_knowledge_label.add_theme_color_override("font_color", UITheme.accent)
+	else:
+		_knowledge_label.text = "Already Surveyed — No New Knowledge"
+		_knowledge_label.add_theme_color_override("font_color", UITheme.dim)
 
 
 func _clear_body() -> void:
