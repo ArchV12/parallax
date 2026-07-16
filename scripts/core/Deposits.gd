@@ -42,10 +42,26 @@ const DIFFICULTY_BY_NOTE_VALUE := {
 # instead — see ResourceMaterialFinding's own comment) have no extraction
 # note to translate at all. Moderate: harder than a flagged-Favorable metal,
 # easier than a flagged-Difficult one, and leaves room for a later "Deep
-# Vein"-style progression (Docs/Mining.md) to improve it. Difficulty is
-# flavor only now (drives energy_usage_label) — it does NOT affect
-# yield/time, which are purely a function of Deposit Size (see below).
+# Vein"-style progression (Docs/Mining.md) to improve it. Also feeds
+# DIFFICULTY_TIME_MULT below (2026-07-14) — used to be flavor-only (just
+# energy_usage_label); see that constant's own comment.
 const DEFAULT_EXTRACTION_DIFFICULTY := "Moderate"
+
+# How much longer/shorter a deposit takes to fully deplete based on how hard
+# it is to extract — layered on TOP of depletion_seconds' existing size- and
+# floor-derived duration, not a replacement for it: Deposit Size still says
+# "how much material is there" (and a bigger deposit legitimately taking
+# longer to fully extract is worth keeping); this says "how hard is it to
+# pull out," independently. total_units() is untouched by difficulty — a
+# Hard deposit still yields the exact same total as an Easy one of the same
+# size, just spread across more real time, which automatically comes out as
+# a slower rate too (extraction_rate_per_second already derives from
+# total_units/depletion_seconds — see that function's own comment).
+const DIFFICULTY_TIME_MULT := {
+	"Easy": 0.75,
+	"Moderate": 1.0,
+	"Hard": 2.0,
+}
 
 # Total units obtainable from a FRESH (remaining_fraction == 1.0) deposit if
 # mined continuously all the way to full depletion. Big numbers on purpose —
@@ -98,6 +114,55 @@ const ENERGY_LABEL_BY_DIFFICULTY := {
 const SIZE_REFERENCE_RADIUS_KM := 6371.0  # Earth
 const SIZE_EXPONENT := 1.0
 
+# Floor on how long a deposit takes to fully deplete, real seconds —
+# legibility, not economy: below this, a continuous-mining operation
+# resolves faster than a player can actually watch the percentage/amount
+# readouts move (2026-07-14, reported as "mining on asteroids finishes
+# before I can even see the numbers"). The OLD floor lived directly on
+# depletion_rate_per_second's own scaled_seconds at a bare 1.0 — reasonable
+# as a rare edge-case guard when it was written, but every asteroid in the
+# actual 0.3-20km radius range (AsteroidResourceGenerator.RADIUS_MIN/MAX_KM)
+# scales to well under 1 real second at Earth-reference linear scaling, so
+# in practice EVERY asteroid deposit was hitting that floor — collapsing
+# Trace/Small/Moderate/Large/Massive into the same near-instant blip instead
+# of the tiered pacing DEPLETE_SECONDS_BY_SIZE actually intends. See
+# depletion_seconds/extraction_rate_per_second for the other half of this
+# fix — raising the time floor ALONE (leaving extraction_rate_per_second at
+# its old constant base-tier rate) would have kept awarding the old
+# base-tier rate over the new, longer floor time, handing out MORE than
+# total_units() actually reports for that deposit. Worth tuning further by
+# feel, same as every other by-feel constant in this file.
+const MIN_DEPLETE_SECONDS := 12.0
+
+# Companion fix to MIN_DEPLETE_SECONDS above, same 2026-07-14 report — total_
+# units() used to floor at a bare 1, which combined with the whole-units-
+# only inventory (Operations._tick_mining only ever credits Deposits once
+# mining_yield_accumulator crosses a full 1.0) meant a Trace deposit on a
+# small asteroid spent the ENTIRE MIN_DEPLETE_SECONDS reading "+0", then
+# jumped straight to "+1" in a single lump right at the very end — visually
+# indistinguishable from broken, and an unsatisfying reward for a dedicated
+# 12-second operation regardless.
+#
+# A FRACTION of each tier's own TOTAL_UNITS_BY_SIZE base, not one flat
+# number shared by every tier — a flat floor (this fix's first pass) still
+# preserved the "+0 the whole time" glitch's SIZE symptom, but introduced a
+# new one: small enough asteroids collapsed Trace and Moderate to the
+# identical floor value, losing the whole point of having size tiers at
+# all once a body got small enough. This keeps TOTAL_UNITS_BY_SIZE's own
+# 1:10:50:250:1000 ratio intact at 1% of it instead — Trace lands at 10
+# (same number the flat version picked), but Moderate now floors at 500 and
+# Massive at 10,000, so a richer tier still visibly means more even in the
+# extreme-small-body case this floor exists for.
+const MIN_UNITS_FRACTION := 0.01
+
+# 2026-07-14 — the ship's cargo hold isn't infinite. Hardcoded flat number
+# for now (no per-material breakdown, no upgrade path yet) — total units
+# across EVERY material combined, same "ship-wide, not per-body" shape
+# inventory() itself already has. Operations._tick_mining is what actually
+# enforces this during a running operation (stops the instant the hold
+# would exceed it — see that function); this file just tracks the number.
+const CARGO_CAPACITY := 20000
+
 var _remaining_fraction: Dictionary = {}  # "body_id:material_name" -> float
 var _material_amounts: Dictionary = {}    # material_name -> int, player's running inventory
 
@@ -145,47 +210,63 @@ func _build_deposit(body_id: String, finding: ResourceMaterialFinding) -> Deposi
 	return deposit
 
 
-# Units per real second a continuous mining operation on this deposit
-# awards — the BASE tier total spread evenly across the base tier's
-# duration, same as before size-scaling existed. Deliberately NOT run
-# through _size_multiplier: rate is "how fast your equipment pulls out
-# material of this concentration," which doesn't depend on how much total
-# deposit there is to work with — same rate on a planet or a pebble. Size
-# instead shows up in TOTAL (total_units) and therefore in how quickly the
-# deposit actually runs dry (depletion_rate_per_second) — a small deposit
-# empties fast at the same extraction rate, rather than taking the same
-# 5-20 minutes as a planet-scale one for 1000x less material.
-func extraction_rate_per_second(deposit: DepositInfo) -> float:
-	var total: int = TOTAL_UNITS_BY_SIZE.get(deposit.deposit_size, TOTAL_UNITS_BY_SIZE[DEFAULT_DEPOSIT_SIZE])
+# How long this SPECIFIC deposit (its own size tier, at its own body's real
+# scale, at its own extraction difficulty) takes to fully deplete under
+# continuous mining — the base tier duration scaled by the same
+# _size_multiplier as total_units, floored at MIN_DEPLETE_SECONDS for
+# legibility (see that constant's own comment), THEN scaled again by
+# DIFFICULTY_TIME_MULT (applied last, after the floor, so difficulty still
+# has an effect even on a floor-bound tiny asteroid deposit — a Hard Trace
+# deposit takes noticeably longer than an Easy one even though both would
+# otherwise floor to the identical MIN_DEPLETE_SECONDS). The one shared
+# duration both rate functions below derive from, so they can never diverge
+# from each other the way independently-floored numbers could.
+func depletion_seconds(deposit: DepositInfo) -> float:
 	var seconds: int = DEPLETE_SECONDS_BY_SIZE.get(deposit.deposit_size, DEPLETE_SECONDS_BY_SIZE[DEFAULT_DEPOSIT_SIZE])
-	return float(total) / float(seconds)
+	var base_duration := maxf(float(seconds) * _size_multiplier(deposit.body_id), MIN_DEPLETE_SECONDS)
+	var difficulty_mult: float = DIFFICULTY_TIME_MULT.get(
+			deposit.extraction_difficulty, DIFFICULTY_TIME_MULT[DEFAULT_EXTRACTION_DIFFICULTY])
+	return base_duration * difficulty_mult
+
+
+# Units per real second a continuous mining operation on this deposit
+# awards — this deposit's own (size-scaled) total_units spread evenly across
+# its own (size-, floor-, AND difficulty-scaled) depletion_seconds, so
+# extraction ALWAYS finishes with exactly total_units in hand right as
+# remaining_fraction hits 0, never more or less, regardless of which of
+# size/floor/difficulty is doing the work that particular deposit. At
+# Moderate difficulty with MIN_DEPLETE_SECONDS not engaged, this reduces to
+# exactly the original constant base-tier rate (total_units and
+# depletion_seconds both scale by the identical _size_multiplier, which
+# cancels, and DIFFICULTY_TIME_MULT["Moderate"] is 1.0) — same rate on a
+# planet regardless of which specific planet. Easy/Hard shift the rate up/
+# down from there for the SAME total, and the floor engaging (small
+# asteroids) drops it further still — see MIN_DEPLETE_SECONDS and
+# DIFFICULTY_TIME_MULT for why each exists.
+func extraction_rate_per_second(deposit: DepositInfo) -> float:
+	return float(total_units(deposit)) / depletion_seconds(deposit)
 
 
 # Fraction of remaining_fraction consumed per real second — constant
 # regardless of how much is already left, so a half-depleted deposit simply
 # takes half as long (in absolute seconds) to finish, not the same duration
-# every time. Base seconds scaled by the SAME _size_multiplier as
-# total_units, not left alone — a scaled-down total that still took the
-# full base duration to extract would imply an ever-shrinking (and
-# eventually absurdly slow) effective rate; scaling time down alongside
-# total instead keeps extraction_rate_per_second's constant rate the actual
-# truth throughout the operation, with the deposit simply running out sooner.
-# Floored at 1 real second so a vanishingly small deposit still resolves
-# rather than reading as instantaneous/glitchy.
+# every time.
 func depletion_rate_per_second(deposit: DepositInfo) -> float:
-	var seconds: int = DEPLETE_SECONDS_BY_SIZE.get(deposit.deposit_size, DEPLETE_SECONDS_BY_SIZE[DEFAULT_DEPOSIT_SIZE])
-	var scaled_seconds := maxf(float(seconds) * _size_multiplier(deposit.body_id), 1.0)
-	return 1.0 / scaled_seconds
+	return 1.0 / depletion_seconds(deposit)
 
 
 # The actual (size-scaled) total this deposit holds fresh — what
 # DepositDetailPanel's "Total Deposit" readout shows, and the only place
 # TOTAL_UNITS_BY_SIZE's raw tier number gets adjusted for body size. Floored
-# at 1 — a survey that found something at all should never display as a
-# literal zero-unit deposit, even on the smallest possible asteroid.
+# at MIN_UNITS_FRACTION of that SAME tier's own base (see that constant's
+# own comment for why a flat number across every tier wasn't enough) — a
+# survey that found something at all should never display as a literal
+# zero- or one-unit deposit, even on the smallest possible asteroid, but
+# the floor still has to keep a "Massive" reading bigger than a "Trace" one.
 func total_units(deposit: DepositInfo) -> int:
 	var base: int = TOTAL_UNITS_BY_SIZE.get(deposit.deposit_size, TOTAL_UNITS_BY_SIZE[DEFAULT_DEPOSIT_SIZE])
-	return maxi(1, roundi(float(base) * _size_multiplier(deposit.body_id)))
+	var floor_units := roundi(float(base) * MIN_UNITS_FRACTION)
+	return maxi(floor_units, roundi(float(base) * _size_multiplier(deposit.body_id)))
 
 
 func _size_multiplier(body_id: String) -> float:
@@ -232,16 +313,28 @@ func material_amount(material_name: String) -> int:
 	return _material_amounts.get(material_name, 0)
 
 
-# Atomic batch spend for Research.craft_technology — checks every entry is
-# affordable FIRST, and only subtracts anything if all of them are, so a
-# craft attempt can never partially spend materials then fail partway
-# through. Returns false (no-op, nothing spent) if any single one is short.
+# Atomic batch spend for Research.craft_technology (and now SellCargoPanel)
+# — checks every entry is affordable FIRST, and only subtracts anything if
+# all of them are, so a spend attempt can never partially go through then
+# fail partway. Returns false (no-op, nothing spent) if any single one is
+# short. Erases a material entirely once it hits 0 rather than leaving a
+# lingering "0" entry behind — inventory()/total_cargo_used() would both
+# have read that identically to it never existing anyway (material_amount
+# already defaults missing keys to 0), but a stale 0 entry visibly lingered
+# in CargoPanel/SellCargoPanel's own lists forever after being fully spent.
 func spend_materials(requirements: Dictionary) -> bool:
 	for material_name: String in requirements:
 		if material_amount(material_name) < requirements[material_name]:
 			return false
 	for material_name: String in requirements:
-		_material_amounts[material_name] = material_amount(material_name) - requirements[material_name]
+		# requirements[material_name] is an untyped Dictionary value lookup
+		# (Variant) — := can't infer a type from it, unlike material_amount()'s
+		# own declared int return, so this needs an explicit annotation.
+		var remaining: int = material_amount(material_name) - requirements[material_name]
+		if remaining <= 0:
+			_material_amounts.erase(material_name)
+		else:
+			_material_amounts[material_name] = remaining
 	return true
 
 
@@ -251,6 +344,25 @@ func spend_materials(requirements: Dictionary) -> bool:
 # can't accidentally mutate inventory state just by iterating it.
 func inventory() -> Dictionary:
 	return _material_amounts.duplicate()
+
+
+# Summed across every material — CARGO_CAPACITY is one shared hold, not a
+# per-material allowance. Computed fresh from _material_amounts every call
+# rather than tracked as a running counter, so it stays correct even though
+# the hold can also shrink (spend_materials, crafting) as well as grow.
+func total_cargo_used() -> int:
+	var total := 0
+	for amount: int in _material_amounts.values():
+		total += amount
+	return total
+
+
+func cargo_space_remaining() -> int:
+	return maxi(0, CARGO_CAPACITY - total_cargo_used())
+
+
+func is_cargo_full() -> bool:
+	return total_cargo_used() >= CARGO_CAPACITY
 
 
 func _key(body_id: String, material_name: String) -> String:

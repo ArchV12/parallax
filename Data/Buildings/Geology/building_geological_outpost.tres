@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="BuildingDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/BuildingDef.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "geological_outpost"
+display_name = "Geological Outpost"
+category_id = "geological"
+tier = 1
+multiplier = 0.6
+credits_cost = 5000
+materials_requirements = Dictionary[String, int]({"Iron": 750, "Silicon": 500})
+knowledge_requirements = Dictionary[String, int]({"geological": 100})
+description = "A crewed-capable outpost with dedicated core-sampling equipment."

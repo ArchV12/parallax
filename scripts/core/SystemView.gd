@@ -806,13 +806,26 @@ func _unhandled_input(event: InputEvent) -> void:
 		var mb := event as InputEventMouseButton
 		match mb.button_index:
 			MOUSE_BUTTON_WHEEL_UP:
-				_distance *= ZOOM_STEP
-				_target_distance = _distance  # manual zoom overrides any focus-zoom in progress
-				_update_camera()
+				# Focused only — unfocused, _distance is purely the free-fly
+				# speed dial (see FREE_FLY_SPEED_MULT), not a camera-position
+				# input (_orbit_offset ignores it entirely while unfocused,
+				# see _process), so scrolling while unfocused used to have NO
+				# visible effect yet silently changed WASD speed anyway — a
+				# player would notice speed randomly drifting with no idea
+				# why. _clear_focus already resets _target_distance back to
+				# STOCK_DISTANCE on unfocus specifically so speed doesn't
+				# stay wherever a prior zoom left it; a no-op wheel here is
+				# what keeps that reset meaningful instead of immediately
+				# overwritable by a stray scroll.
+				if _focused_body != null:
+					_distance *= ZOOM_STEP
+					_target_distance = _distance  # manual zoom overrides any focus-zoom in progress
+					_update_camera()
 			MOUSE_BUTTON_WHEEL_DOWN:
-				_distance /= ZOOM_STEP
-				_target_distance = _distance
-				_update_camera()
+				if _focused_body != null:
+					_distance /= ZOOM_STEP
+					_target_distance = _distance
+					_update_camera()
 			MOUSE_BUTTON_LEFT:
 				_orbiting = mb.pressed
 				if mb.pressed:

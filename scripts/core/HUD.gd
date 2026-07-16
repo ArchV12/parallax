@@ -36,6 +36,8 @@ var _pause_layer: CanvasLayer
 var _debug_layer: CanvasLayer
 var _system_label: Label
 var _year_label: Label
+var _credits_label: Label
+var _knowledge_bar: KnowledgeBar
 var _view_label: Label
 var _view_switcher: ViewSwitcher
 var _console: ConsolePanel
@@ -86,6 +88,7 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if _fps_label.visible:
 		_fps_label.text = "FPS: %d" % Engine.get_frames_per_second()
+	_layout_knowledge_bar()
 	# Persistent reminder that a tier is pinned even when the cheat menu
 	# itself is closed — polled rather than signal-driven since PlayerState.
 	# engine_tier_override can also change without the menu's own knowledge
@@ -137,6 +140,31 @@ func _build_hud() -> void:
 	_view_switcher.view_selected.connect(go_to)
 	_view_switcher.active_tab_reclicked.connect(_on_active_tab_reclicked)
 	_hud_layer.add_child(_view_switcher)
+
+	# 2026-07-14: Credits readout, now backed by a real balance (Economy
+	# autoload) — SellCargoPanel (Cockpit-only, Q hotkey) is the first thing
+	# that actually earns any. Positioned midway between _system_label's
+	# right edge and the COCKPIT tab's left edge — see _layout_credits_label,
+	# deferred one frame so both of those have their real, laid-out
+	# positions/sizes to measure instead of whatever they still are
+	# mid-_ready() (ViewSwitcher's tab row, an HBoxContainer, doesn't finish
+	# sizing itself until Godot's own container-sort pass runs later this
+	# same frame).
+	_credits_label = _make_label(Control.PRESET_TOP_LEFT)
+	_credits_label.offset_top = 20
+	_credits_label.text = "CREDITS: 0"
+	Economy.balance_changed.connect(_on_balance_changed)
+	call_deferred("_layout_credits_label")
+
+	# Buildings System — six-category Knowledge bar (Docs/Buildings System.md),
+	# below the credits/system-label row. Recentered every frame in _process
+	# (see _layout_knowledge_bar) since, unlike _credits_label, six tiles'
+	# combined width can drift as any of them grows digits independently.
+	_knowledge_bar = KnowledgeBar.new()
+	_knowledge_bar.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	_knowledge_bar.offset_top = 62
+	_hud_layer.add_child(_knowledge_bar)
+	call_deferred("_layout_knowledge_bar")
 
 	_console = ConsolePanel.new()
 	_console.system_pressed.connect(open_system_menu)
@@ -200,12 +228,12 @@ func _on_operation_completed(op_id: String) -> void:
 
 
 # Mining-kind only — fires the instant a continuous mining operation ends,
-# for any of the three reasons (see Operations._finish_mining). Everything
+# for any of the four reasons (see Operations._finish_mining). Everything
 # in summary was already committed to the player's inventory as it ticked
 # (see Operations._tick_mining), so this toast is purely informational, not
 # a "come look at this" prompt the way _on_operation_completed's is. Cuts
 # the mining-loop.ogg cue and plays mining-end.ogg (see AudioManager.
-# mining_end) regardless of which of the three reasons ended it — the STOP
+# mining_end) regardless of which of the four reasons ended it — the STOP
 # button doesn't play this itself for exactly that reason (see
 # ActivitiesPanel._build_mining_active_row), this one call site covers it
 # either way.
@@ -219,6 +247,8 @@ func _on_operation_stopped(activity_id: String, location_id: String, summary: Di
 			reason_text = "DEPOSIT DEPLETED"
 		"departed":
 			reason_text = "STOPPED — DEPARTED"
+		"cargo_full":
+			reason_text = "CARGO FULL"
 	_operation_toast.show_toast("MINING %s — %s: +%d %s" % [
 		reason_text, location_id, summary["amount_awarded"], summary["material_name"]])
 
@@ -270,9 +300,43 @@ func _make_label(preset: Control.LayoutPreset) -> Label:
 	return l
 
 
+# _system_label and "COCKPIT" themselves never move or resize after initial
+# layout (their own text never changes, and UITheme flavor swaps only touch
+# color, not size/family — see _on_theme_changed), so this only ever needs
+# re-running when _credits_label's OWN width changes — the initial deferred
+# call above, and _on_balance_changed below (the balance's growing digit
+# count would otherwise walk the label's center off /out from the actual
+# midpoint over time, since its left edge is what gets set, not its center).
+func _layout_credits_label() -> void:
+	var cockpit_btn := _view_switcher.get_tab_button("cockpit")
+	if cockpit_btn == null:
+		return
+	var left := _system_label.global_position.x + _system_label.get_minimum_size().x
+	var right := cockpit_btn.global_position.x
+	var mid := (left + right) * 0.5
+	_credits_label.offset_left = mid - _credits_label.get_minimum_size().x * 0.5
+
+
+func _on_balance_changed(new_balance: int) -> void:
+	_credits_label.text = "CREDITS: %s" % Deposits.format_units(new_balance)
+	_layout_credits_label()
+
+
+# Recomputed every frame (see _process) rather than only on a specific
+# signal — unlike _credits_label (one number, one balance_changed source),
+# any of the six independent category values can grow digits at any time via
+# Buildings' own per-structure ticking, so there's no single event to hook.
+# Cheap enough to just poll, same precedent as ConsolePanel's own cargo
+# capacity sub-label.
+func _layout_knowledge_bar() -> void:
+	var viewport_width := get_viewport().get_visible_rect().size.x
+	_knowledge_bar.offset_left = (viewport_width - _knowledge_bar.get_minimum_size().x) * 0.5
+
+
 func _on_theme_changed() -> void:
 	_system_label.add_theme_color_override("font_color", UITheme.text)
 	_year_label.add_theme_color_override("font_color", UITheme.text)
+	_credits_label.add_theme_color_override("font_color", UITheme.text)
 
 
 # --- Visibility ---

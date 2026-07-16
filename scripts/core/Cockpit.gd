@@ -229,6 +229,7 @@ var _warp_points: WarpPoints
 var _activities_panel: ActivitiesPanel  # right-side "what can I do here" panel — see _build_activities_panel
 var _transmission_banner: EarthTransmissionBanner  # centered milestone notification — see _build_activities_panel
 var _survey_report_panel: SurveyReportPanel  # centered rich survey report (Geological Survey) — see _build_activities_panel
+var _sell_cargo_panel: SellCargoPanel  # Q hotkey, Cockpit-only — see _build_activities_panel/_unhandled_input
 var _transit_peak_speed := 1.0  # set per-trip in _build_transit — current_speed_km_s() normalized against this drives warp point intensity, see _process; 1.0 is just a safe non-zero placeholder before the first trip ever sets a real value
 var _transit_burn_duration := 0.0  # set per-trip in _build_transit (flight_profile's t1+t2) — how long the accel+decel burn lasts, used by _process to fire AudioManager.arrival_stop() ARRIVAL_STOP_LEAD_SECONDS before it ends
 var _primary: Node3D
@@ -568,6 +569,13 @@ func _build_activities_panel() -> void:
 	_activities_panel.geological_report_ready.connect(_survey_report_panel.show_geological_report)
 	_activities_panel.resource_report_ready.connect(_survey_report_panel.show_resource_report)
 	layer.add_child(_survey_report_panel)
+
+	# Q-hotkey only (see _unhandled_input) — deliberately Cockpit-scene-local
+	# rather than a HUD-persistent panel like CargoPanel, so it's structurally
+	# unreachable from System/Planetary view, not just conventionally
+	# restricted (see SellCargoPanel's own class comment).
+	_sell_cargo_panel = SellCargoPanel.new()
+	layer.add_child(_sell_cargo_panel)
 
 
 # --- Universe (Sol + all planets, persistent for the scene's whole life) ---
@@ -1339,3 +1347,9 @@ func _on_travel_completed() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		HUD.open_system_menu()
+		return
+	# Q toggles Sell Cargo — no action mapping exists for it (a raw keycode
+	# check, same style as HUD's F1/F2), and it's free in both ControlScheme
+	# schemes (WASD uses W/A/S/D, ESDF uses E/S/D/F — see that autoload).
+	if event is InputEventKey and event.pressed and not event.echo and (event as InputEventKey).keycode == KEY_Q:
+		_sell_cargo_panel.toggle()

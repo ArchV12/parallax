@@ -117,7 +117,10 @@ func _add_field(parent: VBoxContainer, label_text: String) -> Label:
 
 # ship_busy — true if a DIFFERENT operation is already running (Operations'
 # "single operation at a time" constraint) — disables BEGIN and shows a busy
-# status instead of Ready, same as ActivityDetailPanel.open_for.
+# status instead of Ready, same as ActivityDetailPanel.open_for. Cargo-full
+# (Deposits.is_cargo_full) is checked here too, independent of ship_busy —
+# a full hold blocks starting a NEW extraction the same way a running one
+# does, even with nothing else in progress.
 func open_for(body_id: String, material_name: String, ship_busy: bool) -> void:
 	var deposit := Deposits.deposit_for(body_id, material_name)
 	if deposit == null:
@@ -125,6 +128,7 @@ func open_for(body_id: String, material_name: String, ship_busy: bool) -> void:
 
 	_body_id = body_id
 	_material_name = material_name
+	var cargo_full := Deposits.is_cargo_full()
 
 	_title_label.text = material_name.to_upper()
 	_size_value.text = deposit.deposit_size
@@ -136,8 +140,8 @@ func open_for(body_id: String, material_name: String, ship_busy: bool) -> void:
 	_difficulty_value.text = deposit.extraction_difficulty
 	var rate := Deposits.extraction_rate_per_second(deposit)
 	_rate_value.text = "%.1f/sec" % rate
-	_status_value.text = "Ship Busy" if ship_busy else "Ready"
-	_begin_btn.disabled = ship_busy
+	_status_value.text = "Cargo Full" if cargo_full else ("Ship Busy" if ship_busy else "Ready")
+	_begin_btn.disabled = ship_busy or cargo_full
 	var depletion_rate := Deposits.depletion_rate_per_second(deposit)
 	var seconds_left := deposit.remaining_fraction / depletion_rate if depletion_rate > 0.0 else 0.0
 	_time_to_deplete_value.text = ActivityDef.format_duration(roundi(seconds_left))

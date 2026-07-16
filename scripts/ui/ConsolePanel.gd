@@ -155,6 +155,7 @@ func _ready() -> void:
 	PlayerState.travel_started.connect(_refresh_destination_readout)
 	PlayerState.location_changed.connect(_on_location_changed)
 	_refresh_destination_readout()
+	_update_cargo_capacity_label()
 
 	resized.connect(_layout_buttons)
 	UITheme.theme_changed.connect(queue_redraw)
@@ -163,6 +164,7 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_update_live_distance_preview()
+	_update_cargo_capacity_label()
 
 	if not PlayerState.is_traveling:
 		return
@@ -235,6 +237,17 @@ func _update_live_distance_preview() -> void:
 			Destination.preview_distance_km, engine["accel_km_s2"], engine["cruise_cap_km_s"])
 	_live_distance_label.text = TravelCalc.format_distance(est)
 	_live_distance_label.visible = true
+
+
+# Live "how full is the hold" readout on the CARGO pad itself (2026-07-14
+# ask) — so watching it fill up while mining doesn't require actually
+# opening the Cargo panel (CargoPanel.gd shows the same USED / CAPACITY
+# shape, just bigger, with a fill bar). Cheap enough (one Dictionary sum) to
+# just poll every frame like the rest of this panel's live readouts, rather
+# than wiring a change signal for it.
+func _update_cargo_capacity_label() -> void:
+	var used := Deposits.total_cargo_used()
+	_left_buttons[1].sub_label_text = "%s / %s" % [Deposits.format_units(used), Deposits.format_units(Deposits.CARGO_CAPACITY)]
 
 
 # Once you've arrived somewhere you'd already locked as a destination, the

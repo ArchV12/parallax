@@ -67,15 +67,17 @@ const DEPARTURE_HOLD_SECONDS := 3.4
 
 # How long the ship sits fully stopped — genuinely at rest, v = 0, not just
 # reading close to it — AFTER decel finishes and BEFORE the reorientation
-# into orbit begins (2026-07-11: the explicit ask was "pull up to the
-# planet to a complete stop, pause, THEN reorient" — Cockpit no longer
-# starts turning mid-decel at all; see Cockpit.gd's _begin_orbit_settle,
-# which now only ever fires once this hold has elapsed, via
-# PlayerState.travel_completed). Mirrors DEPARTURE_HOLD_SECONDS on the
-# other end of the trip — both are fixed real-time pauses bracketing the
-# motion, not scaled to trip length, since they're pacing beats, not
-# physics.
-const ARRIVAL_HOLD_SECONDS := 2.0
+# into orbit begins. Was 2.0 (2026-07-11: "pull up to the planet to a
+# complete stop, pause, THEN reorient" — Cockpit still never starts turning
+# mid-decel, see Cockpit.gd's _begin_orbit_settle), zeroed out 2026-07-14 —
+# that pause read as a stall between "Orbital Insertion" appearing (which
+# happens the instant decel ends, unaffected by this constant — see
+# ship_status below) and the ship actually starting to turn. Left as a
+# named constant rather than deleted outright — DEPARTURE_HOLD_SECONDS is
+# still a real pacing beat on the other end of the trip, and every call
+# site here already treats this as "however long the post-decel stop is,"
+# zero included, with no special-casing needed.
+const ARRIVAL_HOLD_SECONDS := 0.0
 
 # How long the camera's reorientation-into-orbit takes, once it starts (see
 # Cockpit.gd's _begin_orbit_settle, fired by PlayerState.travel_completed —

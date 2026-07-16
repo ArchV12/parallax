@@ -61,6 +61,12 @@ class Entry:
 	# planets/dwarf planets (parent == "") — moons don't have their own moons.
 	var moon_count: int = 0
 	var moon_count_is_capped: bool = false
+	# Richness/complexity of the surface record to survey — 0..1. Feeds
+	# NativeRate.geology()'s "richness" term. Default 0.6 (unremarkable/
+	# moderate) so most curated entries don't need an explicit override;
+	# only real standouts (heavily cratered/canyoned vs. young/resurfaced
+	# terrain) do — see the hand-set overrides in _ensure_built().
+	var terrain_ruggedness: float = 0.6
 	# Star-only facts (body_type == "Star") — spectral classification and
 	# photosphere temperature. Unused/blank for anything else.
 	var spectral_type: String = ""
@@ -147,6 +153,12 @@ static func _synthesize_asteroid_entry(body_name: String) -> Entry:
 	e.real_radius_km = radius_km
 	e.radius_ratio = radius_km / 6371.0  # Earth-relative, same reference every other entry uses
 	e.use_canonical_art = false
+	# Salted distinctly from AsteroidGeologicalGenerator's own seed so the
+	# two rolls don't correlate. Asteroids skew rugged/cratered — no
+	# atmosphere or geological activity has ever smoothed them over.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = ("%s|terrain_ruggedness" % body_name).hash()
+	e.terrain_ruggedness = rng.randf_range(0.4, 1.0)
 	return e
 
 
@@ -240,6 +252,7 @@ static func _ensure_built() -> void:
 	mercury.has_atmosphere = false
 	mercury.surface_pressure_atm = 0.0
 	mercury.moon_count = 0
+	mercury.terrain_ruggedness = 0.9  # ancient, heavily cratered, never resurfaced
 	_catalog[mercury.body_name] = mercury
 
 	var venus := Entry.new()
@@ -293,6 +306,7 @@ static func _ensure_built() -> void:
 	mars.has_atmosphere = true
 	mars.surface_pressure_atm = 0.006
 	mars.moon_count = 2
+	mars.terrain_ruggedness = 0.85  # Valles Marineris, Olympus Mons, ancient cratered terrain
 	_catalog[mars.body_name] = mars
 
 	var luna := Entry.new()
@@ -310,6 +324,7 @@ static func _ensure_built() -> void:
 	luna.orbital_period_days = 27.3  # around Earth, not Sol
 	luna.has_atmosphere = false
 	luna.surface_pressure_atm = 0.0
+	luna.terrain_ruggedness = 0.85  # ancient, heavily cratered, never resurfaced
 	_catalog[luna.body_name] = luna
 
 	var jupiter := Entry.new()
@@ -425,13 +440,23 @@ static func _ensure_built() -> void:
 	_catalog["Phobos"] = _make_moon("Phobos", "Mars", 11.1, 0.32, 9376.0)
 	_catalog["Deimos"] = _make_moon("Deimos", "Mars", 6.2, 1.26, 23463.0)
 
-	_catalog["Io"] = _make_moon("Io", "Jupiter", 1821.6, 1.77, 421700.0)
-	_catalog["Europa"] = _make_moon("Europa", "Jupiter", 1560.8, 3.55, 671034.0)
+	# Io and Europa are both continuously resurfaced (volcanism/tidal ice
+	# flexing) despite having no atmosphere — the geological record erases
+	# fast even without weathering, a known gap in the simplified
+	# atmosphere-only preservation formula (see NativeRate.geology()).
+	var io := _make_moon("Io", "Jupiter", 1821.6, 1.77, 421700.0)
+	io.terrain_ruggedness = 0.2
+	_catalog["Io"] = io
+	var europa := _make_moon("Europa", "Jupiter", 1560.8, 3.55, 671034.0)
+	europa.terrain_ruggedness = 0.25
+	_catalog["Europa"] = europa
 	_catalog["Ganymede"] = _make_moon("Ganymede", "Jupiter", 2634.1, 7.15, 1070412.0)
 	_catalog["Callisto"] = _make_moon("Callisto", "Jupiter", 2410.3, 16.69, 1882709.0)
 
 	_catalog["Mimas"] = _make_moon("Mimas", "Saturn", 198.2, 0.94, 185539.0)
-	_catalog["Enceladus"] = _make_moon("Enceladus", "Saturn", 252.1, 1.37, 237948.0)
+	var enceladus := _make_moon("Enceladus", "Saturn", 252.1, 1.37, 237948.0)
+	enceladus.terrain_ruggedness = 0.3  # cryovolcanic, actively resurfaced
+	_catalog["Enceladus"] = enceladus
 	_catalog["Tethys"] = _make_moon("Tethys", "Saturn", 531.1, 1.89, 294619.0)
 	_catalog["Dione"] = _make_moon("Dione", "Saturn", 561.4, 2.74, 377396.0)
 	_catalog["Rhea"] = _make_moon("Rhea", "Saturn", 763.8, 4.52, 527108.0)

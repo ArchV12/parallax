@@ -187,7 +187,7 @@ func _build_planet_rows(entry: KnownBodies.Entry) -> void:
 	_add_row("ORBITAL PERIOD", _format_period(entry.orbital_period_days))
 	_add_row("ATMOSPHERE", "Yes" if entry.has_atmosphere else "No")
 	_add_row("SURFACE PRESSURE", _format_pressure(entry.surface_pressure_atm) if entry.has_solid_surface else "N/A")
-	if entry.parent == "":  # moons don't have their own moons
+	if entry.parent == "" and entry.body_type != "Asteroid":  # moons don't have their own moons, and neither do asteroids
 		_add_row("MAJOR MOONS" if entry.moon_count_is_capped else "MOONS", str(entry.moon_count))
 		if entry.moon_count > 0:
 			_add_planetary_system_button(entry.body_name)

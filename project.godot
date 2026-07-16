@@ -29,6 +29,8 @@ Research="*res://scripts/core/Research.gd"
 Operations="*res://scripts/core/Operations.gd"
 Deposits="*res://scripts/core/Deposits.gd"
 ControlScheme="*res://scripts/core/ControlScheme.gd"
+Economy="*res://scripts/core/Economy.gd"
+Buildings="*res://scripts/core/Buildings.gd"
 
 [display]
 

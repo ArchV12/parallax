@@ -72,6 +72,14 @@ func _ready() -> void:
 		_underlines[view["id"]] = underline
 
 
+# A specific tab's own button — HUD uses this (the "cockpit" tab) to find
+# the row's actual rendered left edge for positioning the Credits readout
+# between it and the top-left system label, rather than guessing at pixel
+# offsets that would drift the moment a tab's label text changes.
+func get_tab_button(id: String) -> UIButton:
+	return _tabs.get(id)
+
+
 func set_active(id: String) -> void:
 	if not _tabs.has(id) or id == _active_id:
 		return

@@ -30,8 +30,8 @@ signal operation_started(op_id: String)
 signal operation_completed(op_id: String)
 signal operation_dismissed(op_id: String)
 # Mining-kind only — fired the instant a continuous mining operation ends,
-# for any of the three reasons ("stopped"/"departed"/"depleted" — see
-# _finish_mining). Carries a summary directly rather than an op_id, since
+# for any of the four reasons ("stopped"/"departed"/"depleted"/"cargo_full"
+# — see _finish_mining). Carries a summary directly rather than an op_id, since
 # the ActiveOperation is already erased from _operations by the time this
 # fires (there's nothing left to view — everything in summary was already
 # committed to Deposits' inventory as it ticked, unlike a survey's deferred
@@ -135,12 +135,13 @@ func start_survey(activity_id: String, location_id: String) -> String:
 # a time (never "extract everything"), per the deliberate gameplay choice
 # this is. Continuous, not a single resolve step (see _tick_mining) — there
 # is no yield to roll or duration to set up front, both emerge tick by tick.
-# Returns "" if the deposit doesn't exist (defensive only —
-# DepositDetailPanel.open_for already wouldn't have offered BEGIN
-# EXTRACTION for a material with no deposit).
+# Returns "" if the deposit doesn't exist, or if the cargo hold is already
+# full (both defensive only — DepositDetailPanel.open_for already wouldn't
+# have offered a usable BEGIN EXTRACTION for either case; see its own
+# ship_busy/is_cargo_full handling).
 func start_mining(body_id: String, material_name: String) -> String:
 	var deposit := Deposits.deposit_for(body_id, material_name)
-	if deposit == null:
+	if deposit == null or Deposits.is_cargo_full():
 		return ""
 	var op := ActiveOperation.new()
 	_next_op_id += 1
@@ -205,23 +206,33 @@ func _resolve(op: ActiveOperation) -> void:
 
 # One continuous-mining tick's worth of progress, called every frame while
 # a mining operation is RUNNING. Clamps this tick's effective delta to
-# whatever time is actually left before the deposit hits 0%, so a single
-# large delta (a lag spike, or just bad luck on frame timing) can never
-# overshoot past full depletion. Fractional yield accumulates on the
-# operation itself (mining_yield_accumulator) and is only committed to
-# Deposits' inventory once it crosses a whole-unit boundary — the player's
-# inventory should only ever hold whole numbers, but depletion itself stays
-# smooth every frame regardless of where that boundary falls.
+# whichever comes first — the deposit hitting 0%, or the cargo hold hitting
+# CARGO_CAPACITY (see Deposits.cargo_space_remaining) — so a single large
+# delta (a lag spike, or just bad luck on frame timing) can never overshoot
+# past either limit. Fractional yield accumulates on the operation itself
+# (mining_yield_accumulator) and is only committed to Deposits' inventory
+# once it crosses a whole-unit boundary — the player's inventory should only
+# ever hold whole numbers, but depletion itself stays smooth every frame
+# regardless of where that boundary falls.
 func _tick_mining(op: ActiveOperation, delta: float) -> void:
 	var deposit := Deposits.deposit_for(op.location_id, op.deposit_material)
 	if deposit == null or deposit.remaining_fraction <= 0.0:
 		_finish_mining(op, "depleted")
 		return
+	var space := Deposits.cargo_space_remaining()
+	if space <= 0:
+		_finish_mining(op, "cargo_full")
+		return
 
 	var depletion_rate := Deposits.depletion_rate_per_second(deposit)
 	var extraction_rate := Deposits.extraction_rate_per_second(deposit)
 	var time_to_deplete := deposit.remaining_fraction / depletion_rate
-	var actual_delta := minf(delta, time_to_deplete)
+	# How much longer, at this rate, before the remaining cargo space fills —
+	# nets out mining_yield_accumulator's already-banked fractional progress
+	# toward the next whole unit, so this doesn't overstate the time left by
+	# up to a whole extra unit's worth.
+	var time_to_fill_cargo := (float(space) - op.mining_yield_accumulator) / extraction_rate
+	var actual_delta := minf(delta, minf(time_to_deplete, time_to_fill_cargo))
 
 	var fraction_delta := depletion_rate * actual_delta
 	op.mining_yield_accumulator += extraction_rate * actual_delta
@@ -231,21 +242,23 @@ func _tick_mining(op: ActiveOperation, delta: float) -> void:
 		op.mining_session_yield += whole_units
 	Deposits.extract_tick(op.location_id, op.deposit_material, whole_units, fraction_delta)
 
-	if actual_delta >= time_to_deplete:
+	if actual_delta >= time_to_fill_cargo:
+		_finish_mining(op, "cargo_full")
+	elif actual_delta >= time_to_deplete:
 		_finish_mining(op, "depleted")
 
 
-# The one place a mining operation actually ends, for any of the three
-# reasons the user specified (player-initiated stop_mining, departure —
-# see _on_travel_started, or hitting 0% here in _tick_mining). Erases it
-# immediately rather than moving it to a COMPLETE-awaiting-dismiss state —
-# there's nothing left to view, everything in summary was already
+# The one place a mining operation actually ends, for any of the four
+# reasons (player-initiated stop_mining, departure — see _on_travel_started,
+# hitting 0% remaining, or hitting CARGO_CAPACITY — both in _tick_mining).
+# Erases it immediately rather than moving it to a COMPLETE-awaiting-dismiss
+# state — there's nothing left to view, everything in summary was already
 # committed to Deposits' inventory as it ticked (see _tick_mining).
 func _finish_mining(op: ActiveOperation, reason: String) -> void:
 	var summary := {
 		"material_name": op.deposit_material,
 		"amount_awarded": op.mining_session_yield,
-		"reason": reason,  # "stopped" / "departed" / "depleted"
+		"reason": reason,  # "stopped" / "departed" / "depleted" / "cargo_full"
 	}
 	_operations.erase(op.op_id)
 	operation_stopped.emit(op.activity_id, op.location_id, summary)

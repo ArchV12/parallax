@@ -25,8 +25,17 @@ var top_right: float = 0.0  # local-space y of the top edge at x = size.x
 var label_text: String = "" : set = set_label_text
 var press_sfx: String = "button_general"  # AudioManager's default press sound unless overridden — see UIButton.press_sfx, same idea
 
+# Optional small dim line under the main label — e.g. CARGO's live capacity
+# readout (see ConsolePanel._update_cargo_capacity_label). "" (the default,
+# every OTHER pad's permanent state) hides it entirely and the main label
+# recenters as if it were never there — this stays a generic capability on
+# the shared pad class rather than a CARGO-only hack, same spirit as
+# press_sfx being overridable per-instance instead of hardcoded per-button.
+var sub_label_text: String = "" : set = set_sub_label_text
+
 var _hovered := false
 var _label: Label
+var _sub_label: Label
 
 
 func _ready() -> void:
@@ -40,6 +49,15 @@ func _ready() -> void:
 	_label.add_theme_color_override("font_color", UITheme.text)
 	add_child(_label)
 
+	_sub_label = Label.new()
+	_sub_label.text = sub_label_text
+	_sub_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_sub_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_sub_label.add_theme_font_size_override("font_size", 10)
+	_sub_label.add_theme_color_override("font_color", UITheme.dim)
+	_sub_label.visible = sub_label_text != ""
+	add_child(_sub_label)
+
 	mouse_entered.connect(_on_hover)
 	mouse_exited.connect(_on_unhover)
 	resized.connect(_layout_label)
@@ -51,6 +69,14 @@ func set_label_text(value: String) -> void:
 	label_text = value
 	if _label != null:
 		_label.text = value
+
+
+func set_sub_label_text(value: String) -> void:
+	sub_label_text = value
+	if _sub_label != null:
+		_sub_label.text = value
+		_sub_label.visible = value != ""
+		_layout_label()
 
 
 func set_top_edge(tl: float, tr: float) -> void:
@@ -88,18 +114,27 @@ func _on_unhover() -> void:
 
 func _on_theme_changed() -> void:
 	_label.add_theme_color_override("font_color", UITheme.text)
+	_sub_label.add_theme_color_override("font_color", UITheme.dim)
 	queue_redraw()
 
 
-# Centers the label between the taller of the two top-edge heights and the
-# bottom — keeps it clear of the narrow tip so it never pokes above the roof.
+# Centers the label (or the label+sub_label pair, as one block, when the
+# sub label is showing) between the taller of the two top-edge heights and
+# the bottom — keeps it clear of the narrow tip so it never pokes above the
+# roof.
 func _layout_label() -> void:
 	if _label == null:
 		return
 	var constraining_top: float = maxf(top_left, top_right)
-	var mid_y: float = (constraining_top + size.y) * 0.5
 	_label.size = Vector2(size.x, _label.get_minimum_size().y)
-	_label.position = Vector2(0.0, mid_y - _label.size.y * 0.5)
+	if _sub_label != null and _sub_label.visible:
+		_sub_label.size = Vector2(size.x, _sub_label.get_minimum_size().y)
+		var block_top: float = (constraining_top + size.y - _label.size.y - _sub_label.size.y) * 0.5
+		_label.position = Vector2(0.0, block_top)
+		_sub_label.position = Vector2(0.0, block_top + _label.size.y)
+	else:
+		var mid_y: float = (constraining_top + size.y) * 0.5
+		_label.position = Vector2(0.0, mid_y - _label.size.y * 0.5)
 
 
 func _draw() -> void:

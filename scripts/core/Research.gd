@@ -16,6 +16,12 @@ extends Node
 # silently misses every OTHER path that calls add_knowledge.
 signal milestone_reached(tech: TechnologyDef)
 
+# Fired on EVERY add_knowledge() call, unlike milestone_reached (tier-unlock
+# only) — a live-ticking readout (the Buildings top bar, which commits small
+# fractional-accumulated amounts every frame per structure) needs every
+# change, not just milestone crossings.
+signal knowledge_changed(category_id: String, new_total: int)
+
 # Every known Activity's data file. Hand-authored and hardcoded here rather
 # than scanned from disk — activities are a small, fixed, designed set (see
 # Question 2 Answer.md), same spirit as TravelCalc.ENGINE_TIERS.
@@ -319,6 +325,7 @@ func asteroid_au_distance_for(body_id: String) -> float:
 # run_survey, so any future caller of add_knowledge gets it for free.
 func add_knowledge(category_id: String, amount: int) -> Array[TechnologyDef]:
 	_knowledge[category_id] = knowledge(category_id) + amount
+	knowledge_changed.emit(category_id, _knowledge[category_id])
 	return _check_milestones()
 
 
