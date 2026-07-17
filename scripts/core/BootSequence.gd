@@ -25,11 +25,14 @@ extends Control
 #     "INITIALIZING..." beat.
 #   AudioManager.boot_confirm()   -> Assets/sfx/access_granted.ogg [live]
 #     Single confirmation tone under "COMMANDER ACCESS GRANTED".
+#   AudioManager.ship_startup()   -> Assets/sfx/ship_startup.ogg [live]
+#     Fired once at _finish(), right as the 11-second fade to the cockpit
+#     begins.
 # The not-yet-added ones no-op safely (with a one-time warning) until the
 # files exist, per AudioManager/MusicManager's existing convention.
 
 const FADE_TIME := 1.0
-const COCKPIT_REVEAL_TIME := 4.0  # the sequence's own natural ending (_finish) gets a long, deliberate reveal — skipping (early or via the intro pref) still gets HUD.go_to's normal quick fade, see those call sites
+const COCKPIT_REVEAL_TIME := 10.0  # the sequence's own natural ending (_finish) gets a long, deliberate reveal — skipping (early or via the intro pref) still gets HUD.go_to's normal quick fade, see those call sites
 const TYPE_CHARS_PER_SEC := 35.0
 const TYPE_MIN_TIME := 0.06
 const TYPE_CLICK_STRIDE := 2  # click every Nth typed character — every char at 35cps blurs into a buzz
@@ -252,7 +255,8 @@ func _wait(seconds: float) -> bool:
 func _finish() -> void:
 	if _skipped:
 		return
-	HUD.go_to("res://scenes/cockpit.tscn", COCKPIT_REVEAL_TIME)
+	AudioManager.ship_startup()
+	HUD.go_to("res://scenes/cockpit.tscn", COCKPIT_REVEAL_TIME, AudioManager.good_morning)
 
 
 func _unhandled_input(event: InputEvent) -> void:

@@ -6,6 +6,7 @@ const PREFS_PATH := "user://prefs.json"
 var _music_slider:   HSlider
 var _sfx_slider:     HSlider
 var _ambient_slider: HSlider
+var _voice_slider:   HSlider
 var _theme_option:   OptionButton
 var _movement_keys_option: OptionButton
 var _skip_intro_check: CheckBox
@@ -74,10 +75,12 @@ func _build() -> void:
 	_music_slider   = _add_slider_row(vbox, "Music")
 	_sfx_slider     = _add_slider_row(vbox, "SFX")
 	_ambient_slider = _add_slider_row(vbox, "Ambient")
+	_voice_slider   = _add_slider_row(vbox, "Voice")
 
 	_music_slider.value_changed.connect(_on_music_changed)
 	_sfx_slider.value_changed.connect(_on_sfx_changed)
 	_ambient_slider.value_changed.connect(_on_ambient_changed)
+	_voice_slider.value_changed.connect(_on_voice_changed)
 
 	vbox.add_child(HSeparator.new())
 
@@ -228,6 +231,12 @@ func _on_ambient_changed(value: float) -> void:
 	_save()
 
 
+func _on_voice_changed(value: float) -> void:
+	_apply_bus("Voice", value)
+	_update_pct(_voice_slider)
+	_save()
+
+
 func _on_skip_intro_toggled(_pressed: bool) -> void:
 	_save()
 
@@ -269,17 +278,21 @@ func _load_and_apply() -> void:
 	var music_vol:   float = prefs.get("music_volume",   0.2)
 	var sfx_vol:     float = prefs.get("sfx_volume",     1.0)
 	var ambient_vol: float = prefs.get("ambient_volume", 0.2)
+	var voice_vol:   float = prefs.get("voice_volume",   0.7)
 	var skip_intro:  bool  = prefs.get("skip_intro",     false)
 	_music_slider.set_value_no_signal(music_vol)
 	_sfx_slider.set_value_no_signal(sfx_vol)
 	_ambient_slider.set_value_no_signal(ambient_vol)
+	_voice_slider.set_value_no_signal(voice_vol)
 	_skip_intro_check.set_pressed_no_signal(skip_intro)
 	_apply_bus("Music",   music_vol)
 	_apply_bus("SFX",     sfx_vol)
 	_apply_bus("Ambient", ambient_vol)
+	_apply_bus("Voice",   voice_vol)
 	_update_pct(_music_slider)
 	_update_pct(_sfx_slider)
 	_update_pct(_ambient_slider)
+	_update_pct(_voice_slider)
 
 
 func _save() -> void:
@@ -287,6 +300,7 @@ func _save() -> void:
 	prefs["music_volume"]   = _music_slider.value
 	prefs["sfx_volume"]     = _sfx_slider.value
 	prefs["ambient_volume"] = _ambient_slider.value
+	prefs["voice_volume"]   = _voice_slider.value
 	prefs["skip_intro"]     = _skip_intro_check.button_pressed
 	var file := FileAccess.open(PREFS_PATH, FileAccess.WRITE)
 	if file:

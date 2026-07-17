@@ -6,6 +6,7 @@ extends Node
 # Pool size — max simultaneous overlapping sounds.
 const POOL_SIZE := 12
 const SFX_BASE := "res://Assets/sfx/"
+const VO_BASE := "res://Assets/voiceover/"
 
 var _pool: Array[AudioStreamPlayer] = []
 var _cache: Dictionary = {}  # path -> AudioStream
@@ -56,13 +57,16 @@ func _ready() -> void:
 # play("ui/button_click") — omit extension; tries .wav then .ogg. Returns the
 # player the sfx was started on (null if the asset is missing) — launch()
 # below uses this to chain the travel loop off the launch cue's own
-# `finished` signal.
-func play(sfx_path: String, volume_db: float = 0.0, pitch: float = 1.0) -> AudioStreamPlayer:
-	var stream := _load(sfx_path)
+# `finished` signal. `base`/`bus` default to SFX_BASE/"SFX"; play_vo() below
+# passes VO_BASE/"Voice" instead so ship-computer lines live in their own
+# Assets/voiceover/ folder and mix on their own bus (its own Options slider,
+# see OptionsUI) without needing a second copy of this function.
+func play(sfx_path: String, volume_db: float = 0.0, pitch: float = 1.0, base: String = SFX_BASE, bus: String = "SFX") -> AudioStreamPlayer:
+	var stream := _load(sfx_path, base)
 	if stream == null:
-		if not _warned.has(sfx_path):
-			_warned[sfx_path] = true
-			push_warning("AudioManager: sfx not found — %s" % sfx_path)
+		if not _warned.has(base + sfx_path):
+			_warned[base + sfx_path] = true
+			push_warning("AudioManager: sfx not found — %s" % (base + sfx_path))
 		return null
 	var player := _get_free_player()
 	if player == null:
@@ -70,8 +74,18 @@ func play(sfx_path: String, volume_db: float = 0.0, pitch: float = 1.0) -> Audio
 	player.stream = stream
 	player.volume_db = volume_db
 	player.pitch_scale = pitch
+	player.bus = bus
 	player.play()
 	return player
+
+
+# Same as play(), pointed at Assets/voiceover/ and the Voice bus instead of
+# Assets/sfx/ and SFX — the ship computer's spoken lines (see the "Ship
+# computer voiceover" section below). Kept as a thin wrapper rather than
+# folding callers over to play() directly so call sites read as "this is a
+# VO line," not a generic sfx.
+func play_vo(vo_path: String, volume_db: float = 0.0, pitch: float = 1.0) -> AudioStreamPlayer:
+	return play(vo_path, volume_db, pitch, VO_BASE, "Voice")
 
 
 # --- UI semantic sounds ---
@@ -312,6 +326,13 @@ func boot_confirm() -> void:
 	play("access_granted")
 
 
+# Fired once, right as BootSequence hands off to the cockpit (_finish) —
+# the ship coming to life under its new commander, timed to the long
+# COCKPIT_REVEAL_TIME fade-in rather than the snappy default view-switch fade.
+func ship_startup() -> void:
+	play("ship_startup")
+
+
 # Terminal-style typing click, meant to be retriggered rapidly as text types
 # on — a little pitch wobble keeps a fast run of clicks from sounding like
 # one clip stuttering.
@@ -319,11 +340,56 @@ func type_char() -> void:
 	play("type_char", -10.0, randf_range(0.92, 1.08))
 
 
+# --- Ship computer voiceover ---
+# Spoken lines from Assets/voiceover/, routed through play_vo() instead of
+# play() so they're loaded from their own folder (see VO_BASE/play_vo above).
+
+# Fired once BootSequence's cockpit fade-in has fully resolved — see
+# HUD.go_to's on_revealed callback param, and BootSequence._finish, its only
+# caller.
+func good_morning() -> void:
+	play_vo("good_morning")
+
+
+# Fired alongside the "CARGO FULL" toast — see HUD._on_operation_stopped,
+# the "cargo_full" reason arm (matches AudioManager.mining_end, already
+# firing there for the sfx side of the same event).
+func cargo_full() -> void:
+	play_vo("cargo_full")
+
+
+# Fired the instant a destination is actually locked (not on unlock) — see
+# LockButton._on_pressed.
+func target_locked() -> void:
+	play_vo("target_locked")
+
+
+# Fired the instant a trip resolves — see Cockpit._on_travel_completed,
+# alongside _begin_orbit_settle.
+func destination_reached() -> void:
+	play_vo("destination_reached")
+
+
+# Fired on a completed construction — see HUD._on_structure_constructed,
+# listening to Buildings.structure_constructed (fires for both a new build
+# and a tier upgrade; this VO line plays for either).
+func construction_complete() -> void:
+	play_vo("construction_complete")
+
+
+# Fired the instant any survey resolves — see HUD._on_operation_completed,
+# alongside the existing AudioManager.survey_complete() sfx cue (the short
+# ping) below. Named with a _vo suffix, unlike every other function in this
+# section, only because "survey_complete" was already taken by that sfx cue.
+func survey_complete_vo() -> void:
+	play_vo("survey_complete")
+
+
 # Stops any currently-playing instance of this sfx — for repeating/interruptible
 # sounds that need to cut off immediately rather than ring out to their
 # natural end.
-func stop(sfx_path: String) -> void:
-	var stream: AudioStream = _cache.get(sfx_path)
+func stop(sfx_path: String, base: String = SFX_BASE) -> void:
+	var stream: AudioStream = _cache.get(base + sfx_path)
 	if stream == null:
 		return
 	for p in _pool:
@@ -331,16 +397,17 @@ func stop(sfx_path: String) -> void:
 			p.stop()
 
 
-func _load(sfx_path: String) -> AudioStream:
-	if _cache.has(sfx_path):
-		return _cache[sfx_path]
+func _load(sfx_path: String, base: String = SFX_BASE) -> AudioStream:
+	var cache_key := base + sfx_path
+	if _cache.has(cache_key):
+		return _cache[cache_key]
 	for ext in ["wav", "ogg"]:
-		var full: String = SFX_BASE + sfx_path + "." + ext
+		var full: String = base + sfx_path + "." + ext
 		if ResourceLoader.exists(full):
 			var stream: AudioStream = ResourceLoader.load(full)
-			_cache[sfx_path] = stream
+			_cache[cache_key] = stream
 			return stream
-	_cache[sfx_path] = null  # cache miss so we don't re-scan every call
+	_cache[cache_key] = null  # cache miss so we don't re-scan every call
 	return null
 
 

@@ -229,7 +229,9 @@ var _warp_points: WarpPoints
 var _activities_panel: ActivitiesPanel  # right-side "what can I do here" panel — see _build_activities_panel
 var _transmission_banner: EarthTransmissionBanner  # centered milestone notification — see _build_activities_panel
 var _survey_report_panel: SurveyReportPanel  # centered rich survey report (Geological Survey) — see _build_activities_panel
-var _sell_cargo_panel: SellCargoPanel  # Q hotkey, Cockpit-only — see _build_activities_panel/_unhandled_input
+var _sell_cargo_panel: SellCargoPanel  # Q hotkey AND the command menu's ECONOMY->SELL leaf, Cockpit-only — see _build_activities_panel/_unhandled_input
+var _buildings_panel: BuildingsPanel  # command menu's CONSTRUCTION leaf, Cockpit-only — see _build_activities_panel
+var _structures_readout: StructuresReadout  # always-on left-side "what's running here" readout — see _build_activities_panel
 var _transit_peak_speed := 1.0  # set per-trip in _build_transit — current_speed_km_s() normalized against this drives warp point intensity, see _process; 1.0 is just a safe non-zero placeholder before the first trip ever sets a real value
 var _transit_burn_duration := 0.0  # set per-trip in _build_transit (flight_profile's t1+t2) — how long the accel+decel burn lasts, used by _process to fire AudioManager.arrival_stop() ARRIVAL_STOP_LEAD_SECONDS before it ends
 var _primary: Node3D
@@ -570,12 +572,34 @@ func _build_activities_panel() -> void:
 	_activities_panel.resource_report_ready.connect(_survey_report_panel.show_resource_report)
 	layer.add_child(_survey_report_panel)
 
-	# Q-hotkey only (see _unhandled_input) — deliberately Cockpit-scene-local
-	# rather than a HUD-persistent panel like CargoPanel, so it's structurally
-	# unreachable from System/Planetary view, not just conventionally
-	# restricted (see SellCargoPanel's own class comment).
+	# Q-hotkey (see _unhandled_input) AND the command menu's ECONOMY->SELL leaf
+	# both toggle this — deliberately Cockpit-scene-local rather than a
+	# HUD-persistent panel like CargoPanel, so it's structurally unreachable
+	# from System/Planetary view, not just conventionally restricted (see
+	# SellCargoPanel's own class comment). CommandMenu itself already gates
+	# SELL to Cockpit context (see HUD.set_view), so this connection only
+	# ever fires while actually in Cockpit anyway.
 	_sell_cargo_panel = SellCargoPanel.new()
 	layer.add_child(_sell_cargo_panel)
+	HUD.sell_requested.connect(_sell_cargo_panel.toggle)
+
+	# CONSTRUCTION leaf — same Cockpit-only reasoning as Buildings/Sell above.
+	_buildings_panel = BuildingsPanel.new()
+	layer.add_child(_buildings_panel)
+	HUD.construction_requested.connect(func() -> void:
+		if _buildings_panel.visible:
+			_buildings_panel.close()
+		else:
+			_buildings_panel.open())
+
+	# OPERATIONS leaf — toggles the same drawer its own tab already does.
+	HUD.operations_requested.connect(_activities_panel.toggle)
+
+	# Always-on, not gated behind any leaf — see StructuresReadout's own
+	# class comment for why this replaced BuildingsPanel's old STRUCTURES
+	# HERE section instead of living behind a menu press.
+	_structures_readout = StructuresReadout.new()
+	layer.add_child(_structures_readout)
 
 
 # --- Universe (Sol + all planets, persistent for the scene's whole life) ---
@@ -1337,6 +1361,7 @@ func _play_departure_maneuver() -> void:
 func _on_travel_completed() -> void:
 	if not _in_transit:
 		return  # not the active scene when the trip finished — nothing to rebuild
+	AudioManager.destination_reached()
 	_build_arrival(PlayerState.location_id)
 	_begin_orbit_settle()
 	# _build_arrival already set the location readout to "X Orbit" — no

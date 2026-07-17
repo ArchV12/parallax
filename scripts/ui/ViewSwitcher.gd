@@ -1,11 +1,14 @@
 class_name ViewSwitcher
 extends Control
 
-# Top-center row of scope tabs (Cockpit / Solar System / ...). Deliberately
-# separate from the bottom console — switching which scope you're looking
-# at is a camera/perspective change, not a ship action, so it doesn't
-# belong mixed in with the console's action pads (see the cockpit-console
-# and view-switcher conversations in parallax-core-design-decisions memory).
+# Bottom-right row of scope tabs (Cockpit / Solar System / ...) — moved out
+# of the crowded top band (system/credits/year/knowledge-bar all competing
+# for the same space) to its own quiet corner. Deliberately separate from
+# CommandMenu's fan (bottom-center) — switching which scope you're looking
+# at is a camera/perspective change, not a ship action, so it doesn't belong
+# mixed in with the command menu's action leaves either (see the cockpit-
+# console and view-switcher conversations in parallax-core-design-decisions
+# memory).
 #
 # Data-driven off VIEWS so a new scope tier later (Object/surface view, ...)
 # is one array entry, not new layout code — the row just grows via
@@ -31,25 +34,30 @@ const VIEWS: Array[Dictionary] = [
 
 const TAB_GAP := 4
 const UNDERLINE_HEIGHT := 2.0
+const CORNER_MARGIN := 24.0
 
 var _tabs: Dictionary = {}        # id -> UIButton
 var _underlines: Dictionary = {}  # id -> ColorRect
 var _active_id: String = ""
+var _row: HBoxContainer
 
 
 func _ready() -> void:
-	set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
-	offset_top = 20.0
-	grow_horizontal = Control.GROW_DIRECTION_BOTH
-
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", TAB_GAP)
-	add_child(row)
+	# Anchors/offsets are left at their Control default (all 0 — top-left,
+	# zero-size) deliberately; final position/size is computed explicitly in
+	# _layout_bottom_right below, once. Using set_anchors_and_offsets_preset
+	# here (as a first attempt did) computes offsets from THIS control's
+	# size at the moment it's called — before _row has any tab children,
+	# that's still (0,0), which put the row's TOP-LEFT at the corner instead
+	# of growing the whole row from its own bottom-right.
+	_row = HBoxContainer.new()
+	_row.add_theme_constant_override("separation", TAB_GAP)
+	add_child(_row)
 
 	for view: Dictionary in VIEWS:
 		var cell := VBoxContainer.new()
 		cell.add_theme_constant_override("separation", 2)
-		row.add_child(cell)
+		_row.add_child(cell)
 
 		var btn := UIButton.new()
 		btn.text = view["label"]
@@ -71,11 +79,27 @@ func _ready() -> void:
 		_tabs[view["id"]] = btn
 		_underlines[view["id"]] = underline
 
+	# Deferred one frame so _row (an HBoxContainer) has actually run Godot's
+	# own container-sort pass and reports its REAL size — same reasoning
+	# HUD._layout_knowledge_bar already defers for.
+	call_deferred("_layout_bottom_right")
 
-# A specific tab's own button — HUD uses this (the "cockpit" tab) to find
-# the row's actual rendered left edge for positioning the Credits readout
-# between it and the top-left system label, rather than guessing at pixel
-# offsets that would drift the moment a tab's label text changes.
+
+# Positions the whole row by its own actual size so its BOTTOM-RIGHT corner
+# lands at the screen's bottom-right corner (minus CORNER_MARGIN) — sets
+# `size` first (establishing the box's dimensions from _row's real minimum
+# size), then `position` (which Godot's Control.position setter moves while
+# PRESERVING the size just set), rather than fighting the anchor/offset
+# system directly.
+func _layout_bottom_right() -> void:
+	var viewport_size := get_viewport().get_visible_rect().size
+	size = _row.size
+	position = viewport_size - _row.size - Vector2(CORNER_MARGIN, CORNER_MARGIN)
+
+
+# A specific tab's own button — general accessor, kept public for whatever
+# future caller needs a tab's real rendered rect (HUD's Credits label used to
+# be one, before the tab row moved to the bottom-right corner).
 func get_tab_button(id: String) -> UIButton:
 	return _tabs.get(id)
 

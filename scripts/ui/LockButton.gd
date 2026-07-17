@@ -52,6 +52,7 @@ func _on_pressed() -> void:
 		Destination.clear()
 	else:
 		Destination.lock(_id)
+		AudioManager.target_locked()
 
 
 func _refresh_label() -> void:

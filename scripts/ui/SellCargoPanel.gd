@@ -213,6 +213,7 @@ func _build_row(material_name: String, amount: int) -> Control:
 	sell_btn.text = "SELL"
 	sell_btn.solid = true
 	sell_btn.shimmer_enabled = false
+	sell_btn.press_sfx = "sell_button"  # override — a distinct cash-register-style cue instead of the generic button click, see AudioManager.ui_confirm
 	sell_btn.custom_minimum_size = Vector2(0, 30)
 	expand_box.add_child(sell_btn)
 	box.set_meta("sell_btn", sell_btn)

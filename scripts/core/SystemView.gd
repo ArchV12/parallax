@@ -199,9 +199,8 @@ var _yaw := STOCK_YAW
 var _pitch := STOCK_PITCH
 var _distance := STOCK_DISTANCE
 var _target_distance := STOCK_DISTANCE
-var _orbiting := false
 var _panning := false
-var _looking := false  # RMB held — free-fly mouselook, unfocused only (see _unhandled_input)
+var _looking := false  # RMB held — orbits the focused body, or free-fly mouselook when unfocused (see _unhandled_input)
 var _left_press_pos := Vector2.ZERO
 var _focused_body: Node3D = null
 var _pan_target := Vector3.ZERO  # where the pivot eases to while unfocused — see _process's pivot-follow lerp
@@ -658,7 +657,7 @@ func _build_asteroid_body(rng: RandomNumberGenerator, seed_hash: int) -> Diction
 	params.crater_density = rng.randf_range(0.1, 0.25)
 	params.crater_size = rng.randf_range(0.12, 0.25)
 	params.crater_depth = rng.randf_range(0.05, 0.1)
-	params.detail = rng.randi_range(3, 5)  # 3-5 all generate fast enough at this scale — only 6 (Cosmic Forge's own cap) was the noticeably slow one
+	params.detail = 3  # capped flat — even the low end of the old 3-5 random range (2026-07-13) was still a noticeable load hitch across a whole belt population at this scale
 
 	var body := AsteroidGenerator.generate(params)
 	body.name = AsteroidDesignation.generate(seed_hash)
@@ -785,14 +784,19 @@ func _build_orbit_ring(radius: float) -> MeshInstance3D:
 
 # --- Camera input ---
 # Click a body — select/focus it, camera follows it around its orbit.
-# Left-drag or hold RMB — rotate (orbits the focused body if there is one,
-# so you can look at it from any angle; turns the free-fly camera in place
-# otherwise) · Wheel — zoom · Middle-drag — pan · movement keys (WASD or
-# ESDF, see ControlScheme) — free-fly, unfocused only (see
-# FREE_FLY_SPEED_MULT's class comment). Pan/free-fly are no-ops while
-# focused — _process re-glues the pivot to the body every frame, so anything
-# that moves the pivot manually gets overwritten the instant it's applied.
-# Esc clears focus, or leaves to Cockpit if nothing's focused.
+# Hold RMB — rotate (orbits the focused body if there is one, so you can
+# look at it from any angle; turns the free-fly camera in place otherwise);
+# cursor hides for the duration of the hold and reappears on release, same
+# idiom as any mouselook control (see _unhandled_input's MOUSE_BUTTON_RIGHT
+# case) · Wheel — zoom · Middle-drag — pan · movement keys (WASD or ESDF,
+# see ControlScheme) — free-fly, unfocused only (see FREE_FLY_SPEED_MULT's
+# class comment). LMB is click-to-select only now (2026-07-16) — it used to
+# double as a rotate-drag too, but that made a plain click-to-focus attempt
+# too easy to accidentally spin the camera with instead. Pan/free-fly are
+# no-ops while focused — _process re-glues the pivot to the body every
+# frame, so anything that moves the pivot manually gets overwritten the
+# instant it's applied. Esc clears focus, or leaves to Cockpit if nothing's
+# focused.
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
@@ -827,7 +831,9 @@ func _unhandled_input(event: InputEvent) -> void:
 					_target_distance = _distance
 					_update_camera()
 			MOUSE_BUTTON_LEFT:
-				_orbiting = mb.pressed
+				# Click-to-select only — no longer a rotate-drag (see class
+				# comment above _unhandled_input), so pressing LMB no longer
+				# needs to track anything but where it went down.
 				if mb.pressed:
 					_left_press_pos = mb.position
 				elif mb.position.distance_to(_left_press_pos) < CLICK_DRAG_THRESHOLD:
@@ -836,18 +842,21 @@ func _unhandled_input(event: InputEvent) -> void:
 					_try_select(mb.position)
 			MOUSE_BUTTON_RIGHT:
 				_looking = mb.pressed
+				# Hidden for the duration of the hold, not CAPTURED — this
+				# only needs to hide the cursor, not confine/re-center it
+				# (which would fight the OS cursor position once released).
+				Input.mouse_mode = Input.MOUSE_MODE_HIDDEN if mb.pressed else Input.MOUSE_MODE_VISIBLE
 			MOUSE_BUTTON_MIDDLE:
 				_panning = mb.pressed
 	elif event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
-		if _orbiting or _looking:
-			# Left-drag and RMB-drag are two buttons for the same yaw/pitch
-			# rotation — orbiting around the focused body when there is one
-			# (lets you look at it from any angle), or turning the free-fly
-			# camera in place when there isn't (see _process's _orbit_offset,
-			# which is what actually decides "orbit around a point" vs.
-			# "rotate in place" — this input handler doesn't need to care
-			# which one is currently happening).
+		if _looking:
+			# Orbits around the focused body when there is one (lets you
+			# look at it from any angle), or turns the free-fly camera in
+			# place when there isn't (see _process's _orbit_offset, which is
+			# what actually decides "orbit around a point" vs. "rotate in
+			# place" — this input handler doesn't need to care which one is
+			# currently happening).
 			_yaw -= mm.relative.x * ORBIT_SENSITIVITY
 			_pitch -= mm.relative.y * ORBIT_SENSITIVITY
 			_update_camera()
@@ -1002,6 +1011,7 @@ func _build_callout() -> void:
 	_callout_label = Label.new()
 	_callout_label.add_theme_font_size_override("font_size", 16)
 	_callout_label.add_theme_color_override("font_color", UITheme.accent)
+	UITheme.style_label_shadow(_callout_label)
 	_callout_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_callout_label.visible = false
 	_overlay_layer.add_child(_callout_label)
@@ -1045,6 +1055,7 @@ func _build_location_marker() -> void:
 	_location_marker_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_location_marker_label.add_theme_font_size_override("font_size", 12)
 	_location_marker_label.add_theme_color_override("font_color", UITheme.accent)
+	UITheme.style_label_shadow(_location_marker_label)
 	_location_marker_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_location_marker_label.visible = false
 	_overlay_layer.add_child(_location_marker_label)

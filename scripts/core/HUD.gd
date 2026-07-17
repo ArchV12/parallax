@@ -27,8 +27,19 @@ extends Node
 # loaded; System view connects to this itself in its own _ready().
 signal recenter_requested
 
+# Relayed from CommandMenu's own operations_pressed/construction_pressed/
+# sell_pressed — Cockpit connects to these on HUD, not to CommandMenu's
+# internals, same "autoload relays, per-scene script consumes" shape
+# recenter_requested above already uses. All three are Cockpit-only in
+# practice (CommandMenu gates them via set_cockpit_context), so only
+# Cockpit.gd ever needs to listen.
+signal operations_requested
+signal construction_requested
+signal sell_requested
+
 const TRANSITION_FADE_TIME := 0.18
 const TRANSITION_HOLD_TIME := 0.05
+const CREDITS_COUNT_SECONDS := 1.5
 
 var _hud_layer: CanvasLayer
 var _fade_layer: CanvasLayer
@@ -37,10 +48,13 @@ var _debug_layer: CanvasLayer
 var _system_label: Label
 var _year_label: Label
 var _credits_label: Label
+var _credits_display_value: int = 0  # the value currently shown, mid-count — separate from Economy.balance itself, which has already jumped to the new total by the time balance_changed fires
+var _credits_tween: Tween
 var _knowledge_bar: KnowledgeBar
 var _view_label: Label
 var _view_switcher: ViewSwitcher
-var _console: ConsolePanel
+var _status_strip: ShipStatusStrip
+var _command_menu: CommandMenu
 var _fade_rect: ColorRect
 var _fps_label: Label
 var _cheat_engine_label: Label
@@ -143,34 +157,49 @@ func _build_hud() -> void:
 
 	# 2026-07-14: Credits readout, now backed by a real balance (Economy
 	# autoload) — SellCargoPanel (Cockpit-only, Q hotkey) is the first thing
-	# that actually earns any. Positioned midway between _system_label's
-	# right edge and the COCKPIT tab's left edge — see _layout_credits_label,
-	# deferred one frame so both of those have their real, laid-out
-	# positions/sizes to measure instead of whatever they still are
-	# mid-_ready() (ViewSwitcher's tab row, an HBoxContainer, doesn't finish
-	# sizing itself until Godot's own container-sort pass runs later this
-	# same frame).
+	# that actually earns any. Stacked under _system_label/_view_label in the
+	# top-left corner, a plain static position — used to be dynamically
+	# centered against the ViewSwitcher's "cockpit" tab, which broke (twice)
+	# once that tab row moved to the bottom-right corner and stopped being a
+	# stable thing to center against. A fixed left-aligned line has nothing
+	# left to break.
 	_credits_label = _make_label(Control.PRESET_TOP_LEFT)
-	_credits_label.offset_top = 20
+	_credits_label.offset_left = 24
+	_credits_label.offset_top = 66
 	_credits_label.text = "CREDITS: 0"
 	Economy.balance_changed.connect(_on_balance_changed)
-	call_deferred("_layout_credits_label")
 
-	# Buildings System — six-category Knowledge bar (Docs/Buildings System.md),
-	# below the credits/system-label row. Recentered every frame in _process
-	# (see _layout_knowledge_bar) since, unlike _credits_label, six tiles'
-	# combined width can drift as any of them grows digits independently.
+	# Buildings System — six-category Knowledge bar (Docs/Buildings System.md).
+	# The prominent top-center element now — takes over the space the
+	# ViewSwitcher's tab row used to occupy (offset_top 20) now that the tabs
+	# live in the bottom-right corner instead. Recentered every frame in
+	# _process (see _layout_knowledge_bar) since, unlike _credits_label, six
+	# tiles' combined width can drift as any of them grows digits
+	# independently.
 	_knowledge_bar = KnowledgeBar.new()
 	_knowledge_bar.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	_knowledge_bar.offset_top = 62
+	_knowledge_bar.offset_top = 20
 	_hud_layer.add_child(_knowledge_bar)
 	call_deferred("_layout_knowledge_bar")
 
-	_console = ConsolePanel.new()
-	_console.system_pressed.connect(open_system_menu)
-	_console.research_pressed.connect(open_research_panel)
-	_console.cargo_pressed.connect(open_cargo_panel)
-	_hud_layer.add_child(_console)
+	# Console → status strip + fan command menu rearchitecture. Both stay
+	# HUD-global (not Cockpit-scene-local) — SYSTEM/RESEARCH/CARGO are the
+	# only way to reach those panels from System/Planetary View today (Esc
+	# only opens the Pause menu inside Cockpit.gd — verified directly), so a
+	# Cockpit-only command menu would have silently broken that. CommandMenu
+	# instead gates its three Cockpit-only entries (OPERATIONS/CONSTRUCTION/
+	# SELL) via set_cockpit_context(), driven from set_view() below.
+	_status_strip = ShipStatusStrip.new()
+	_hud_layer.add_child(_status_strip)
+
+	_command_menu = CommandMenu.new()
+	_command_menu.system_pressed.connect(open_system_menu)
+	_command_menu.research_pressed.connect(open_research_panel)
+	_command_menu.cargo_pressed.connect(open_cargo_panel)
+	_command_menu.operations_pressed.connect(func() -> void: operations_requested.emit())
+	_command_menu.construction_pressed.connect(func() -> void: construction_requested.emit())
+	_command_menu.sell_pressed.connect(func() -> void: sell_requested.emit())
+	_hud_layer.add_child(_command_menu)
 
 	# Subscribed directly here, not in a per-scene script like Cockpit.gd's
 	# other Research/Operations wiring — deliberately the first of its kind.
@@ -188,6 +217,7 @@ func _build_hud() -> void:
 	Operations.operation_completed.connect(_on_operation_completed)
 	Operations.operation_stopped.connect(_on_operation_stopped)
 	Research.milestone_reached.connect(_on_milestone_reached)
+	Buildings.structure_constructed.connect(_on_structure_constructed)
 
 
 # Fires the right start cue (mining-start.ogg/mining-loop.ogg or survey_
@@ -214,14 +244,16 @@ func _on_operation_started(op_id: String) -> void:
 # Operations.operation_stopped/_on_operation_stopped below). Text is driven
 # by the ActivityDef's own display_name rather than a hardcoded per-
 # activity_id string. Cuts the survey.ogg ambient and plays survey_complete.
-# ogg (see AudioManager.survey_complete) — this handler being survey-kind-
-# only already is exactly why that call doesn't need its own activity_id
-# check here.
+# ogg (see AudioManager.survey_complete) plus the ship computer's spoken
+# survey_complete.ogg VO line (AudioManager.survey_complete_vo) — this
+# handler being survey-kind-only already is exactly why neither call needs
+# its own activity_id check here.
 func _on_operation_completed(op_id: String) -> void:
 	var op := Operations.get_operation(op_id)
 	if op == null:
 		return
 	AudioManager.survey_complete()
+	AudioManager.survey_complete_vo()
 	var def := Research.activity_def(op.activity_id)
 	var name := def.display_name.to_upper() if def != null else op.activity_id.to_upper()
 	_operation_toast.show_toast("%s COMPLETE — %s" % [name, op.location_id])
@@ -249,12 +281,20 @@ func _on_operation_stopped(activity_id: String, location_id: String, summary: Di
 			reason_text = "STOPPED — DEPARTED"
 		"cargo_full":
 			reason_text = "CARGO FULL"
+			AudioManager.cargo_full()
 	_operation_toast.show_toast("MINING %s — %s: +%d %s" % [
 		reason_text, location_id, summary["amount_awarded"], summary["material_name"]])
 
 
 func _on_milestone_reached(tech: TechnologyDef) -> void:
 	_operation_toast.show_toast("MILESTONE: %s" % tech.display_name)
+
+
+# Fires for both a brand-new structure and a tier upgrade of an existing one
+# — Buildings.structure_constructed doesn't distinguish the two, and neither
+# does this (construction_complete.ogg plays either way).
+func _on_structure_constructed(_category_id: String, _body_id: String) -> void:
+	AudioManager.construction_complete()
 
 
 func _build_pause() -> void:
@@ -296,30 +336,28 @@ func _make_label(preset: Control.LayoutPreset) -> Label:
 	l.set_anchors_and_offsets_preset(preset)
 	l.add_theme_font_size_override("font_size", 16)
 	l.add_theme_color_override("font_color", UITheme.text)
+	UITheme.style_label_shadow(l)
 	_hud_layer.add_child(l)
 	return l
 
 
-# _system_label and "COCKPIT" themselves never move or resize after initial
-# layout (their own text never changes, and UITheme flavor swaps only touch
-# color, not size/family — see _on_theme_changed), so this only ever needs
-# re-running when _credits_label's OWN width changes — the initial deferred
-# call above, and _on_balance_changed below (the balance's growing digit
-# count would otherwise walk the label's center off /out from the actual
-# midpoint over time, since its left edge is what gets set, not its center).
-func _layout_credits_label() -> void:
-	var cockpit_btn := _view_switcher.get_tab_button("cockpit")
-	if cockpit_btn == null:
-		return
-	var left := _system_label.global_position.x + _system_label.get_minimum_size().x
-	var right := cockpit_btn.global_position.x
-	var mid := (left + right) * 0.5
-	_credits_label.offset_left = mid - _credits_label.get_minimum_size().x * 0.5
-
-
+# Counts the readout up (or down, for a spend) from whatever it currently
+# shows to the new balance over CREDITS_COUNT_SECONDS, rather than snapping
+# instantly — a rapid string of sells (or a reset_for_new_game landing mid-
+# count) restarts the count from wherever it currently sits, not from
+# Economy.balance itself (already at the new total by the time this fires).
 func _on_balance_changed(new_balance: int) -> void:
-	_credits_label.text = "CREDITS: %s" % Deposits.format_units(new_balance)
-	_layout_credits_label()
+	if _credits_tween != null and _credits_tween.is_valid():
+		_credits_tween.kill()
+	var start_value := _credits_display_value
+	_credits_tween = create_tween()
+	_credits_tween.tween_method(_set_credits_display, start_value, new_balance, CREDITS_COUNT_SECONDS) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+
+func _set_credits_display(value: int) -> void:
+	_credits_display_value = value
+	_credits_label.text = "CREDITS: %s" % Deposits.format_units(value)
 
 
 # Recomputed every frame (see _process) rather than only on a specific
@@ -357,14 +395,17 @@ func hide_hud() -> void:
 # HUD what it is — view_name is the specific-location readout (e.g. "Earth
 # Orbit"), view_id is which ViewSwitcher.VIEWS scope tab to highlight (e.g.
 # "cockpit") — the two are independent since a scope can have more than one
-# specific location within it. The console itself never changes between
-# views (see ConsolePanel.gd) and no longer switches scopes at all — that's
-# the ViewSwitcher's job now; System view's own Esc handling still covers
-# "back to Cockpit" when nothing's focused there.
+# specific location within it. The status strip/command menu stay the same
+# instances across views (see ShipStatusStrip.gd/CommandMenu.gd) — only
+# CommandMenu's Cockpit-gated entries change behavior, via
+# set_cockpit_context above. No longer switches scopes at all — that's the
+# ViewSwitcher's job now; System view's own Esc handling still covers "back
+# to Cockpit" when nothing's focused there.
 func set_view(view_name: String, view_id: String) -> void:
 	show_hud()
 	_view_label.text = view_name.to_upper()
 	_view_switcher.set_active(view_id)
+	_command_menu.set_cockpit_context(view_id == "cockpit")
 
 
 # Only System view actually has a "recenter" concept today — a reclick on
@@ -453,9 +494,15 @@ func open_cargo_panel() -> void:
 # that wants a long, deliberate reveal instead of a quick flicker (passes
 # its own multi-second value); every ordinary view switch leaves this
 # unset and gets the same snappy fade as before.
-func go_to(scene_path: String, reveal_time: float = TRANSITION_FADE_TIME) -> void:
+func go_to(scene_path: String, reveal_time: float = TRANSITION_FADE_TIME, on_revealed: Callable = Callable()) -> void:
 	var tw := create_tween()
 	tw.tween_property(_fade_rect, "modulate:a", 1.0, TRANSITION_FADE_TIME)
 	tw.tween_callback(func() -> void: get_tree().change_scene_to_file(scene_path))
 	tw.tween_interval(TRANSITION_HOLD_TIME)
 	tw.tween_property(_fade_rect, "modulate:a", 0.0, reveal_time)
+	# Optional hook for whatever should happen the instant the new scene is
+	# actually fully visible, not just "queued" — BootSequence uses this to
+	# fire AudioManager.good_morning() only once its long reveal fade
+	# resolves, not at the moment go_to() was called.
+	if on_revealed.is_valid():
+		tw.tween_callback(on_revealed)

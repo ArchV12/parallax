@@ -423,6 +423,7 @@ func _build_callout() -> void:
 	_callout_label = Label.new()
 	_callout_label.add_theme_font_size_override("font_size", 16)
 	_callout_label.add_theme_color_override("font_color", UITheme.accent)
+	UITheme.style_label_shadow(_callout_label)
 	_callout_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_callout_label.visible = false
 	_overlay_layer.add_child(_callout_label)

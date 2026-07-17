@@ -35,8 +35,14 @@ const HOVER_ANIM_TIME := 0.12
 # true = near-opaque fill instead of the plain style's translucent glass —
 # for a plain button that needs to stay readable over whatever's behind it
 # (e.g. floating over a 3D scene where "behind" might be a bright planet or
-# the sun itself), where translucency defeats the point. No effect on
-# accent buttons, which are already a solid gradient fill.
+# the sun itself), where translucency defeats the point. No effect on accent
+# buttons, which are already a solid gradient fill — and can't usefully mean
+# "opaque enough to hide something behind ME" anyway: Godot draws a Button's
+# own built-in text BEFORE a script's _draw() override runs, so a script-
+# drawn fill opaque enough to hide a sibling node behind the whole button
+# also paints over the button's OWN already-rendered label (found the hard
+# way via CommandMenu's chips — the actual fix there was stopping the branch
+# geometrically clear of the chip instead, see CommandMenu._shorten_to).
 @export var solid: bool = false
 # false = skip the idle/hover sweep — the scale-pop and border/fill brighten
 # in _draw_accent_shape/_draw_bracket_frame (both keyed off is_hovered(),
@@ -74,13 +80,22 @@ func _apply_style() -> void:
 	if accent:
 		# No rect StyleBox at all — the chamfered polygon drawn in _draw() is
 		# the only visible background. StyleBoxEmpty still gives us the
-		# content margins Button needs to lay out its label.
+		# content margins Button needs to lay out its label. Scaled off the
+		# button's OWN size (clamped to the old flat 16/8 as a ceiling) rather
+		# than a flat constant — a small chip (CommandMenu's ~24-28px-tall
+		# chips) with a flat 8px top+bottom margin has almost no vertical room
+		# left for the label at all, which reads as "the text vanished," not
+		# as a sizing issue. Never exceeds the original 16/8 for normal-sized
+		# accent buttons, so this is a strict improvement, not a behavior
+		# change for anything already using this style.
+		var margin_h := clampf(size.x * 0.14, 4.0, 16.0)
+		var margin_v := clampf(size.y * 0.16, 2.0, 8.0)
 		for state in ["normal", "hover", "pressed", "disabled"]:
 			var empty := StyleBoxEmpty.new()
-			empty.content_margin_left = 16
-			empty.content_margin_right = 16
-			empty.content_margin_top = 8
-			empty.content_margin_bottom = 8
+			empty.content_margin_left = margin_h
+			empty.content_margin_right = margin_h
+			empty.content_margin_top = margin_v
+			empty.content_margin_bottom = margin_v
 			add_theme_stylebox_override(state, empty)
 	elif solid:
 		add_theme_stylebox_override("normal", _make_style(UITheme.button, 0.95))

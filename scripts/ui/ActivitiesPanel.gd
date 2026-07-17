@@ -62,7 +62,7 @@ const TAB_WIDTH := 30.0
 const TAB_HEIGHT := 64.0  # a grab handle, not the full drawer height
 const TOP_MARGIN := 92
 const RIGHT_MARGIN := 24
-const BOTTOM_MARGIN := 210  # stays clear of ConsolePanel's center band
+const BOTTOM_MARGIN := 110  # stays clear of CommandMenu's idle root button + pulsing ring (the console/status-strip rearchitecture moved the always-on readout to the TOP of the screen — this only needs to clear the fan menu's small bottom-center footprint now, not the old 150px console band); the fan's fully-EXPANDED state is expected to visually overlap this drawer, same as any other modal popup already does
 const SLIDE_DURATION := 0.28
 # Godot's default ScrollContainer scrollbar overlays content instead of
 # reserving space for it — this much right margin on the AVAILABLE list
@@ -76,15 +76,10 @@ var _active_header: Label
 var _active_box: VBoxContainer
 var _completed_header: Label
 var _completed_box: VBoxContainer
-var _construction_header: Label
-var _construction_box: VBoxContainer
-var _structures_header: Label
-var _structures_box: VBoxContainer
 var _available_box: VBoxContainer
 var _result_label: Label
 var _detail_panel: ActivityDetailPanel
 var _mining_panel: MiningOperationsPanel
-var _building_detail_panel: BuildingDetailPanel
 var _expanded := false
 var _traveling := false  # see show_for_travel/refresh — suppresses AVAILABLE while in transit
 
@@ -114,17 +109,6 @@ func _ready() -> void:
 	_mining_panel = MiningOperationsPanel.new()
 	_mining_panel.begin_requested.connect(_start_mining)
 	add_child(_mining_panel)
-
-	_building_detail_panel = BuildingDetailPanel.new()
-	_building_detail_panel.begin_requested.connect(_start_construction)
-	add_child(_building_detail_panel)
-
-	# Buildings are left behind and run forever, independent of ship
-	# location/travel (see Buildings.gd's own class comment) — the only thing
-	# that needs a rebuild here is an actual tier change (rare), never the
-	# per-frame Knowledge ticking itself (polled directly in _process below,
-	# same as mining's live yield labels).
-	Buildings.structure_constructed.connect(func(_category_id: String, _body_id: String) -> void: _rebuild_rows())
 
 	# Operations is the single source of truth for what's running/complete —
 	# any of these can fire from ANYTHING that touches it (this panel's own
@@ -174,16 +158,6 @@ func _process(_delta: float) -> void:
 				var deposit := Deposits.deposit_for(op.location_id, op.deposit_material)
 				if deposit != null:
 					remaining_label.text = "Deposit Remaining: %d%%" % roundi(deposit.remaining_fraction * 100.0)
-
-	for row in _structures_box.get_children():
-		if not row.has_meta("structure_total_label"):
-			continue
-		var total_label: Label = row.get_meta("structure_total_label")
-		if not is_instance_valid(total_label):
-			continue
-		var cat: String = row.get_meta("structure_category_id")
-		var body: String = row.get_meta("structure_body_id")
-		total_label.text = "Total: %d %s" % [int(Buildings.total_contributed(cat, body)), cat.capitalize()]
 
 
 # A small grab handle vertically centered on the drawer's left edge — same
@@ -238,26 +212,6 @@ func _build_panel() -> void:
 	_completed_box.add_theme_constant_override("separation", 12)
 	vbox.add_child(_completed_box)
 
-	# Buildings — a different kind of thing from Operations above (left
-	# behind, run forever, never "complete" — see Buildings.gd). CONSTRUCTION
-	# (buildable next tier) and STRUCTURES HERE (already standing) are both
-	# small fixed lists (tier replaces in place, at most one structure per
-	# category per body), so plain non-scrolling boxes, same shape as
-	# _active_box/_completed_box above rather than the scrollable list below.
-	_construction_header = _make_section_header("CONSTRUCTION")
-	_construction_header.visible = false
-	vbox.add_child(_construction_header)
-	_construction_box = VBoxContainer.new()
-	_construction_box.add_theme_constant_override("separation", 12)
-	vbox.add_child(_construction_box)
-
-	_structures_header = _make_section_header("STRUCTURES HERE")
-	_structures_header.visible = false
-	vbox.add_child(_structures_header)
-	_structures_box = VBoxContainer.new()
-	_structures_box.add_theme_constant_override("separation", 12)
-	vbox.add_child(_structures_box)
-
 	vbox.add_child(_make_section_header("AVAILABLE OPERATIONS"))
 
 	# Scrollable — same reasoning as LocationsPanel's own rows container:
@@ -294,6 +248,14 @@ func _make_section_header(text: String) -> Label:
 	lbl.add_theme_font_size_override("font_size", 11)
 	lbl.add_theme_color_override("font_color", UITheme.dim)
 	return lbl
+
+
+# Public entry point for the command menu's OPERATIONS leaf — the drawer's
+# own tab already toggles this internally (see _build_tab), this just gives
+# an external caller the same switch. Does nothing about _traveling/refresh's
+# own defaults-open behavior; those are independent of who asked for a toggle.
+func toggle() -> void:
+	_set_expanded(not _expanded)
 
 
 # animate = false only for the initial collapse in _ready and the reset step
@@ -371,10 +333,6 @@ func _rebuild_rows() -> void:
 		child.queue_free()
 	for child in _completed_box.get_children():
 		child.queue_free()
-	for child in _construction_box.get_children():
-		child.queue_free()
-	for child in _structures_box.get_children():
-		child.queue_free()
 	for child in _available_box.get_children():
 		child.queue_free()
 
@@ -406,24 +364,6 @@ func _rebuild_rows() -> void:
 
 	_active_header.visible = any_active
 	_completed_header.visible = any_completed
-
-	# Both suppressed during travel — PlayerState.location_id is stale
-	# mid-flight, same reasoning AVAILABLE's own suppression already uses.
-	# Buildings._process itself is unaffected by this UI suppression;
-	# ticking continues regardless of whether the drawer shows it.
-	var any_construction := false
-	var any_structures := false
-	if not _traveling:
-		var body_id := PlayerState.location_id
-		for category_id: String in Buildings.category_ids():
-			if Buildings.next_building_def(category_id, body_id) != null and Buildings.has_required_survey(category_id, body_id):
-				_construction_box.add_child(_build_construction_row(category_id))
-				any_construction = true
-			if Buildings.tier_at(category_id, body_id) >= 0:
-				_structures_box.add_child(_build_structure_row(category_id))
-				any_structures = true
-	_construction_header.visible = any_construction
-	_structures_header.visible = any_structures
 
 	if shown_available == 0:
 		_add_empty_row()
@@ -593,120 +533,6 @@ func _on_view_pressed(activity_id: String) -> void:
 		_mining_panel.open_for(PlayerState.location_id, not Operations.can_start("mining"))
 	else:
 		_detail_panel.open_for(activity_id, PlayerState.location_id, not Operations.can_start(activity_id))
-
-
-# Same whole-row-tappable idiom as _build_available_row — tapping opens
-# BuildingDetailPanel for a final cost/affordability confirm, same "gateway
-# then detail" shape Surveys already use. A tier REPLACES whatever's already
-# built here (Buildings.construct overwrites the same Structure's tier field,
-# never adds a second one) — the UPGRADE/NEW CONSTRUCTION label below exists
-# so that reads clearly rather than looking like it'll sit alongside the
-# existing structure.
-func _build_construction_row(category_id: String) -> Control:
-	var body_id := PlayerState.location_id
-	var def := Buildings.next_building_def(category_id, body_id)
-	var is_upgrade := Buildings.tier_at(category_id, body_id) >= 0
-
-	var wrapper := MarginContainer.new()
-
-	var btn := Button.new()
-	UITheme.style_button(btn, UITheme.button, UITheme.button_hov, UITheme.border, 4, false)
-	btn.pressed.connect(_on_construction_pressed.bind(category_id))
-	btn.pressed.connect(func() -> void: AudioManager.ui_confirm())  # a raw Button, not UIButton/ConsolePadButton — those wire this on their own, this one has to do it itself
-	wrapper.add_child(btn)
-
-	var content_margin := MarginContainer.new()
-	content_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	content_margin.add_theme_constant_override("margin_top", 8)
-	content_margin.add_theme_constant_override("margin_bottom", 8)
-	content_margin.add_theme_constant_override("margin_left", 10)
-	content_margin.add_theme_constant_override("margin_right", 10)
-	wrapper.add_child(content_margin)
-
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 4)
-	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	content_margin.add_child(box)
-
-	var action_label := Label.new()
-	action_label.text = "UPGRADE" if is_upgrade else "NEW CONSTRUCTION"
-	action_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	action_label.add_theme_font_size_override("font_size", 10)
-	action_label.add_theme_color_override("font_color", UITheme.dim)
-	action_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	box.add_child(action_label)
-
-	var name_label := Label.new()
-	name_label.text = def.display_name.to_upper()
-	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	name_label.add_theme_font_size_override("font_size", 14)
-	name_label.add_theme_color_override("font_color", UITheme.text)
-	name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	box.add_child(name_label)
-
-	var cost_label := Label.new()
-	cost_label.text = "%s CR" % def.credits_cost
-	cost_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	cost_label.add_theme_font_size_override("font_size", 11)
-	cost_label.add_theme_color_override("font_color", UITheme.dim)
-	cost_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	box.add_child(cost_label)
-
-	return wrapper
-
-
-func _on_construction_pressed(category_id: String) -> void:
-	_building_detail_panel.open_for(category_id, PlayerState.location_id)
-
-
-# Already-built structure at the current body — bordered card, same shape as
-# _build_active_row/_build_mining_active_row. Rate is effectively constant
-# (native rate/multiplier don't change mid-visit) so it's set once here; the
-# running total is the one thing that needs live polling, see _process.
-func _build_structure_row(category_id: String) -> Control:
-	var body_id := PlayerState.location_id
-	var def := Buildings.current_building_def(category_id, body_id)
-
-	var card := PanelContainer.new()
-	var card_style := StyleBoxFlat.new()
-	card_style.bg_color = UITheme.button
-	card_style.border_color = UITheme.border
-	card_style.set_border_width_all(1)
-	card_style.set_corner_radius_all(4)
-	card_style.content_margin_left = 10
-	card_style.content_margin_right = 10
-	card_style.content_margin_top = 8
-	card_style.content_margin_bottom = 8
-	card.add_theme_stylebox_override("panel", card_style)
-
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 4)
-	card.add_child(box)
-
-	var name_label := Label.new()
-	name_label.text = def.display_name.to_upper()
-	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	name_label.add_theme_font_size_override("font_size", 14)
-	name_label.add_theme_color_override("font_color", UITheme.accent)
-	box.add_child(name_label)
-
-	var rate_label := Label.new()
-	rate_label.text = "%.3f %s/sec" % [Buildings.knowledge_per_second(category_id, body_id), category_id.capitalize()]
-	rate_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	rate_label.add_theme_font_size_override("font_size", 11)
-	rate_label.add_theme_color_override("font_color", UITheme.dim)
-	box.add_child(rate_label)
-
-	var total_label := Label.new()
-	total_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	total_label.add_theme_font_size_override("font_size", 11)
-	total_label.add_theme_color_override("font_color", UITheme.text)
-	box.add_child(total_label)
-
-	card.set_meta("structure_category_id", category_id)
-	card.set_meta("structure_body_id", body_id)
-	card.set_meta("structure_total_label", total_label)
-	return card
 
 
 func _build_active_row(activity_id: String, op: ActiveOperation) -> Control:
@@ -1004,17 +830,6 @@ func _start_mining(body_id: String, material_name: String) -> void:
 	Operations.start_mining(body_id, material_name)
 	_rebuild_rows()
 
-
-# Mirrors _start_activity/_start_mining — BuildingDetailPanel's own BUILD
-# already checked Buildings.can_construct before enabling, this is defensive
-# only. Buildings.construct itself emits structure_constructed, which is what
-# actually triggers the rebuild (see _ready) — the explicit call here just
-# avoids a one-frame stale display before that signal round-trips.
-func _start_construction(category_id: String, body_id: String) -> void:
-	if not Buildings.can_construct(category_id, body_id):
-		return
-	Buildings.construct(category_id, body_id)
-	_rebuild_rows()
 
 
 # Reads an already-resolved op.result (Operations._resolve populated it,

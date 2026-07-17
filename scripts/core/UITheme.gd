@@ -10,62 +10,40 @@ signal theme_changed
 
 const PREFS_PATH := "user://prefs.json"
 
+# Curated down (2026-07-16) from an earlier 13-flavor set to just the four
+# that actually read as sci-fi — the rest (Verdant, Crimson, Blood Moon,
+# Driftwood, Amethyst, Ember, Cotton Candy, Sakura) skewed toward other
+# genres entirely (nature, horror, pastel) rather than "spacecraft console."
 enum Flavor {
-	AMBER, SLATE, VERDANT, CRIMSON,
-	OBSIDIAN, BLOOD_MOON, MIDNIGHT_OIL, DRIFTWOOD, AMETHYST, EMBER,
-	COTTON_CANDY, SAKURA, ELECTRIC_BLUE,
+	MIDNIGHT_OIL, ELECTRIC_BLUE, OBSIDIAN, SLATE,
 }
 
-const DEFAULT_FLAVOR := Flavor.MIDNIGHT_OIL
+const DEFAULT_FLAVOR := Flavor.ELECTRIC_BLUE
 
 const FLAVORS := {
-	Flavor.AMBER: {
-		"name":        "Amber",
-		"bg":          Color(0.10, 0.09, 0.07, 0.85),
-		"panel":       Color(0.12, 0.11, 0.09),
-		"slot":        Color(0.18, 0.16, 0.12),
-		"border":      Color(0.35, 0.30, 0.22),
-		"text":        Color(0.90, 0.85, 0.75),
-		"dim":         Color(0.50, 0.46, 0.38),
-		"accent":      Color(0.75, 0.60, 0.35),
-		"button":      Color(0.20, 0.18, 0.14),
-		"button_hov":  Color(0.30, 0.27, 0.20),
+	Flavor.MIDNIGHT_OIL: {
+		"name":        "Midnight Oil",
+		"bg":          Color(0.04, 0.05, 0.08, 0.85),
+		"panel":       Color(0.06, 0.07, 0.11),
+		"slot":        Color(0.10, 0.12, 0.17),
+		"border":      Color(0.20, 0.24, 0.34),
+		"text":        Color(0.85, 0.87, 0.92),
+		"dim":         Color(0.40, 0.44, 0.52),
+		"accent":      Color(0.90, 0.70, 0.35),
+		"button":      Color(0.09, 0.10, 0.15),
+		"button_hov":  Color(0.15, 0.17, 0.24),
 	},
-	Flavor.SLATE: {
-		"name":        "Slate",
-		"bg":          Color(0.08, 0.09, 0.11, 0.85),
-		"panel":       Color(0.10, 0.11, 0.13),
-		"slot":        Color(0.15, 0.17, 0.20),
-		"border":      Color(0.28, 0.32, 0.38),
-		"text":        Color(0.85, 0.88, 0.92),
-		"dim":         Color(0.45, 0.48, 0.54),
-		"accent":      Color(0.40, 0.62, 0.80),
-		"button":      Color(0.16, 0.19, 0.23),
-		"button_hov":  Color(0.24, 0.28, 0.34),
-	},
-	Flavor.VERDANT: {
-		"name":        "Verdant",
-		"bg":          Color(0.08, 0.10, 0.07, 0.85),
-		"panel":       Color(0.10, 0.13, 0.09),
-		"slot":        Color(0.15, 0.19, 0.13),
-		"border":      Color(0.28, 0.38, 0.24),
-		"text":        Color(0.87, 0.90, 0.80),
-		"dim":         Color(0.48, 0.52, 0.42),
-		"accent":      Color(0.45, 0.72, 0.40),
-		"button":      Color(0.17, 0.21, 0.15),
-		"button_hov":  Color(0.26, 0.32, 0.22),
-	},
-	Flavor.CRIMSON: {
-		"name":        "Crimson",
-		"bg":          Color(0.11, 0.07, 0.07, 0.85),
-		"panel":       Color(0.14, 0.09, 0.09),
-		"slot":        Color(0.20, 0.13, 0.13),
-		"border":      Color(0.40, 0.24, 0.22),
-		"text":        Color(0.92, 0.84, 0.82),
-		"dim":         Color(0.54, 0.44, 0.42),
-		"accent":      Color(0.80, 0.40, 0.32),
-		"button":      Color(0.22, 0.15, 0.14),
-		"button_hov":  Color(0.32, 0.22, 0.20),
+	Flavor.ELECTRIC_BLUE: {
+		"name":        "Electric Blue (Default)",
+		"bg":          Color(0.015, 0.03, 0.06, 0.85),
+		"panel":       Color(0.02, 0.05, 0.09),
+		"slot":        Color(0.03, 0.08, 0.14),
+		"border":      Color(0.10, 0.35, 0.55),
+		"text":        Color(0.80, 0.92, 1.00),
+		"dim":         Color(0.28, 0.45, 0.58),
+		"accent":      Color(0.10, 0.75, 1.00),
+		"button":      Color(0.02, 0.07, 0.12),
+		"button_hov":  Color(0.04, 0.14, 0.22),
 	},
 	Flavor.OBSIDIAN: {
 		"name":        "Obsidian",
@@ -79,101 +57,17 @@ const FLAVORS := {
 		"button":      Color(0.10, 0.10, 0.12),
 		"button_hov":  Color(0.16, 0.16, 0.20),
 	},
-	Flavor.BLOOD_MOON: {
-		"name":        "Blood Moon",
-		"bg":          Color(0.06, 0.03, 0.03, 0.85),
-		"panel":       Color(0.09, 0.05, 0.05),
-		"slot":        Color(0.14, 0.08, 0.08),
-		"border":      Color(0.32, 0.14, 0.13),
-		"text":        Color(0.90, 0.80, 0.78),
-		"dim":         Color(0.48, 0.34, 0.32),
-		"accent":      Color(0.85, 0.25, 0.20),
-		"button":      Color(0.12, 0.06, 0.06),
-		"button_hov":  Color(0.20, 0.10, 0.09),
-	},
-	Flavor.MIDNIGHT_OIL: {
-		"name":        "Midnight Oil (Default)",
-		"bg":          Color(0.04, 0.05, 0.08, 0.85),
-		"panel":       Color(0.06, 0.07, 0.11),
-		"slot":        Color(0.10, 0.12, 0.17),
-		"border":      Color(0.20, 0.24, 0.34),
-		"text":        Color(0.85, 0.87, 0.92),
-		"dim":         Color(0.40, 0.44, 0.52),
-		"accent":      Color(0.90, 0.70, 0.35),
-		"button":      Color(0.09, 0.10, 0.15),
-		"button_hov":  Color(0.15, 0.17, 0.24),
-	},
-	Flavor.DRIFTWOOD: {
-		"name":        "Driftwood",
-		"bg":          Color(0.16, 0.14, 0.11, 0.85),
-		"panel":       Color(0.19, 0.17, 0.13),
-		"slot":        Color(0.24, 0.21, 0.16),
-		"border":      Color(0.42, 0.36, 0.26),
-		"text":        Color(0.92, 0.87, 0.78),
-		"dim":         Color(0.58, 0.52, 0.42),
-		"accent":      Color(0.35, 0.68, 0.62),
-		"button":      Color(0.26, 0.22, 0.17),
-		"button_hov":  Color(0.36, 0.31, 0.23),
-	},
-	Flavor.AMETHYST: {
-		"name":        "Amethyst",
-		"bg":          Color(0.09, 0.07, 0.11, 0.85),
-		"panel":       Color(0.12, 0.09, 0.14),
-		"slot":        Color(0.17, 0.13, 0.20),
-		"border":      Color(0.35, 0.26, 0.42),
-		"text":        Color(0.90, 0.86, 0.92),
-		"dim":         Color(0.52, 0.46, 0.56),
-		"accent":      Color(0.80, 0.65, 0.30),
-		"button":      Color(0.16, 0.12, 0.19),
-		"button_hov":  Color(0.24, 0.18, 0.28),
-	},
-	Flavor.EMBER: {
-		"name":        "Ember",
-		"bg":          Color(0.09, 0.06, 0.05, 0.85),
-		"panel":       Color(0.12, 0.08, 0.06),
-		"slot":        Color(0.18, 0.13, 0.09),
-		"border":      Color(0.38, 0.24, 0.16),
-		"text":        Color(0.92, 0.85, 0.78),
-		"dim":         Color(0.55, 0.44, 0.36),
-		"accent":      Color(0.95, 0.45, 0.15),
-		"button":      Color(0.18, 0.11, 0.08),
-		"button_hov":  Color(0.28, 0.18, 0.12),
-	},
-	Flavor.COTTON_CANDY: {
-		"name":        "Cotton Candy",
-		"bg":          Color(0.14, 0.09, 0.12, 0.85),
-		"panel":       Color(0.17, 0.11, 0.15),
-		"slot":        Color(0.23, 0.15, 0.20),
-		"border":      Color(0.48, 0.28, 0.42),
-		"text":        Color(0.97, 0.90, 0.94),
-		"dim":         Color(0.64, 0.48, 0.58),
-		"accent":      Color(0.95, 0.50, 0.75),
-		"button":      Color(0.21, 0.13, 0.18),
-		"button_hov":  Color(0.31, 0.19, 0.27),
-	},
-	Flavor.SAKURA: {
-		"name":        "Sakura",
-		"bg":          Color(0.12, 0.09, 0.10, 0.85),
-		"panel":       Color(0.15, 0.11, 0.13),
-		"slot":        Color(0.20, 0.15, 0.17),
-		"border":      Color(0.42, 0.30, 0.34),
-		"text":        Color(0.95, 0.90, 0.90),
-		"dim":         Color(0.60, 0.50, 0.52),
-		"accent":      Color(0.88, 0.62, 0.68),
-		"button":      Color(0.19, 0.14, 0.15),
-		"button_hov":  Color(0.28, 0.20, 0.22),
-	},
-	Flavor.ELECTRIC_BLUE: {
-		"name":        "Electric Blue",
-		"bg":          Color(0.015, 0.03, 0.06, 0.85),
-		"panel":       Color(0.02, 0.05, 0.09),
-		"slot":        Color(0.03, 0.08, 0.14),
-		"border":      Color(0.10, 0.35, 0.55),
-		"text":        Color(0.80, 0.92, 1.00),
-		"dim":         Color(0.28, 0.45, 0.58),
-		"accent":      Color(0.10, 0.75, 1.00),
-		"button":      Color(0.02, 0.07, 0.12),
-		"button_hov":  Color(0.04, 0.14, 0.22),
+	Flavor.SLATE: {
+		"name":        "Slate",
+		"bg":          Color(0.08, 0.09, 0.11, 0.85),
+		"panel":       Color(0.10, 0.11, 0.13),
+		"slot":        Color(0.15, 0.17, 0.20),
+		"border":      Color(0.28, 0.32, 0.38),
+		"text":        Color(0.85, 0.88, 0.92),
+		"dim":         Color(0.45, 0.48, 0.54),
+		"accent":      Color(0.40, 0.62, 0.80),
+		"button":      Color(0.16, 0.19, 0.23),
+		"button_hov":  Color(0.24, 0.28, 0.34),
 	},
 }
 
@@ -275,6 +169,17 @@ func style_button(btn: Button, bg_normal: Color, bg_hover: Color, border_col: Co
 	# layout pass pop=false and rely on the border/bg swap above alone.
 	if pop:
 		wire_hover_pop(btn)
+
+
+# Drop shadow for Labels that float directly over the 3D viewport with no
+# panel/backdrop behind them (HUD's top-corner readouts, ShipStatusStrip,
+# SystemView/PlanetarySystemView's body callouts) — a bright planet or star
+# behind the text can otherwise wash it out. Labels sitting on a UIPanel's
+# own opaque background don't need this; only genuinely floating text does.
+func style_label_shadow(label: Label, color: Color = Color(0, 0, 0, 0.85), offset: Vector2i = Vector2i(1, 1)) -> void:
+	label.add_theme_color_override("font_shadow_color", color)
+	label.add_theme_constant_override("shadow_offset_x", offset.x)
+	label.add_theme_constant_override("shadow_offset_y", offset.y)
 
 
 # Subtle scale-up on hover (reset on exit) — gives buttons a tactile "pop"
