@@ -71,6 +71,46 @@ class Entry:
 	# photosphere temperature. Unused/blank for anything else.
 	var spectral_type: String = ""
 	var surface_temp_k: float = 0.0
+	# Star-only facts feeding NativeRate.astrophysics()'s activity_bonus term —
+	# granulation/convective roil and sunspot coverage. Same values StarParams.gd
+	# already defaults to (Sol's de facto rendered values); promoted to a
+	# canonical fact here the same way terrain_ruggedness was promoted for
+	# Geology. Only Sol exists as a Star in this game today, so these are
+	# hand-set on it alone — a future second star would need its own values.
+	var star_turbulence: float = 0.0
+	var star_spot_activity: float = 0.0
+	# Ocean/water-world fact feeding NativeRate.life_sciences() — 0..1 fraction of
+	# surface covered by liquid water. Default 0.0 (dry) so only a real water-world
+	# needs a hand-set override (see Earth below). Deliberately NOT wired into
+	# rendering (PlanetParams.ocean_level stays a separate, disconnected render knob
+	# for now) — scoped to the Knowledge formula only this pass.
+	var ocean_level: float = 0.0
+	# The Titan/Europa exception (Docs/Buildings System.md) — a subsurface ocean kept
+	# liquid by tidal flexing bypasses NativeRate.life_sciences()'s normal
+	# temperature-band formula entirely, since these bodies are scientifically
+	# exciting specifically because they BREAK that rule (frozen solid on the
+	# surface, but real astrobiology prizes them anyway).
+	var subsurface_ocean_potential: bool = false
+	# Gas/ice giant atmospheric-dynamics facts feeding NativeRate.atmospheric()'s
+	# gas-giant branch — 0..1, same scale/meaning as GasGiantParams' own
+	# turbulence/storminess/band_contrast render knobs (that class's own doc
+	# comment on band_contrast literally names "Uranus, Neptune" at 0 and
+	# "Jupiter, Saturn" at 1). Hand-authored from real astronomy, not promoted
+	# from an existing render value — GasGiantParams is only ever constructed by
+	# Cosmic Forge's dev-tool sliders; the real Jupiter/Saturn/Uranus/Neptune
+	# are never actually rendered through that generator (real photographic
+	# textures instead), so there was no de facto value to promote. Only
+	# meaningful for body_type Gas Giant/Ice Giant; default 0.0 elsewhere.
+	var gas_turbulence: float = 0.0
+	var gas_storminess: float = 0.0
+	var gas_band_contrast: float = 0.0
+	# Terrestrial/moon atmospheric-dynamics fact — how active/dynamic the
+	# weather is, distinct from entry.atmosphere's thickness. Feeds
+	# NativeRate.atmospheric()'s terrestrial branch: "a thin-but-active
+	# atmosphere (Earth) should outscore a thick-but-static one (Venus)" is the
+	# whole point of this term. Default 0.4 (moderate/unremarkable), same
+	# "most bodies aren't hand-tuned" precedent as terrain_ruggedness's 0.6.
+	var atmospheric_turbulence: float = 0.4
 	# true (default) = this entry has a real photographic texture and
 	# to_params()/CanonicalBodyGenerator renders it, same as every planet.
 	# false = PlanetarySystemView.gd instead builds this body procedurally
@@ -235,6 +275,8 @@ static func _ensure_built() -> void:
 	sol.has_solid_surface = false
 	sol.spectral_type = "G2V"
 	sol.surface_temp_k = 5778.0
+	sol.star_turbulence = 0.4      # matches StarParams.gd default
+	sol.star_spot_activity = 0.15  # matches StarParams.gd default
 	_catalog[sol.body_name] = sol
 
 	var mercury := Entry.new()
@@ -270,6 +312,7 @@ static func _ensure_built() -> void:
 	venus.has_atmosphere = true
 	venus.surface_pressure_atm = 92.0
 	venus.moon_count = 0
+	venus.atmospheric_turbulence = 0.1  # dead, uniform despite a thick atmosphere
 	_catalog[venus.body_name] = venus
 
 	var earth := Entry.new()
@@ -287,6 +330,8 @@ static func _ensure_built() -> void:
 	earth.has_atmosphere = true
 	earth.surface_pressure_atm = 1.0
 	earth.moon_count = 1
+	earth.ocean_level = 0.7  # ~71% of Earth's surface is ocean
+	earth.atmospheric_turbulence = 0.8  # real live weather/jet streams/storms
 	_catalog[earth.body_name] = earth
 
 	# Mars' real atmosphere is ~0.6% the density of Earth's — default stays
@@ -307,6 +352,7 @@ static func _ensure_built() -> void:
 	mars.surface_pressure_atm = 0.006
 	mars.moon_count = 2
 	mars.terrain_ruggedness = 0.85  # Valles Marineris, Olympus Mons, ancient cratered terrain
+	mars.atmospheric_turbulence = 0.3  # real dust storms, but thin atmosphere overall
 	_catalog[mars.body_name] = mars
 
 	var luna := Entry.new()
@@ -343,6 +389,9 @@ static func _ensure_built() -> void:
 	jupiter.has_solid_surface = false
 	jupiter.moon_count = 4  # the Galilean moons — real total is ~95
 	jupiter.moon_count_is_capped = true
+	jupiter.gas_turbulence = 0.85  # Great Red Spot, most turbulent world in the solar system
+	jupiter.gas_storminess = 0.85
+	jupiter.gas_band_contrast = 1.0
 	_catalog[jupiter.body_name] = jupiter
 
 	# Fixed rings, not a slider-driven maybe — Saturn's rings (and its real
@@ -367,6 +416,9 @@ static func _ensure_built() -> void:
 	saturn.has_solid_surface = false
 	saturn.moon_count = 7  # the classical round moons — real total is ~146
 	saturn.moon_count_is_capped = true
+	saturn.gas_turbulence = 0.55  # active but visibly calmer than Jupiter
+	saturn.gas_storminess = 0.45
+	saturn.gas_band_contrast = 0.8
 	_catalog[saturn.body_name] = saturn
 
 	# Uranus is essentially tipped onto its side (real axial tilt ~97.8°),
@@ -392,6 +444,9 @@ static func _ensure_built() -> void:
 	uranus.has_solid_surface = false
 	uranus.moon_count = 5  # the major moons — real total is 27
 	uranus.moon_count_is_capped = true
+	uranus.gas_turbulence = 0.15  # genuinely bland/featureless, matches its real reputation
+	uranus.gas_storminess = 0.1
+	uranus.gas_band_contrast = 0.05
 	_catalog[uranus.body_name] = uranus
 
 	var neptune := Entry.new()
@@ -410,6 +465,16 @@ static func _ensure_built() -> void:
 	neptune.has_solid_surface = false
 	neptune.moon_count = 1  # Triton, overwhelmingly dominant — real total is 14
 	neptune.moon_count_is_capped = true
+	# Deliberately NOT paired with Uranus despite both being calm-banded ice
+	# giants visually — real Neptune has the fastest winds in the solar system
+	# (~2100 km/h) and a real Great Dark Spot despite receiving less sunlight
+	# than Uranus, a genuine astronomical curiosity. band_contrast stays low
+	# (visually smoother banding), but turbulence/storminess deliberately
+	# diverge from Uranus's — same "documented real-science gap, deliberate
+	# override" precedent as the Io/Europa terrain_ruggedness exception above.
+	neptune.gas_turbulence = 0.5
+	neptune.gas_storminess = 0.45
+	neptune.gas_band_contrast = 0.15
 	_catalog[neptune.body_name] = neptune
 
 	# Pluto's atmosphere is so thin it's negligible at this scale.
@@ -449,6 +514,7 @@ static func _ensure_built() -> void:
 	_catalog["Io"] = io
 	var europa := _make_moon("Europa", "Jupiter", 1560.8, 3.55, 671034.0)
 	europa.terrain_ruggedness = 0.25
+	europa.subsurface_ocean_potential = true
 	_catalog["Europa"] = europa
 	_catalog["Ganymede"] = _make_moon("Ganymede", "Jupiter", 2634.1, 7.15, 1070412.0)
 	_catalog["Callisto"] = _make_moon("Callisto", "Jupiter", 2410.3, 16.69, 1882709.0)
@@ -456,12 +522,17 @@ static func _ensure_built() -> void:
 	_catalog["Mimas"] = _make_moon("Mimas", "Saturn", 198.2, 0.94, 185539.0)
 	var enceladus := _make_moon("Enceladus", "Saturn", 252.1, 1.37, 237948.0)
 	enceladus.terrain_ruggedness = 0.3  # cryovolcanic, actively resurfaced
+	enceladus.subsurface_ocean_potential = true
 	_catalog["Enceladus"] = enceladus
 	_catalog["Tethys"] = _make_moon("Tethys", "Saturn", 531.1, 1.89, 294619.0)
 	_catalog["Dione"] = _make_moon("Dione", "Saturn", 561.4, 2.74, 377396.0)
 	_catalog["Rhea"] = _make_moon("Rhea", "Saturn", 763.8, 4.52, 527108.0)
 	# Titan's surface pressure is real — genuinely thicker than Earth's.
-	_catalog["Titan"] = _make_moon("Titan", "Saturn", 2574.7, 15.95, 1221870.0, true, 1.45)
+	var titan := _make_moon("Titan", "Saturn", 2574.7, 15.95, 1221870.0, true, 1.45)
+	titan.subsurface_ocean_potential = true
+	titan.atmosphere = 0.55  # thick, hazy — genuinely denser than Earth's despite _make_moon never setting this by default
+	titan.atmospheric_turbulence = 0.5  # real methane weather cycle
+	_catalog["Titan"] = titan
 	_catalog["Iapetus"] = _make_moon("Iapetus", "Saturn", 734.5, 79.3, 3560820.0)
 
 	_catalog["Miranda"] = _make_moon("Miranda", "Uranus", 235.8, 1.41, 129390.0)

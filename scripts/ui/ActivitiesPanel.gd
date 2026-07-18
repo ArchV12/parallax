@@ -53,9 +53,12 @@ extends Control
 # themselves (category/knowledge_awarded, carried here). Not fired at all
 # for activities/bodies without one — _result_label's flat "+N Knowledge"
 # text is the fallback ONLY for that case now (see _show_results); showing
-# it AND a popup at the same time was redundant.
-signal geological_report_ready(location_id: String, data: GeologicalSurveyData, category: String, knowledge_awarded: int)
-signal resource_report_ready(location_id: String, data: ResourceSurveyData, category: String, knowledge_awarded: int)
+# it AND a popup at the same time was redundant. `anomaly` (possibly null)
+# is whatever NativeRate.anomaly_for(location_id, category) rolled for THIS
+# survey's own category — no dedicated Anomaly Scan exists, any survey can
+# independently reveal one, see Docs/Buildings System.md's Anomalies section.
+signal geological_report_ready(location_id: String, data: GeologicalSurveyData, category: String, knowledge_awarded: int, anomaly: AnomalyResult)
+signal resource_report_ready(location_id: String, data: ResourceSurveyData, category: String, knowledge_awarded: int, anomaly: AnomalyResult)
 
 const PANEL_WIDTH := 340.0  # roomy enough for "RESOURCE SURVEY RESULTS"-length titles without wrapping
 const TAB_WIDTH := 30.0
@@ -379,12 +382,14 @@ func _is_available_now(activity_id: String) -> bool:
 	return true
 
 
-# Resource/Geological Survey specifically — the two activities that award
-# Knowledge via Research.run_survey and can go stale at a body (see
-# Research.can_survey_for_new_info). Mining never re-shows as "Show
-# Results" this way; it has its own entirely different flow.
+# Resource/Geological/Astrophysics/Life Sciences/Atmospheric Survey
+# specifically — the activities that award Knowledge via Research.run_survey
+# and can go stale at a body (see Research.can_survey_for_new_info). Mining
+# never re-shows as "Show Results" this way; it has its own entirely
+# different flow.
 func _is_survey_kind(activity_id: String) -> bool:
-	return activity_id == "resource_survey" or activity_id == "geological_survey"
+	return activity_id == "resource_survey" or activity_id == "geological_survey" or activity_id == "astrophysics_survey" \
+			or activity_id == "life_sciences_survey" or activity_id == "atmospheric_survey"
 
 
 func _add_empty_row() -> void:
@@ -449,19 +454,6 @@ func _build_available_row(activity_id: String) -> Control:
 		desc_label.add_theme_color_override("font_color", UITheme.dim)
 		desc_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		box.add_child(desc_label)
-
-	# Guarded on > 0, not just != null — Mining's ActivityDef leaves this at
-	# 0 deliberately (its real duration varies per-deposit, see Deposits.
-	# flavor_duration_seconds, so a single flat number here would just be
-	# wrong; the real figure shows one tap deeper, in DepositDetailPanel).
-	if def != null and def.flavor_duration_seconds > 0:
-		var time_label := Label.new()
-		time_label.text = "Time: %s" % ActivityDef.format_duration(def.flavor_duration_seconds)
-		time_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		time_label.add_theme_font_size_override("font_size", 11)
-		time_label.add_theme_color_override("font_color", UITheme.dim)
-		time_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		box.add_child(time_label)
 
 	return wrapper
 
@@ -583,28 +575,7 @@ func _build_active_row(activity_id: String, op: ActiveOperation) -> Control:
 	progress.add_theme_stylebox_override("background", _make_bar_style(UITheme.border, 0.3))
 	box.add_child(progress)
 
-	var remaining_label := Label.new()
-	remaining_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	remaining_label.add_theme_font_size_override("font_size", 11)
-	remaining_label.add_theme_color_override("font_color", UITheme.dim)
-	box.add_child(remaining_label)
-
-	# Live "flavor time remaining" countdown — the FULL flavor_duration_seconds
-	# ticking down (e.g. 02:15 -> 00:00) over Operations' own real elapsed
-	# time, same compression principle travel already uses: the displayed
-	# number is in-fiction, the real wait (BodyInfoPanel.SCAN_DURATION) stays
-	# short. Driven by _process setting progress.value each frame (see that
-	# function) — value_changed fires the same way regardless of whether the
-	# value came from a Tween or a direct assignment, so this wiring is
-	# unchanged from when a Tween drove it.
-	var update_remaining := func(value: float) -> void:
-		if not is_instance_valid(remaining_label):
-			return
-		var remaining_seconds := int(op.flavor_duration_seconds * (1.0 - value))
-		remaining_label.text = "Remaining: %s" % ActivityDef.format_duration(remaining_seconds)
-	progress.value_changed.connect(update_remaining)
 	progress.value = op.progress()
-	update_remaining.call(op.progress())  # seed immediately — value_changed doesn't fire if op.progress() already equals the ProgressBar's default 0.0
 
 	card.set_meta("progress", progress)
 	card.set_meta("op_id", op.op_id)
@@ -851,14 +822,14 @@ func _show_results(op: ActiveOperation) -> void:
 
 	var geo_data: GeologicalSurveyData = Research.geological_data_for(op.location_id) if op.activity_id == "geological_survey" else null
 	var res_data: ResourceSurveyData = Research.resource_data_for(op.location_id) if op.activity_id == "resource_survey" else null
+	var anomaly := NativeRate.anomaly_for(op.location_id, category)
 
 	if geo_data != null:
-		geological_report_ready.emit(op.location_id, geo_data, category, awarded)
+		geological_report_ready.emit(op.location_id, geo_data, category, awarded, anomaly)
 	elif res_data != null:
-		resource_report_ready.emit(op.location_id, res_data, category, awarded)
+		resource_report_ready.emit(op.location_id, res_data, category, awarded, anomaly)
 	else:
-		_result_label.text = "%s\n+%d %s Knowledge" % [capability, awarded, category.capitalize()]
-		_result_label.visible = true
+		_set_result_label("%s\n+%d %s Knowledge" % [capability, awarded, category.capitalize()], anomaly)
 
 
 # The no-operation counterpart to _show_results — reached only via
@@ -876,11 +847,30 @@ func _on_show_results_pressed(activity_id: String) -> void:
 
 	var geo_data: GeologicalSurveyData = Research.geological_data_for(location_id) if activity_id == "geological_survey" else null
 	var res_data: ResourceSurveyData = Research.resource_data_for(location_id) if activity_id == "resource_survey" else null
+	var anomaly := NativeRate.anomaly_for(location_id, def.knowledge_category)
 
 	if geo_data != null:
-		geological_report_ready.emit(location_id, geo_data, def.knowledge_category, 0)
+		geological_report_ready.emit(location_id, geo_data, def.knowledge_category, 0, anomaly)
 	elif res_data != null:
-		resource_report_ready.emit(location_id, res_data, def.knowledge_category, 0)
+		resource_report_ready.emit(location_id, res_data, def.knowledge_category, 0, anomaly)
 	else:
-		_result_label.text = "Already surveyed — no new %s Knowledge available." % def.knowledge_category.capitalize()
-		_result_label.visible = true
+		_set_result_label("Already surveyed — no new %s Knowledge available." % def.knowledge_category.capitalize(), anomaly)
+
+
+# Shared by _show_results/_on_show_results_pressed's flat-fallback branch
+# (activities with no rich SurveyReportPanel report — astrophysics_survey/
+# life_sciences_survey today). Mirrors SurveyReportPanel._set_anomaly_banner's
+# "top of report, eye-catching" treatment as closely as a single plain Label
+# allows: the anomaly line leads (not appended after the Knowledge line), and
+# the WHOLE label switches to SurveyReportPanel.ANOMALY_COLOR (reused rather
+# than duplicated) when one was found, reverting to the normal dim color
+# otherwise — no per-substring color without upgrading to a RichTextLabel,
+# which this small a label doesn't warrant.
+func _set_result_label(base_text: String, anomaly: AnomalyResult) -> void:
+	if anomaly != null:
+		_result_label.text = "⚠ %s ANOMALY DETECTED ⚠\n%s\n\n%s" % [anomaly.magnitude.to_upper(), anomaly.name, base_text]
+		_result_label.add_theme_color_override("font_color", SurveyReportPanel.ANOMALY_COLOR)
+	else:
+		_result_label.text = base_text
+		_result_label.add_theme_color_override("font_color", UITheme.dim)
+	_result_label.visible = true

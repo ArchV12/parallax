@@ -2,8 +2,8 @@ class_name ActivityDetailPanel
 extends Control
 
 # Centered confirm panel opened by clicking an AVAILABLE row in
-# ActivitiesPanel's gateway list — Target/Instrument/Status/Estimated
-# Duration/Potential Discoveries, then BEGIN SURVEY. Same popup shell as
+# ActivitiesPanel's gateway list — Target/Instrument/Status/Potential
+# Discoveries, then BEGIN SURVEY. Same popup shell as
 # EarthTransmissionBanner/SurveyReportPanel (UIPanel + centered).
 
 signal begin_requested(activity_id: String)
@@ -15,7 +15,6 @@ var _title_label: Label
 var _target_value: Label
 var _instrument_value: Label
 var _status_value: Label
-var _duration_value: Label
 var _discoveries_box: VBoxContainer
 var _begin_btn: UIButton
 var _activity_id: String = ""
@@ -53,7 +52,6 @@ func _ready() -> void:
 	_target_value = _add_field(vbox, "Target")
 	_instrument_value = _add_field(vbox, "Instrument")
 	_status_value = _add_field(vbox, "Status")
-	_duration_value = _add_field(vbox, "Estimated Duration")
 
 	vbox.add_child(HSeparator.new())
 	var discoveries_header := Label.new()
@@ -120,7 +118,6 @@ func open_for(activity_id: String, location_id: String, ship_busy: bool) -> void
 	_title_label.text = def.display_name.to_upper()
 	_target_value.text = location_id
 	_instrument_value.text = instrument.display_name if instrument != null else "—"
-	_duration_value.text = ActivityDef.format_duration(def.flavor_duration_seconds)
 
 	_status_value.text = "Ship Busy" if ship_busy else "Ready"
 	_begin_btn.disabled = ship_busy

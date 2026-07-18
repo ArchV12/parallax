@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="BuildingDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/BuildingDef.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "xenobiology_research_complex"
+display_name = "Xenobiology Research Complex"
+category_id = "life_sciences"
+tier = 2
+multiplier = 1.0
+credits_cost = 15000
+materials_requirements = Dictionary[String, int]({"Silicon": 1500, "Titanium": 750})
+knowledge_requirements = Dictionary[String, int]({"life_sciences": 400})
+description = "A full research complex with a resident xenobiology team and a sealed sample lab."

@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="BuildingDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/BuildingDef.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "anomaly_monitoring_post"
+display_name = "Anomaly Monitoring Post"
+category_id = "anomalies"
+tier = 0
+multiplier = 0.25
+credits_cost = 1500
+materials_requirements = Dictionary[String, int]({"Iron": 300})
+knowledge_requirements = Dictionary[String, int]({})
+description = "A minimal automated post that passively logs the detected anomaly for ongoing study."

@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="BuildingDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/BuildingDef.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "weather_research_outpost"
+display_name = "Weather Research Outpost"
+category_id = "atmospheric"
+tier = 1
+multiplier = 0.6
+credits_cost = 5000
+materials_requirements = Dictionary[String, int]({"Iron": 750, "Silicon": 500})
+knowledge_requirements = Dictionary[String, int]({"atmospheric": 100})
+description = "A crewed outpost with dedicated storm-tracking and wind-profiling equipment."

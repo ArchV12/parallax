@@ -385,6 +385,15 @@ func survey_complete_vo() -> void:
 	play_vo("survey_complete")
 
 
+# Fired right alongside survey_complete_vo(), but only when the just-
+# resolved survey's own category actually rolled an anomaly at that body
+# (NativeRate.anomaly_for) — a deliberate attention-grab so the player
+# actually opens the report instead of skipping it, per the anomaly's whole
+# "wait, this body has something" design goal (Docs/Buildings System.md).
+func anomaly_detected() -> void:
+	play_vo("anomaly_detected")
+
+
 # Stops any currently-playing instance of this sfx — for repeating/interruptible
 # sounds that need to cut off immediately rather than ring out to their
 # natural end.

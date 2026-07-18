@@ -3,10 +3,11 @@ extends HBoxContainer
 
 # Always-visible top bar showing all 6 Buildings Knowledge categories
 # (Docs/Buildings System.md) — "watch your numbers go up as you build" per
-# the original design conversation. Only "geological" actually accrues via
-# real buildings this phase; the other 5 sit at whatever Research.knowledge
-# already holds (0, since nothing feeds them yet) and are included now so
-# the bar doesn't need reshaping once they come online in a later phase.
+# the original design conversation. "geological", "astrophysics",
+# "life_sciences", "anomalies", and "atmospheric" all accrue via real
+# buildings now — only "engineering" doesn't (deliberately has no building
+# category at all, only a flat per-construction bonus) and sits at whatever
+# Research.knowledge already holds from that bonus alone.
 #
 # Deliberately excludes the pre-existing "resource" category (Resource
 # Survey -> Mining materials) — a separate, older system, not one of the six

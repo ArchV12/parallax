@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="ActivityDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/ActivityDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/Science/LifeSciencesSurvey/instrument_astrobiology_scanner.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "life_sciences_survey"
+display_name = "Life Sciences Survey"
+knowledge_category = "life_sciences"
+instruments = Array[InstrumentDef]([ExtResource("2")])
+description = "Assess habitability and search for biosignatures"
+icon = ""
+flavor_duration_seconds = 300
+potential_discoveries = Array[String](["Biosignature Traces", "Habitability Assessment", "Water Presence"])

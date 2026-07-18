@@ -28,6 +28,9 @@ signal knowledge_changed(category_id: String, new_total: int)
 const ACTIVITY_PATHS := {
 	"resource_survey": "res://Data/Science/ResourceSurvey/activity_resource_survey.tres",
 	"geological_survey": "res://Data/Science/GeologicalSurvey/activity_geological_survey.tres",
+	"astrophysics_survey": "res://Data/Science/AstrophysicsSurvey/activity_astrophysics_survey.tres",
+	"life_sciences_survey": "res://Data/Science/LifeSciencesSurvey/activity_life_sciences_survey.tres",
+	"atmospheric_survey": "res://Data/Science/AtmosphericSurvey/activity_atmospheric_survey.tres",
 	"mining": "res://Data/Science/Mining/activity_mining.tres",
 }
 
@@ -36,7 +39,7 @@ const ACTIVITY_PATHS := {
 # is owned from the start too, but gated per-location instead by
 # has_resource_survey (see below) — ActivitiesPanel is what actually hides
 # its AVAILABLE row until a Resource Survey has resolved at the current body.
-const STARTING_ACTIVITIES := ["resource_survey", "geological_survey", "mining"]
+const STARTING_ACTIVITIES := ["resource_survey", "geological_survey", "astrophysics_survey", "life_sciences_survey", "atmospheric_survey", "mining"]
 
 # Each activity's TechnologyDef chain, in tier order — index N is the tech
 # that advances owned_tier from N to N+1 (there's no entry for tier 0, the
@@ -167,6 +170,31 @@ func tier_surveyed_at(activity_id: String, body_id: String) -> int:
 # all, not which instrument found them.
 func has_resource_survey(body_id: String) -> bool:
 	return tier_surveyed_at("resource_survey", body_id) >= 0
+
+
+# category_id -> the survey Activity id that can reveal an anomaly in that
+# category — see NativeRate.anomaly_for/ANOMALY_TYPES. No dedicated
+# "anomalies_survey" activity exists; any of these 4 can independently roll
+# one at a body.
+const ANOMALY_SOURCE_ACTIVITIES := {
+	"resource": "resource_survey",
+	"geological": "geological_survey",
+	"astrophysics": "astrophysics_survey",
+	"life_sciences": "life_sciences_survey",
+}
+
+# True once the player has actually SURVEYED a body with at least one
+# activity whose category independently rolled a real anomaly there — not
+# just "an anomaly mathematically exists" (NativeRate.anomaly_for is a pure
+# function, always the same ground truth regardless of discovery), but "the
+# player has actually found one." Gates Anomalies-category construction (see
+# Buildings.has_required_survey's anomalies special-case).
+func has_detected_anomaly(body_id: String) -> bool:
+	for category_id: String in ANOMALY_SOURCE_ACTIVITIES:
+		var activity_id: String = ANOMALY_SOURCE_ACTIVITIES[category_id]
+		if tier_surveyed_at(activity_id, body_id) >= 0 and NativeRate.anomaly_for(body_id, category_id) != null:
+			return true
+	return false
 
 
 # True when surveying body_id with this activity right now would actually

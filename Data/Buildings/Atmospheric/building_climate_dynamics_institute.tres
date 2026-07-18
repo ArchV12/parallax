@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="BuildingDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/BuildingDef.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "climate_dynamics_institute"
+display_name = "Climate Dynamics Institute"
+category_id = "atmospheric"
+tier = 2
+multiplier = 1.0
+credits_cost = 15000
+materials_requirements = Dictionary[String, int]({"Silicon": 1500, "Titanium": 750})
+knowledge_requirements = Dictionary[String, int]({"atmospheric": 400})
+description = "A full research institute with a resident meteorology team and orbital sounding arrays."

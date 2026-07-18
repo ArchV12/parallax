@@ -31,8 +31,10 @@ const RATE_TIME_CONSTANT := 60.0
 const ENGINEERING_BONUS_PER_CONSTRUCTION := 10
 
 # category_id -> ordered tier array of BuildingDef .tres paths. Hand-authored
-# and hardcoded, same spirit as Research.ACTIVITY_PATHS — only "geological"
-# has real data this phase; the other 5 categories are roadmapped.
+# and hardcoded, same spirit as Research.ACTIVITY_PATHS. All 5 buildable
+# categories have real data now — Engineering deliberately has no entry here
+# at all (no building ladder, just a flat per-construction bonus, see
+# ENGINEERING_BONUS_PER_CONSTRUCTION below).
 const BUILDING_PATHS := {
 	"geological": [
 		"res://Data/Buildings/Geology/building_geological_survey_beacon.tres",
@@ -40,14 +42,43 @@ const BUILDING_PATHS := {
 		"res://Data/Buildings/Geology/building_geological_research_facility.tres",
 		"res://Data/Buildings/Geology/building_planetary_geoscience_complex.tres",
 	],
+	"astrophysics": [
+		"res://Data/Buildings/Astrophysics/building_astrophysics_observation_post.tres",
+		"res://Data/Buildings/Astrophysics/building_astrophysics_observatory.tres",
+		"res://Data/Buildings/Astrophysics/building_deep_space_telescope_array.tres",
+		"res://Data/Buildings/Astrophysics/building_orbital_astrophysics_institute.tres",
+	],
+	"life_sciences": [
+		"res://Data/Buildings/LifeSciences/building_biosignature_monitoring_post.tres",
+		"res://Data/Buildings/LifeSciences/building_astrobiology_field_station.tres",
+		"res://Data/Buildings/LifeSciences/building_xenobiology_research_complex.tres",
+		"res://Data/Buildings/LifeSciences/building_habitability_research_institute.tres",
+	],
+	"anomalies": [
+		"res://Data/Buildings/Anomalies/building_anomaly_monitoring_post.tres",
+		"res://Data/Buildings/Anomalies/building_xenoscience_field_lab.tres",
+		"res://Data/Buildings/Anomalies/building_anomalous_phenomena_research_complex.tres",
+		"res://Data/Buildings/Anomalies/building_deep_anomaly_institute.tres",
+	],
+	"atmospheric": [
+		"res://Data/Buildings/Atmospheric/building_atmospheric_monitoring_station.tres",
+		"res://Data/Buildings/Atmospheric/building_weather_research_outpost.tres",
+		"res://Data/Buildings/Atmospheric/building_climate_dynamics_institute.tres",
+		"res://Data/Buildings/Atmospheric/building_planetary_atmospherics_complex.tres",
+	],
 }
 
 # category_id -> the Science Activity id that must have surveyed a body at
 # least once before construction is allowed there — mirrors Mining's own
 # existing prerequisite (Research.has_resource_survey, see ActivitiesPanel's
 # _is_available_now). Extensible: future categories just add an entry here.
+# "anomalies" deliberately has NO entry — no single activity governs it (any
+# of 4 surveys can reveal one), see has_required_survey's special-case below.
 const SURVEY_PREREQUISITE_BY_CATEGORY := {
 	"geological": "geological_survey",
+	"astrophysics": "astrophysics_survey",
+	"life_sciences": "life_sciences_survey",
+	"atmospheric": "atmospheric_survey",
 }
 
 
@@ -75,8 +106,8 @@ func reset_for_new_game() -> void:
 	_structures.clear()
 
 
-# Only categories with real .tres data — the UI iterates this so the
-# roadmapped 5 categories correctly show no CONSTRUCTION row anywhere yet.
+# Only categories with real .tres data — every buildable category has one now
+# (Engineering deliberately excluded, see BUILDING_PATHS' own comment).
 func category_ids() -> Array:
 	return _building_defs.keys()
 
@@ -104,7 +135,12 @@ func next_building_def(category_id: String, body_id: String) -> BuildingDef:
 	return defs[next_index] if next_index < defs.size() else null
 
 
+# "anomalies" is bespoke — no single activity governs it (any of 4 surveys
+# can independently reveal one, see Research.ANOMALY_SOURCE_ACTIVITIES), so
+# it can't be expressed as a single SURVEY_PREREQUISITE_BY_CATEGORY lookup.
 func has_required_survey(category_id: String, body_id: String) -> bool:
+	if category_id == "anomalies":
+		return Research.has_detected_anomaly(body_id)
 	var activity_id: String = SURVEY_PREREQUISITE_BY_CATEGORY.get(category_id, "")
 	return activity_id != "" and Research.tier_surveyed_at(activity_id, body_id) >= 0
 

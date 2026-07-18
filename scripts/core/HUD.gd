@@ -255,6 +255,8 @@ func _on_operation_completed(op_id: String) -> void:
 	AudioManager.survey_complete()
 	AudioManager.survey_complete_vo()
 	var def := Research.activity_def(op.activity_id)
+	if def != null and NativeRate.anomaly_for(op.location_id, def.knowledge_category) != null:
+		AudioManager.anomaly_detected()
 	var name := def.display_name.to_upper() if def != null else op.activity_id.to_upper()
 	_operation_toast.show_toast("%s COMPLETE — %s" % [name, op.location_id])
 

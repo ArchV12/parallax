@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="BuildingDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/BuildingDef.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "planetary_atmospherics_complex"
+display_name = "Planetary Atmospherics Complex"
+category_id = "atmospheric"
+tier = 3
+multiplier = 1.5
+credits_cost = 40000
+materials_requirements = Dictionary[String, int]({"Titanium": 2000, "Water Ice": 1500})
+knowledge_requirements = Dictionary[String, int]({"atmospheric": 1200})
+description = "A system-scale atmospherics complex, the pinnacle of weather and climate research."

@@ -18,6 +18,7 @@ const NORMAL_LABEL := "Normal (Gameplay Pacing)"
 var _panel: UIPanel
 var _status_label: Label
 var _science_status_label: Label
+var _economy_status_label: Label
 
 
 func _ready() -> void:
@@ -67,6 +68,9 @@ func _ready() -> void:
 	_build_science_cheat(vbox)
 
 	vbox.add_child(HSeparator.new())
+	_build_economy_cheat(vbox)
+
+	vbox.add_child(HSeparator.new())
 	_add_close_button(vbox)
 
 
@@ -75,6 +79,7 @@ func toggle() -> void:
 	if visible:
 		_refresh_status()
 		_refresh_science_status()
+		_refresh_economy_status()
 
 
 func _add_tier_button(parent: VBoxContainer, tier: int, label: String) -> void:
@@ -151,3 +156,36 @@ func _refresh_science_status() -> void:
 	_science_status_label.text = "Resource Knowledge: %d — %s" % [
 		Research.knowledge("resource"), instrument.display_name if instrument != null else "—"
 	]
+
+
+# Fast-forwards Credits for testing anything gated behind Economy.balance
+# (Buildings construction costs, SellCargoPanel-adjacent flows) without
+# needing to actually mine/sell a real amount first.
+func _build_economy_cheat(parent: VBoxContainer) -> void:
+	var title := Label.new()
+	title.text = "ECONOMY CHEAT"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_color_override("font_color", UITheme.accent)
+	parent.add_child(title)
+
+	_economy_status_label = Label.new()
+	_economy_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_economy_status_label.add_theme_font_size_override("font_size", 12)
+	_economy_status_label.add_theme_color_override("font_color", UITheme.dim)
+	parent.add_child(_economy_status_label)
+
+	var btn := UIButton.new()
+	btn.text = "+10,000 Credits"
+	btn.custom_minimum_size = Vector2(0, 32)
+	btn.add_theme_font_size_override("font_size", 13)
+	btn.pressed.connect(func() -> void:
+		Economy.add_credits(10000)
+		_refresh_economy_status())
+	parent.add_child(btn)
+
+	_refresh_economy_status()
+
+
+func _refresh_economy_status() -> void:
+	_economy_status_label.text = "Credits: %s" % Deposits.format_units(Economy.balance)

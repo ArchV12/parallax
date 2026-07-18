@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="ActivityDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/ActivityDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/Science/AtmosphericSurvey/instrument_atmospheric_sensor_suite.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "atmospheric_survey"
+display_name = "Atmospheric Survey"
+knowledge_category = "atmospheric"
+instruments = Array[InstrumentDef]([ExtResource("2")])
+description = "Analyze weather dynamics and atmospheric composition"
+icon = ""
+flavor_duration_seconds = 300
+potential_discoveries = Array[String](["Wind Patterns", "Storm Activity", "Cloud Composition"])

@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="ActivityDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/ActivityDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/Science/AstrophysicsSurvey/instrument_astrophysics_sensor_array.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "astrophysics_survey"
+display_name = "Astrophysics Survey"
+knowledge_category = "astrophysics"
+instruments = Array[InstrumentDef]([ExtResource("2")])
+description = "Study orbital dynamics and stellar phenomena"
+icon = ""
+flavor_duration_seconds = 300
+potential_discoveries = Array[String](["Orbital Resonances", "Ring Composition", "Stellar Activity"])

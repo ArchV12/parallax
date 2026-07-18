@@ -21,12 +21,25 @@ const PANEL_WIDTH := 420.0
 # reason to matter once this panel started showing the Knowledge-awarded
 # line too (taller content, closer to the console than before).
 const CENTER_ANCHOR_BOTTOM := 0.82
+# Local functional color, not themed via UITheme (see that script's own header
+# comment — alert/semantic colors deliberately stay local to their owning
+# script) — a vivid alert red, deliberately distinct from every other color
+# already in play here (UITheme.accent/.text/.dim) so it can't be mistaken
+# for a normal report field.
+const ANOMALY_COLOR := Color(1.0, 0.2, 0.15)
+const ANOMALY_BG_COLOR := Color(0.35, 0.04, 0.03, 0.92)
+const ANOMALY_PULSE_TIME := 0.6
 
 var _panel: UIPanel
 var _title_label: Label
 var _target_label: Label
 var _knowledge_label: Label
 var _body_box: VBoxContainer
+var _anomaly_banner: PanelContainer
+var _anomaly_header_label: Label
+var _anomaly_name_label: Label
+var _anomaly_desc_label: Label
+var _anomaly_tween: Tween
 
 
 func _ready() -> void:
@@ -57,6 +70,8 @@ func _ready() -> void:
 	_title_label.add_theme_font_size_override("font_size", 17)
 	_title_label.add_theme_color_override("font_color", UITheme.accent)
 	vbox.add_child(_title_label)
+
+	_build_anomaly_banner(vbox)
 
 	# Knowledge awarded now lives here, not ActivitiesPanel's own inline
 	# label (see that panel's _start_activity) — showing it in both places
@@ -90,12 +105,88 @@ func _ready() -> void:
 	dismiss.solid = true
 	dismiss.shimmer_enabled = false
 	dismiss.custom_minimum_size = Vector2(0, 34)
-	dismiss.pressed.connect(_panel.close_animated)
+	dismiss.pressed.connect(func() -> void:
+		_stop_anomaly_pulse()
+		_panel.close_animated())
 	vbox.add_child(dismiss)
 
 
-func show_geological_report(location_id: String, data: GeologicalSurveyData, category: String, knowledge_awarded: int) -> void:
+# Persistent (built once, not torn down by _clear_body like the rest of the
+# report) — sits right under the title, above even the Knowledge-awarded
+# line, so it's the very first thing seen when a report opens rather than
+# something a player has to scroll/read past normal fields to reach. A
+# bordered, filled banner (not just colored text, see the shared _add_*
+# helpers below) plus a looping pulse (see _set_anomaly_banner) is
+# deliberately more "alarm" than this panel's otherwise calm report styling.
+func _build_anomaly_banner(parent: VBoxContainer) -> void:
+	_anomaly_banner = PanelContainer.new()
+	var style := StyleBoxFlat.new()
+	style.bg_color = ANOMALY_BG_COLOR
+	style.border_color = ANOMALY_COLOR
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(4)
+	style.content_margin_left = 12
+	style.content_margin_right = 12
+	style.content_margin_top = 8
+	style.content_margin_bottom = 8
+	_anomaly_banner.add_theme_stylebox_override("panel", style)
+	_anomaly_banner.visible = false
+	parent.add_child(_anomaly_banner)
+
+	var banner_vbox := VBoxContainer.new()
+	banner_vbox.add_theme_constant_override("separation", 2)
+	_anomaly_banner.add_child(banner_vbox)
+
+	_anomaly_header_label = Label.new()
+	_anomaly_header_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_anomaly_header_label.add_theme_font_size_override("font_size", 15)
+	_anomaly_header_label.add_theme_color_override("font_color", ANOMALY_COLOR)
+	banner_vbox.add_child(_anomaly_header_label)
+
+	_anomaly_name_label = Label.new()
+	_anomaly_name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_anomaly_name_label.add_theme_font_size_override("font_size", 14)
+	_anomaly_name_label.add_theme_color_override("font_color", Color.WHITE)
+	banner_vbox.add_child(_anomaly_name_label)
+
+	_anomaly_desc_label = Label.new()
+	_anomaly_desc_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_anomaly_desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	_anomaly_desc_label.add_theme_font_size_override("font_size", 12)
+	_anomaly_desc_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.85))
+	banner_vbox.add_child(_anomaly_desc_label)
+
+
+# Hidden (and any running pulse stopped) when null — the common case, every
+# report without an anomaly. When non-null, fills in the banner and starts a
+# looping alpha pulse (smooth fade, not a hard on/off blink — reads as
+# "alert" without being jarring/seizure-risky).
+func _set_anomaly_banner(anomaly: AnomalyResult) -> void:
+	_stop_anomaly_pulse()
+	if anomaly == null:
+		_anomaly_banner.visible = false
+		return
+	_anomaly_banner.visible = true
+	_anomaly_banner.modulate.a = 1.0
+	_anomaly_header_label.text = "⚠ %s ANOMALY DETECTED ⚠" % anomaly.magnitude.to_upper()
+	_anomaly_name_label.text = anomaly.name
+	_anomaly_desc_label.text = anomaly.description
+	_anomaly_tween = create_tween()
+	_anomaly_tween.set_loops()
+	_anomaly_tween.tween_property(_anomaly_banner, "modulate:a", 0.55, ANOMALY_PULSE_TIME) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	_anomaly_tween.tween_property(_anomaly_banner, "modulate:a", 1.0, ANOMALY_PULSE_TIME) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+
+func _stop_anomaly_pulse() -> void:
+	if _anomaly_tween != null and _anomaly_tween.is_valid():
+		_anomaly_tween.kill()
+
+
+func show_geological_report(location_id: String, data: GeologicalSurveyData, category: String, knowledge_awarded: int, anomaly: AnomalyResult = null) -> void:
 	_title_label.text = "GEOLOGICAL SURVEY RESULTS"
+	_set_anomaly_banner(anomaly)
 	_target_label.text = "Target: %s" % location_id
 	_set_knowledge_label(knowledge_awarded, category)
 	_clear_body()
@@ -123,8 +214,9 @@ func show_geological_report(location_id: String, data: GeologicalSurveyData, cat
 	_panel.open_animated()
 
 
-func show_resource_report(location_id: String, data: ResourceSurveyData, category: String, knowledge_awarded: int) -> void:
+func show_resource_report(location_id: String, data: ResourceSurveyData, category: String, knowledge_awarded: int, anomaly: AnomalyResult = null) -> void:
 	_title_label.text = "RESOURCE SURVEY RESULTS"
+	_set_anomaly_banner(anomaly)
 	_target_label.text = "Target: %s" % location_id
 	_set_knowledge_label(knowledge_awarded, category)
 	_clear_body()

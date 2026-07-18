@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="BuildingDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/BuildingDef.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "habitability_research_institute"
+display_name = "Habitability Research Institute"
+category_id = "life_sciences"
+tier = 3
+multiplier = 1.5
+credits_cost = 40000
+materials_requirements = Dictionary[String, int]({"Titanium": 2000, "Water Ice": 1500})
+knowledge_requirements = Dictionary[String, int]({"life_sciences": 1200})
+description = "A system-scale habitability institute, the pinnacle of astrobiology research."

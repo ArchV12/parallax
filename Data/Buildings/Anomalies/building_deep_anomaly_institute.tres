@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="BuildingDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/BuildingDef.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "deep_anomaly_institute"
+display_name = "Deep Anomaly Institute"
+category_id = "anomalies"
+tier = 3
+multiplier = 1.5
+credits_cost = 40000
+materials_requirements = Dictionary[String, int]({"Titanium": 2000, "Water Ice": 1500})
+knowledge_requirements = Dictionary[String, int]({"anomalies": 1200})
+description = "A system-scale institute dedicated entirely to the anomaly, the pinnacle of xenoscience research."
