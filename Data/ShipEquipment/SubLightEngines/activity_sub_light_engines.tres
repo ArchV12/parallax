@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="ActivityDef" load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/ActivityDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/SubLightEngines/instrument_ion_drive.tres" id="2"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/SubLightEngines/instrument_fusion_drive.tres" id="3"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/SubLightEngines/instrument_improved_fusion.tres" id="4"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/SubLightEngines/instrument_antimatter_drive.tres" id="5"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/SubLightEngines/instrument_relativistic_cap.tres" id="6"]
+
+[resource]
+script = ExtResource("1")
+id = "sub_light_engines"
+display_name = "Sub-Light Engines"
+knowledge_category = ""
+instruments = Array[InstrumentDef]([ExtResource("2"), ExtResource("3"), ExtResource("4"), ExtResource("5"), ExtResource("6")])
+description = "Internal system travel speed"
+icon = ""
+flavor_duration_seconds = 0
+potential_discoveries = Array[String]([])

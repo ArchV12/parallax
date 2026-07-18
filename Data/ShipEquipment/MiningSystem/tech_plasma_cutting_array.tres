@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/MiningSystem/instrument_plasma_cutting_array.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "plasma_cutting_array"
+display_name = "Plasma Cutting Array"
+knowledge_requirements = Dictionary[String, int]({"resource": 350, "geological": 150})
+materials_requirements = Dictionary[String, int]({"Titanium": 300, "Aluminum": 200})
+unlock_text = "Commander,\n\nA plasma cutting array shears through even dense ore bodies in a fraction of the time our lasers require.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/SubLightEngines/instrument_fusion_drive.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "fusion_drive"
+display_name = "Fusion Drive"
+knowledge_requirements = Dictionary[String, int]({"astrophysics": 50})
+materials_requirements = Dictionary[String, int]({"Iron": 200, "Aluminum": 150})
+unlock_text = "Commander,\n\nOur propulsion team has completed a working fusion drive, a significant step beyond ion propulsion for internal system travel.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

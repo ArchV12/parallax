@@ -14,12 +14,16 @@ extends Node
 # _operations is a Dictionary (op_id -> ActiveOperation), not a single
 # scalar "the one running thing" — a deliberate collection from day one so
 # a future multiple-concurrent-operations feature (the user's own example:
-# probes/ships working elsewhere) is an extension, not a rewrite. Concurrency
-# is enforced per KIND, not globally (see can_start/has_running_mining/
-# has_running_survey) — Mining runs on its own dedicated system (the mining
-# laser) and doesn't compete with a Survey for the ship's attention, so the
-# two run independently; you still can't run two Surveys at once (one sensor
-# suite) or mine two deposits at once (one laser).
+# probes/ships working elsewhere) is an extension, not a rewrite. That
+# feature arrived with the Arrival Scan System (Docs/Arrival Scan System.md,
+# see start_all_surveys) — every owned-instrument Survey now runs in
+# parallel, each its own independently-ticking op. Concurrency is enforced
+# per ACTIVITY, not per kind (see can_start) — Mining still runs on its own
+# dedicated system (the mining laser) and never competes with a Survey for
+# the ship's attention, but two different Surveys (e.g. Geological and
+# Atmospheric) can now run at once; only re-starting the SAME activity_id
+# while it's already RUNNING is blocked, same as mining two deposits at once
+# (one laser) still is.
 
 signal operation_started(op_id: String)
 # Fired AFTER resolution has already run (op.result is populated) — see
@@ -41,6 +45,19 @@ signal operation_stopped(activity_id: String, location_id: String, summary: Dict
 var _operations: Dictionary = {}  # op_id -> ActiveOperation
 var _next_op_id: int = 0
 
+# --- Arrival Scan System duration constants (Docs/Arrival Scan System.md) ---
+# A body's native rate for a category becomes legible ambiently — a bar
+# still spinning after the others finished IS the hint something's here —
+# instead of only through report prose. Capped, not linear: a rate-100 body
+# still resolves inside a few seconds, it just takes the longest.
+const MIN_SCAN_SECONDS := 3.0
+const MAX_SCAN_SECONDS := 7.0
+# Resource Survey has no NativeRate.for_category branch — it's Deposits-
+# driven (abundance/deposit size), not a 0-100 native-rate score like the
+# other 4 categories — so it gets a flat duration instead of the rate curve.
+# Matches MIN_SCAN_SECONDS — every Survey, rated or flat, has the same floor.
+const RESOURCE_SCAN_SECONDS := 3.0
+
 
 func _ready() -> void:
 	# Mining only makes sense while the ship is actually AT the body being
@@ -57,41 +74,25 @@ func _on_travel_started() -> void:
 		_finish_mining(op, "departed")
 
 
-# Whether THIS KIND of activity could start right now — Mining and Survey
-# are independent tracks (see class comment), so starting a Survey is only
-# ever blocked by another RUNNING Survey, never by Mining being active, and
-# vice versa. Also only checks for a RUNNING operation of that track, not
-# "any operation at all" — COMPLETE-but-undismissed Surveys must NOT block
-# starting a new one (results are meant to be viewed whenever the player
-# gets around to it, per the passive "COMPLETED — See Results / X" design;
-# blocking new work on an unacknowledged old result would contradict that).
+# Whether THIS ACTIVITY could start right now — per-activity_id, not per
+# kind (see class comment: the Arrival Scan System runs every Survey
+# category in parallel, so a RUNNING Geological Survey must not block
+# starting an Atmospheric one). Only checks for a RUNNING operation of this
+# exact activity_id, not "any operation at all" — COMPLETE-but-undismissed
+# Surveys must NOT block starting a new one (results are meant to be viewed
+# whenever the player gets around to it, per the passive "COMPLETED — See
+# Results / X" design; blocking new work on an unacknowledged old result
+# would contradict that).
 func can_start(activity_id: String) -> bool:
 	if activity_id == "mining":
 		return not has_running_mining()
-	return not has_running_survey()
+	var op := operation_for_activity(activity_id)
+	return op == null or op.status != ActiveOperation.Status.RUNNING
 
 
 func has_running_mining() -> bool:
 	var op := operation_for_activity("mining")
 	return op != null and op.status == ActiveOperation.Status.RUNNING
-
-
-func has_running_survey() -> bool:
-	for op: ActiveOperation in _operations.values():
-		if op.activity_id != "mining" and op.status == ActiveOperation.Status.RUNNING:
-			return true
-	return false
-
-
-# Just one of possibly several COMPLETE-undismissed Surveys (see can_start's
-# comment) — a convenience for callers that don't care WHICH one, not what
-# ActivitiesPanel's own per-activity row building uses (that goes through
-# operation_for_activity instead).
-func completed_operation() -> ActiveOperation:
-	for op: ActiveOperation in _operations.values():
-		if op.status == ActiveOperation.Status.COMPLETE:
-			return op
-	return null
 
 
 func operation_for_activity(activity_id: String) -> ActiveOperation:
@@ -110,11 +111,6 @@ func progress(op_id: String) -> float:
 	return op.progress() if op != null else 0.0
 
 
-func remaining(op_id: String) -> float:
-	var op := get_operation(op_id)
-	return op.remaining() if op != null else 0.0
-
-
 # location_id is the operation's own target — see ActiveOperation's comment
 # on why this is captured now rather than re-read from PlayerState later.
 func start_survey(activity_id: String, location_id: String) -> String:
@@ -123,12 +119,49 @@ func start_survey(activity_id: String, location_id: String) -> String:
 	op.op_id = str(_next_op_id)
 	op.activity_id = activity_id
 	op.location_id = location_id
-	op.duration = BodyInfoPanel.SCAN_DURATION
+	op.duration = _scan_duration_for(activity_id, location_id)
 	var def := Research.activity_def(activity_id)
 	op.flavor_duration_seconds = def.flavor_duration_seconds if def != null else 0
 	_operations[op.op_id] = op
 	operation_started.emit(op.op_id)
 	return op.op_id
+
+
+# The Arrival Scan System's entry point (Docs/Arrival Scan System.md) —
+# fires every owned-instrument Survey the player has anything new to learn
+# from at this body, all in parallel, each with its own native-rate-driven
+# duration. Skips any activity_id already RUNNING (can_start) or with
+# nothing new to learn here (Research.can_survey_for_new_info) — the same
+# "nothing to gain, don't spend a real wait to learn it" precedent the old
+# manual "Show Results" shortcut used. Returns the op_ids actually started,
+# in no particular order — callers that want per-category bars look each
+# one up via operation_for_activity/get_operation as usual.
+func start_all_surveys(location_id: String) -> Array[String]:
+	var started: Array[String] = []
+	for activity_id: String in Research.available_activities():
+		if not Research.is_survey_kind(activity_id):
+			continue
+		if not can_start(activity_id):
+			continue
+		if not Research.can_survey_for_new_info(activity_id, location_id):
+			continue
+		started.append(start_survey(activity_id, location_id))
+	return started
+
+
+# A body's native rate for this category, mapped to a real-time scan
+# duration in [MIN_SCAN_SECONDS, MAX_SCAN_SECONDS]. Clamped before mapping —
+# astrophysics()/life_sciences() aren't hard-capped at 100 upstream (a ringed
+# gas giant with many moons, or a bonus-stacked goldilocks world, can land
+# slightly over), and this curve must never exceed MAX_SCAN_SECONDS.
+func _scan_duration_for(activity_id: String, location_id: String) -> float:
+	if activity_id == "resource_survey":
+		return RESOURCE_SCAN_SECONDS
+	var def := Research.activity_def(activity_id)
+	if def == null:
+		return MIN_SCAN_SECONDS
+	var rate := clampf(NativeRate.for_category(def.knowledge_category, location_id), 0.0, 100.0)
+	return MIN_SCAN_SECONDS + (rate / 100.0) * (MAX_SCAN_SECONDS - MIN_SCAN_SECONDS)
 
 
 # Mining's counterpart to start_survey — always for exactly one material at

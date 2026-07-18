@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/CargoHold/instrument_compression_hold.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "compression_hold"
+display_name = "Compression Hold"
+knowledge_requirements = Dictionary[String, int]({"geological": 550})
+materials_requirements = Dictionary[String, int]({"Titanium": 500, "Silicon": 300})
+unlock_text = "Commander,\n\nMatter-compression fields let us store far more material in the same physical volume, a dramatic capacity leap.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

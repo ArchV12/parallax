@@ -9,12 +9,19 @@ extends Control
 # CheatMenu.
 #
 # A second, narrower UIPanel — Equipment — sits attached to the left of the
-# main Cargo panel (2026-07-14 ask), listing the player's current instrument
-# per Science activity (Research.current_instrument), the same "what's
-# actually equipped right now" data ResearchPanel's own per-activity detail
-# already surfaces — just gathered into one glance here instead of digging
-# through each activity's own drawer. Read-only, same as the cargo list
-# itself; nothing here is interactive.
+# main Cargo panel (2026-07-14 ask), listing all six Ship Equipment slots
+# (Docs/Ship Equipment.md) and the player's current tier in each. Read-only,
+# same as the cargo list itself; nothing here is interactive — see
+# ResearchPanel for the real craft/upgrade UI.
+#
+# 2026-07-18: real Research-backed ownership now exists for all 6 slots
+# (Research.equipment_slot_ids()/current_instrument()) — this used to be a
+# mix of one real read (Scanner Array, via the old resource_survey id) and
+# five hardcoded Tier 0 placeholders (Docs/Ship Equipment.md's own gaps at
+# the time). Every row here is now a real, equal read; no more placeholders,
+# no more special-casing Sub-Light Engines against the F2 cheat menu — that
+# remains a separate dev-only travel-physics pin (PlayerState.
+# engine_tier_override), unrelated to what tier is actually owned.
 #
 # A capacity readout (2026-07-14 ask, same day) sits in its own strip across
 # the bottom of the main Cargo panel, above the Close button — total units
@@ -202,45 +209,37 @@ func _build_row(material_name: String, amount: int) -> Control:
 	return row
 
 
-# Built once on open(), not re-polled every frame like _cards_box — an
-# instrument tier only ever changes via a milestone (Research.
-# milestone_reached), never mid-glance at this panel, so there's nothing to
-# keep live here the way mining totals need. Research.known_activities()
-# iterates _activities in ACTIVITY_PATHS' own declared order (resource_
-# survey, geological_survey, mining) — a fixed, sensible display order,
-# nothing to sort.
+# Built once on open(), not re-polled every frame like _cards_box — a tier
+# only ever changes via a milestone/craft, never mid-glance at this panel,
+# so there's nothing to keep live here the way mining totals need.
 func _rebuild_equipment() -> void:
 	for child in _equipment_box.get_children():
 		child.queue_free()
 
-	for activity_id: String in Research.known_activities():
-		var def := Research.activity_def(activity_id)
-		var activity_name := def.display_name if def != null else activity_id
-		var instrument := Research.current_instrument(activity_id)
-		# LOCKED shouldn't actually be reachable today (every known activity
-		# is granted a starting tier from the moment a game begins — see
-		# Research.STARTING_ACTIVITIES) — kept only so this doesn't silently
-		# mislabel a future activity that ISN'T auto-granted the same way.
-		var instrument_name := instrument.display_name if instrument != null else "LOCKED"
-		_equipment_box.add_child(_build_equipment_row(activity_name, instrument_name))
+	for slot_id: String in Research.equipment_slot_ids():
+		var def := Research.activity_def(slot_id)
+		var slot_name := def.display_name if def != null else slot_id
+		var instrument := Research.current_instrument(slot_id)
+		var tier_name := instrument.display_name if instrument != null else "LOCKED"
+		_equipment_box.add_child(_build_equipment_row(slot_name, tier_name))
 
 
-func _build_equipment_row(activity_name: String, instrument_name: String) -> Control:
+func _build_equipment_row(slot_name: String, tier_name: String) -> Control:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 2)
 
-	var activity_label := Label.new()
-	activity_label.text = activity_name.to_upper()
-	activity_label.add_theme_font_size_override("font_size", 11)
-	activity_label.add_theme_color_override("font_color", UITheme.dim)
-	box.add_child(activity_label)
+	var slot_label := Label.new()
+	slot_label.text = slot_name.to_upper()
+	slot_label.add_theme_font_size_override("font_size", 11)
+	slot_label.add_theme_color_override("font_color", UITheme.dim)
+	box.add_child(slot_label)
 
-	var instrument_label := Label.new()
-	instrument_label.text = instrument_name
-	instrument_label.autowrap_mode = TextServer.AUTOWRAP_WORD
-	instrument_label.add_theme_font_size_override("font_size", 14)
-	instrument_label.add_theme_color_override("font_color", UITheme.text)
-	box.add_child(instrument_label)
+	var tier_label := Label.new()
+	tier_label.text = tier_name
+	tier_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	tier_label.add_theme_font_size_override("font_size", 14)
+	tier_label.add_theme_color_override("font_color", UITheme.text)
+	box.add_child(tier_label)
 
 	return box
 

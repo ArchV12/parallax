@@ -73,6 +73,10 @@ const ANOMALY_TYPES := {
 		"minor": {"name": "Unidentified Organic Trace", "description": "Chemical residue consistent with organic processes, of uncertain origin."},
 		"major": {"name": "Complex Prebiotic Chemistry", "description": "Molecular complexity well beyond what background chemistry alone should produce here."},
 	},
+	"atmospheric": {
+		"minor": {"name": "Anomalous Circulation Pattern", "description": "A persistent atmospheric current that shouldn't be stable under this body's own dynamics."},
+		"major": {"name": "Sustained Exotic Storm Chemistry", "description": "A storm system cycling reaction products that ordinary atmospheric chemistry can't account for, and hasn't dissipated."},
+	},
 }
 
 # Hand-placed, GUARANTEED anomalies for specific curated bodies — the solar
@@ -256,6 +260,9 @@ static func anomaly_for(body_id: String, category_id: String) -> AnomalyResult:
 	# NOT has_solid_surface, so gas/ice giants stay eligible, matching that
 	# formula's own "airborne lifeform, never high" flavor for them.
 	if category_id == "life_sciences" and entry.body_type == "Star":
+		return null
+	# Mirrors atmospheric()'s own gate exactly — no atmosphere, no anomaly.
+	if category_id == "atmospheric" and not entry.has_atmosphere:
 		return null
 	if GUARANTEED_ANOMALIES.has(body_id):
 		var g: Dictionary = GUARANTEED_ANOMALIES[body_id]

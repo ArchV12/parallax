@@ -30,6 +30,15 @@ const LIST_HEIGHT := 420.0
 # reserving space for it — this much right margin on the scrolled content
 # keeps the scrollbar thumb clear of the right-aligned amount labels.
 const SCROLLBAR_GUTTER := 16
+# ScrollContainer clips its content rect, and UIButton's hover scale-pop
+# (~7%, UIButton.HOVER_SCALE) grows outward from the button's own center —
+# the SELL button sitting flush against the scroll area's left/top/bottom
+# edges (only the right edge had a margin, reserved for the scrollbar
+# gutter above) got its hover state visibly cut off, and the missing left
+# margin also read as the button/row not being centered in the panel (16px
+# reserved on the right, 0 on the left). Same fix ArrivalScanRow already
+# uses for this exact bug — see parallax-godot-technical-lessons memory.
+const HOVER_MARGIN := 10
 
 var _panel: UIPanel
 var _cards_box: VBoxContainer
@@ -68,6 +77,9 @@ func _ready() -> void:
 	var scroll_margin := MarginContainer.new()
 	scroll_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll_margin.add_theme_constant_override("margin_right", SCROLLBAR_GUTTER)
+	scroll_margin.add_theme_constant_override("margin_left", HOVER_MARGIN)
+	scroll_margin.add_theme_constant_override("margin_top", HOVER_MARGIN)
+	scroll_margin.add_theme_constant_override("margin_bottom", HOVER_MARGIN)
 	scroll.add_child(scroll_margin)
 
 	_cards_box = VBoxContainer.new()

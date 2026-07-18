@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/MiningSystem/instrument_molecular_disassembler.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "molecular_disassembler"
+display_name = "Molecular Disassembler"
+knowledge_requirements = Dictionary[String, int]({"resource": 700, "geological": 350})
+materials_requirements = Dictionary[String, int]({"Titanium": 600, "Platinum": 150})
+unlock_text = "Commander,\n\nThe molecular disassembler breaks ore down at the molecular level, extracting materials faster and with noticeably higher yield.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

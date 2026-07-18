@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/BeyondLightEngines/instrument_warp_bubble_generator.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "warp_bubble_generator"
+display_name = "Warp Bubble Generator"
+knowledge_requirements = Dictionary[String, int]({"astrophysics": 150, "anomalies": 50})
+materials_requirements = Dictionary[String, int]({"Titanium": 300, "Water Ice": 200})
+unlock_text = "Commander,\n\nWe have produced a stable, if short-lived, localized warp bubble — the first faster-than-light capability of any kind aboard your vessel.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

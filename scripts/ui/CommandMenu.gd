@@ -8,8 +8,8 @@ extends Control
 # tidy horizontal row above it. At rest almost nothing is on screen; the 3D
 # view keeps the frame. HUD-global (not Cockpit-scene-local) — SYSTEM/CARGO/
 # RESEARCH need to stay reachable from System/Planetary View too (see the
-# plan's boot-sequencing/reachability findings), so OPERATIONS/CONSTRUCTION/
-# SELL are the only entries actually gated to Cockpit, via
+# plan's boot-sequencing/reachability findings), so CONSTRUCTION/SELL are
+# the only entries actually gated to Cockpit, via
 # set_cockpit_context() — outside Cockpit they're still visible but press
 # plays a deny cue and does nothing, same "click no-ops, plays an error sfx"
 # precedent the old ConsolePanel used for its unwired COMMAND/DATABASE pads.
@@ -33,12 +33,13 @@ extends Control
 signal system_pressed
 signal research_pressed
 signal cargo_pressed
-signal operations_pressed
 signal construction_pressed
 signal sell_pressed
 
+# No OPERATIONS leaf anymore (Docs/Arrival Scan System.md) — Surveys
+# auto-fire on arrival (ArrivalScanRow) and Mining's gateway opens directly
+# from its own inline "Mine" button, so there's no drawer left to toggle.
 const MENU: Array[Dictionary] = [
-	{"id": "operations", "label": "OPERATIONS", "signal": "operations_pressed", "gated": true},
 	{"id": "construction", "label": "CONSTRUCTION", "signal": "construction_pressed", "gated": true},
 	{"id": "cargo", "label": "CARGO", "signal": "cargo_pressed"},
 	{"id": "sell", "label": "SELL", "signal": "sell_pressed", "gated": true},
@@ -49,7 +50,7 @@ const MENU: Array[Dictionary] = [
 const ROOT_SIZE := 46.0
 const ROOT_MARGIN_BOTTOM := 30.0
 const ROW_Y_OFFSET := 190.0  # how far above the root button the row of chips sits
-const ROW_WIDTH := 840.0     # total horizontal span the row is distributed across, centered on the root — spacing (ROW_WIDTH / 5) must clear CHIP_SIZE.x with real room, or adjacent chips overlap
+const ROW_WIDTH := 840.0     # total horizontal span the row is distributed across, centered on the root — spacing (ROW_WIDTH / (MENU.size() - 1)) must clear CHIP_SIZE.x with real room, or adjacent chips overlap
 # Three-segment circuit-trace shape, all fractions of ROW_Y_OFFSET, shared by
 # every branch so the whole fan reads as one consistent shape rather than six
 # independently-angled lines: a short vertical STUB straight up from the root

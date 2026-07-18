@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/BeyondLightEngines/instrument_folded_space_drive.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "folded_space_drive"
+display_name = "Folded Space Drive"
+knowledge_requirements = Dictionary[String, int]({"astrophysics": 700, "anomalies": 300})
+materials_requirements = Dictionary[String, int]({"Platinum": 400, "Palladium": 200})
+unlock_text = "Commander,\n\nOur engineers have learned to fold spacetime itself, skipping vast distances that no warp metric could cross in reasonable time.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/CargoHold/instrument_reinforced_hold.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "reinforced_hold"
+display_name = "Reinforced Hold"
+knowledge_requirements = Dictionary[String, int]({"geological": 60})
+materials_requirements = Dictionary[String, int]({"Iron": 300, "Aluminum": 150})
+unlock_text = "Commander,\n\nA reinforced hold structure lets us safely pack material more densely, meaningfully increasing usable cargo capacity.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

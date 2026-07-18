@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/NavigationScanner/instrument_deep_stellar_scan.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "deep_stellar_scan"
+display_name = "Deep Stellar Scan"
+knowledge_requirements = Dictionary[String, int]({"astrophysics": 600})
+materials_requirements = Dictionary[String, int]({"Titanium": 450, "Water Ice": 250})
+unlock_text = "Commander,\n\nA deep stellar scan resolves moons, asteroid belts, and other minor bodies alongside the major planets on arrival.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

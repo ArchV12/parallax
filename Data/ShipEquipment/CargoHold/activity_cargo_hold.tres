@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="ActivityDef" load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/ActivityDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/CargoHold/instrument_standard_hold.tres" id="2"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/CargoHold/instrument_reinforced_hold.tres" id="3"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/CargoHold/instrument_modular_cargo_bay.tres" id="4"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/CargoHold/instrument_compression_hold.tres" id="5"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/CargoHold/instrument_quantum_vault.tres" id="6"]
+
+[resource]
+script = ExtResource("1")
+id = "cargo_hold"
+display_name = "Cargo Hold"
+knowledge_category = ""
+instruments = Array[InstrumentDef]([ExtResource("2"), ExtResource("3"), ExtResource("4"), ExtResource("5"), ExtResource("6")])
+description = "Increases cargo capacity"
+icon = ""
+flavor_duration_seconds = 0
+potential_discoveries = Array[String]([])

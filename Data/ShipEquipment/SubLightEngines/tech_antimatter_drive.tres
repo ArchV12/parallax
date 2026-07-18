@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/SubLightEngines/instrument_antimatter_drive.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "antimatter_drive"
+display_name = "Antimatter Drive"
+knowledge_requirements = Dictionary[String, int]({"astrophysics": 600})
+materials_requirements = Dictionary[String, int]({"Titanium": 400, "Platinum": 100})
+unlock_text = "Commander,\n\nContainment breakthroughs have made antimatter propulsion viable aboard a vessel your size for the first time.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

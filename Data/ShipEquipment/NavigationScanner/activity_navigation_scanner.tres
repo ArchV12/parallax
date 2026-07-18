@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="ActivityDef" load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/ActivityDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/NavigationScanner/instrument_basic_navigation_scanner.tres" id="2"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/NavigationScanner/instrument_short_range_detector.tres" id="3"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/NavigationScanner/instrument_extended_range_array.tres" id="4"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/NavigationScanner/instrument_deep_stellar_scan.tres" id="5"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/NavigationScanner/instrument_stellar_cartography_suite.tres" id="6"]
+
+[resource]
+script = ExtResource("1")
+id = "navigation_scanner"
+display_name = "Navigation Scanner"
+knowledge_category = ""
+instruments = Array[InstrumentDef]([ExtResource("2"), ExtResource("3"), ExtResource("4"), ExtResource("5"), ExtResource("6")])
+description = "Ship navigation — detects what bodies exist in a system. No effect inside Sol (already fully known); matters once interstellar travel exists."
+icon = ""
+flavor_duration_seconds = 0
+potential_discoveries = Array[String]([])

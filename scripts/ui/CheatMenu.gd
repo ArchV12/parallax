@@ -137,6 +137,29 @@ func _build_science_cheat(parent: VBoxContainer) -> void:
 	_add_knowledge_button(row, 50)
 	_add_knowledge_button(row, 200)
 
+	# One +10 button per Knowledge category (Buildings.gd's 6, same ids
+	# TechnologyDef.knowledge_requirements/Research.add_knowledge already use)
+	# — 3 per row, since all 6 in one row would overflow this panel's narrow
+	# 360px floor. A flat +10 each, distinct from the Resource-only +50/+200
+	# pair above (kept as-is, unrelated ask) — this is for quickly satisfying
+	# a SPECIFIC category's requirement on a ResearchPanel card without
+	# having to grind Resource-only survey clicks.
+	var category_row1 := HBoxContainer.new()
+	category_row1.alignment = BoxContainer.ALIGNMENT_CENTER
+	category_row1.add_theme_constant_override("separation", 6)
+	parent.add_child(category_row1)
+	_add_category_button(category_row1, "resource", "Resource")
+	_add_category_button(category_row1, "geological", "Geological")
+	_add_category_button(category_row1, "astrophysics", "Astrophysics")
+
+	var category_row2 := HBoxContainer.new()
+	category_row2.alignment = BoxContainer.ALIGNMENT_CENTER
+	category_row2.add_theme_constant_override("separation", 6)
+	parent.add_child(category_row2)
+	_add_category_button(category_row2, "life_sciences", "Life Sciences")
+	_add_category_button(category_row2, "atmospheric", "Atmospheric")
+	_add_category_button(category_row2, "anomalies", "Anomalies")
+
 	_refresh_science_status()
 
 
@@ -151,8 +174,26 @@ func _add_knowledge_button(parent: HBoxContainer, amount: int) -> void:
 	parent.add_child(btn)
 
 
+const CATEGORY_KNOWLEDGE_CHEAT_AMOUNT := 10
+
+
+func _add_category_button(parent: HBoxContainer, category_id: String, label_text: String) -> void:
+	var btn := UIButton.new()
+	btn.text = "+10 %s" % label_text
+	btn.custom_minimum_size = Vector2(0, 30)
+	btn.add_theme_font_size_override("font_size", 11)
+	btn.pressed.connect(func() -> void:
+		Research.add_knowledge(category_id, CATEGORY_KNOWLEDGE_CHEAT_AMOUNT)
+		_refresh_science_status())
+	parent.add_child(btn)
+
+
 func _refresh_science_status() -> void:
-	var instrument := Research.current_instrument("resource_survey")
+	# scanner_array, not resource_survey — Scanner Array is the real ship-wide
+	# equipment slot Resource Survey's own instrument chain moved to (see
+	# Research.gd's EQUIPMENT_SLOT_PATHS comment); resource_survey itself is
+	# now permanently frozen at its single starting tier.
+	var instrument := Research.current_instrument("scanner_array")
 	_science_status_label.text = "Resource Knowledge: %d — %s" % [
 		Research.knowledge("resource"), instrument.display_name if instrument != null else "—"
 	]

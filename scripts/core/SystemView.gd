@@ -808,6 +808,14 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
+		# Wheel events over a Control that doesn't itself consume them (e.g. a
+		# row Button inside LocationsPanel's ScrollContainer, which only cares
+		# about clicks) still reach here unaccepted — mouse_filter STOP only
+		# blocks propagation to overlapping Controls/nodes behind it, it does
+		# NOT imply the event was accepted. Without this guard, scrolling the
+		# Known Locations list also zoomed the camera underneath it.
+		var over_ui := (mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN) \
+				and get_viewport().gui_get_hovered_control() != null
 		match mb.button_index:
 			MOUSE_BUTTON_WHEEL_UP:
 				# Focused only — unfocused, _distance is purely the free-fly
@@ -821,12 +829,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				# stay wherever a prior zoom left it; a no-op wheel here is
 				# what keeps that reset meaningful instead of immediately
 				# overwritable by a stray scroll.
-				if _focused_body != null:
+				if _focused_body != null and not over_ui:
 					_distance *= ZOOM_STEP
 					_target_distance = _distance  # manual zoom overrides any focus-zoom in progress
 					_update_camera()
 			MOUSE_BUTTON_WHEEL_DOWN:
-				if _focused_body != null:
+				if _focused_body != null and not over_ui:
 					_distance /= ZOOM_STEP
 					_target_distance = _distance
 					_update_camera()

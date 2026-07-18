@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/SubLightEngines/instrument_relativistic_cap.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "relativistic_cap"
+display_name = "Relativistic Cap"
+knowledge_requirements = Dictionary[String, int]({"astrophysics": 1000})
+materials_requirements = Dictionary[String, int]({"Titanium": 700, "Platinum": 300})
+unlock_text = "Commander,\n\nOur engines now approach the practical limits of sub-light propulsion, sustaining a meaningful fraction of light speed.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

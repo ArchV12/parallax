@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/SubLightEngines/instrument_improved_fusion.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "improved_fusion"
+display_name = "Improved Fusion"
+knowledge_requirements = Dictionary[String, int]({"astrophysics": 300})
+materials_requirements = Dictionary[String, int]({"Aluminum": 400, "Titanium": 150})
+unlock_text = "Commander,\n\nRefinements to our fusion drive design have yielded a marked increase in sustained thrust.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

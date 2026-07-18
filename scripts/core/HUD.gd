@@ -27,13 +27,11 @@ extends Node
 # loaded; System view connects to this itself in its own _ready().
 signal recenter_requested
 
-# Relayed from CommandMenu's own operations_pressed/construction_pressed/
-# sell_pressed — Cockpit connects to these on HUD, not to CommandMenu's
-# internals, same "autoload relays, per-scene script consumes" shape
-# recenter_requested above already uses. All three are Cockpit-only in
-# practice (CommandMenu gates them via set_cockpit_context), so only
-# Cockpit.gd ever needs to listen.
-signal operations_requested
+# Relayed from CommandMenu's own construction_pressed/sell_pressed — Cockpit
+# connects to these on HUD, not to CommandMenu's internals, same "autoload
+# relays, per-scene script consumes" shape recenter_requested above already
+# uses. Both are Cockpit-only in practice (CommandMenu gates them via
+# set_cockpit_context), so only Cockpit.gd ever needs to listen.
 signal construction_requested
 signal sell_requested
 
@@ -196,7 +194,6 @@ func _build_hud() -> void:
 	_command_menu.system_pressed.connect(open_system_menu)
 	_command_menu.research_pressed.connect(open_research_panel)
 	_command_menu.cargo_pressed.connect(open_cargo_panel)
-	_command_menu.operations_pressed.connect(func() -> void: operations_requested.emit())
 	_command_menu.construction_pressed.connect(func() -> void: construction_requested.emit())
 	_command_menu.sell_pressed.connect(func() -> void: sell_requested.emit())
 	_hud_layer.add_child(_command_menu)
@@ -224,12 +221,12 @@ func _build_hud() -> void:
 # start.ogg/survey.ogg — see AudioManager.mining_start/survey_start) the
 # instant an operation actually starts, same "regardless of which view is
 # active" reasoning as the rest of this subscription block: an operation
-# can be STARTED only from Cockpit's ActivitiesPanel today, but the player
-# could switch away to System View a moment later while it keeps running,
-# so this can't live in a Cockpit-only script the way a lot of earlier
-# per-scene wiring did. Mining is the one activity_id with its own distinct
-# continuous shape (see Operations' class comment) — everything else that
-# reaches operation_started is survey-kind.
+# can be STARTED only from Cockpit (ArrivalScanRow/MiningOperationsPanel)
+# today, but the player could switch away to System View a moment later
+# while it keeps running, so this can't live in a Cockpit-only script the
+# way a lot of earlier per-scene wiring did. Mining is the one activity_id
+# with its own distinct continuous shape (see Operations' class comment) —
+# everything else that reaches operation_started is survey-kind.
 func _on_operation_started(op_id: String) -> void:
 	var op := Operations.get_operation(op_id)
 	if op == null:
@@ -243,17 +240,24 @@ func _on_operation_started(op_id: String) -> void:
 # Survey-kind only — Mining never reaches operation_completed at all (see
 # Operations.operation_stopped/_on_operation_stopped below). Text is driven
 # by the ActivityDef's own display_name rather than a hardcoded per-
-# activity_id string. Cuts the survey.ogg ambient and plays survey_complete.
-# ogg (see AudioManager.survey_complete) plus the ship computer's spoken
-# survey_complete.ogg VO line (AudioManager.survey_complete_vo) — this
-# handler being survey-kind-only already is exactly why neither call needs
-# its own activity_id check here.
+# activity_id string. Plays the one-shot survey_complete.ogg ding (see
+# AudioManager.survey_complete) — the shared survey ambient loop and the
+# spoken "surveys complete" VO are both burst-scoped now, owned by
+# ArrivalScanRow instead of fired here per op (see AudioManager.
+# stop_survey_ambient's own comment).
 func _on_operation_completed(op_id: String) -> void:
 	var op := Operations.get_operation(op_id)
 	if op == null:
 		return
 	AudioManager.survey_complete()
-	AudioManager.survey_complete_vo()
+	# The spoken "scans complete" line lives on ArrivalScanRow.scans_complete()
+	# now, fired once per arrival BURST rather than once per op — with the
+	# Arrival Scan System firing up to 5 Surveys in parallel, calling it here
+	# would repeat it 5x back to back for one arrival (Docs/Arrival Scan
+	# System.md). Also now a genuinely different asset key/folder
+	# (scans_complete, Assets/voiceover/) than this line's own
+	# survey_complete (Assets/sfx/) — they used to share a name, which is how
+	# a misplaced VO file once ended up firing as the per-bar ding.
 	var def := Research.activity_def(op.activity_id)
 	if def != null and NativeRate.anomaly_for(op.location_id, def.knowledge_category) != null:
 		AudioManager.anomaly_detected()

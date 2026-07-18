@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/NavigationScanner/instrument_stellar_cartography_suite.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "stellar_cartography_suite"
+display_name = "Stellar Cartography Suite"
+knowledge_requirements = Dictionary[String, int]({"astrophysics": 1050})
+materials_requirements = Dictionary[String, int]({"Titanium": 700, "Platinum": 200})
+unlock_text = "Commander,\n\nOur stellar cartography suite maps every body in a system instantly on arrival — nothing left hidden, anywhere we go.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

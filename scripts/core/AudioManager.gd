@@ -30,12 +30,16 @@ var _mining_player: AudioStreamPlayer
 var _mining_active := false
 
 # Same reasoning as _mining_player, for the survey ambient (see
-# survey_start below) — a Survey's real wait is short (BodyInfoPanel.
-# SCAN_DURATION) but still needs its own dedicated player so the pool can't
-# steal it out from under survey_complete() mid-wait.
+# start_survey_ambient below) — needs its own dedicated player so the pool
+# can't steal it out from under stop_survey_ambient(). Burst-scoped now
+# (Docs/Arrival Scan System.md): ArrivalScanRow starts/stops this once per
+# arrival, not once per individual Survey — see that function's own comment.
 var _survey_player: AudioStreamPlayer
-# Same reasoning as _mining_active, for the same overlap-timer race.
-var _survey_active := false
+
+# Same reasoning again, for the "Incoming Earth Transmission" button's loop
+# (EarthTransmissionBanner) — needs to keep looping for however long the
+# button sits unclicked (could be a while), never stolen by the pool.
+var _incoming_transmission_player: AudioStreamPlayer
 
 func _ready() -> void:
 	for i in POOL_SIZE:
@@ -52,6 +56,9 @@ func _ready() -> void:
 	_survey_player = AudioStreamPlayer.new()
 	_survey_player.bus = "SFX"
 	add_child(_survey_player)
+	_incoming_transmission_player = AudioStreamPlayer.new()
+	_incoming_transmission_player.bus = "SFX"
+	add_child(_incoming_transmission_player)
 
 
 # play("ui/button_click") — omit extension; tries .wav then .ogg. Returns the
@@ -68,6 +75,21 @@ func play(sfx_path: String, volume_db: float = 0.0, pitch: float = 1.0, base: St
 			_warned[base + sfx_path] = true
 			push_warning("AudioManager: sfx not found — %s" % (base + sfx_path))
 		return null
+	# Pooled one-shots must never loop, no matter how the source asset was
+	# authored/exported — looping is exclusively the job of the three
+	# dedicated continuous players (_travel_player/_mining_player/
+	# _survey_player), which set stream.loop themselves and explicitly stop
+	# it. _load() caches and reuses the SAME AudioStream resource across
+	# every call, so a file with loop metadata baked in (confirmed: this is
+	# why survey_complete.ogg was repeating on every reveal even though
+	# play_vo() itself was only ever called once per burst — see the Arrival
+	# Scan System bugfix conversation) would otherwise repeat forever on
+	# whichever pooled player it landed on, since nothing else in this
+	# one-shot path ever stops it.
+	if stream is AudioStreamOggVorbis:
+		stream.loop = false
+	elif stream is AudioStreamWAV:
+		stream.loop_mode = AudioStreamWAV.LOOP_DISABLED
 	var player := _get_free_player()
 	if player == null:
 		return null
@@ -254,65 +276,78 @@ func mining_end() -> void:
 
 
 # --- Survey sounds ---
-# Same start-cue/ambient/stop shape as Flight/Mining above, with one twist:
-# a Survey's real-time wait is fixed and known up front (BodyInfoPanel.
-# SCAN_DURATION — the same constant every Operations.start_survey uses), so
-# unlike the travel/mining loops (which run for an unknown, possibly long
-# duration and always loop), survey.ogg only loops if it would otherwise run
-# out before the wait does; if survey.ogg's own natural length already
-# covers the whole wait, it just plays once and survey_complete() cuts it
-# off directly, same as it would either way.
+# The Arrival Scan System (Docs/Arrival Scan System.md) fires up to 5
+# Surveys in parallel per arrival, each resolving at its own native-rate-
+# driven pace — so unlike Flight/Mining above, the ambient LOOP is scoped to
+# the whole burst (one start_survey_ambient/stop_survey_ambient pair per
+# arrival, called by ArrivalScanRow), while survey_start()/survey_complete()
+# stay one-shot cues fired per individual Survey (HUD._on_operation_started/
+# _on_operation_completed) — a short chirp/ding per bar is a nice per-bar
+# beat; restarting or cutting the shared ambient per bar was the actual bug
+# (the first bar to resolve was killing the loop while 4 others still spun).
 
-const SURVEY_OVERLAP_SECONDS := 0.6
-
-# Fired once, the instant a survey operation actually starts (see
-# HUD._on_operation_started) — has a real asset (survey_start.ogg).
-# Schedules the survey ambient to start SURVEY_OVERLAP_SECONDS before
-# survey_start.ogg's own runtime ends, same overlap technique as launch/
-# mining_start.
+# Fired once per Survey op actually starting — a short "sensor activating"
+# chirp, safe to overlap across several bars starting together (pooled, not
+# the dedicated ambient player below).
 func survey_start() -> void:
-	_survey_active = true
-	var player := play("survey_start")
-	if player != null and player.stream != null:
-		var start_length: float = player.stream.get_length()
-		var delay := maxf(start_length - SURVEY_OVERLAP_SECONDS, 0.0)
-		get_tree().create_timer(delay).timeout.connect(_start_survey_ambient)
-	else:
-		# No start asset to time the overlap against — start the ambient
-		# immediately rather than silently dropping it for the whole wait.
-		_start_survey_ambient()
+	play("survey_start")
 
 
-# The survey ambient cue — started automatically once survey_start()
-# finishes (see above), not called directly. Runs on its own dedicated
-# player (not the pool) since survey_complete() needs to be able to cut it
-# off cleanly regardless of what else the pool is doing.
-func _start_survey_ambient() -> void:
-	if not _survey_active:
-		return  # survey_complete() already fired before this delayed callback ran
+# One shared ambient loop for the WHOLE scan burst — called once by
+# ArrivalScanRow when a burst begins, not per Survey. Idempotent: a second
+# call while already playing (e.g. a mid-visit rescan starting while an
+# earlier one somehow hasn't resolved yet) is a no-op rather than
+# restarting the loop out from under itself.
+func start_survey_ambient() -> void:
+	if _survey_player.playing:
+		return
 	var stream := _load("survey")
 	if stream == null:
 		if not _warned.has("survey"):
 			_warned["survey"] = true
 			push_warning("AudioManager: sfx not found — survey")
 		return
-	# Only loop if survey.ogg would otherwise run out before the real wait
-	# does — if its own natural length already covers BodyInfoPanel.
-	# SCAN_DURATION, looping would just mean survey_complete() has to cut it
-	# off mid-loop instead of letting it play through once, which loses
-	# nothing (either way it gets cut off the instant the survey resolves).
 	if stream is AudioStreamOggVorbis:
-		stream.loop = stream.get_length() < BodyInfoPanel.SCAN_DURATION
+		stream.loop = true
 	_survey_player.stream = stream
 	_survey_player.play()
 
 
-# Cuts the survey ambient and plays the one-shot completion cue — fired
-# once, the instant a survey operation resolves (see HUD.
-# _on_operation_completed).
-func survey_complete() -> void:
-	_survey_active = false
+# Counterpart to start_survey_ambient — called once by ArrivalScanRow when
+# the LAST bar in a burst resolves, not per Survey.
+func stop_survey_ambient() -> void:
 	_survey_player.stop()
+
+
+# Loops sfx/incoming_transmission.ogg for as long as EarthTransmissionBanner's
+# "Incoming Earth Transmission" button is showing (started when it becomes
+# visible, stopped the instant it's clicked or the queue is emptied out from
+# under it). Idempotent like start_survey_ambient — a second call while
+# already playing is a no-op, not a restart.
+func start_incoming_transmission_loop() -> void:
+	if _incoming_transmission_player.playing:
+		return
+	var stream := _load("incoming_transmission")
+	if stream == null:
+		if not _warned.has("incoming_transmission"):
+			_warned["incoming_transmission"] = true
+			push_warning("AudioManager: sfx not found — incoming_transmission")
+		return
+	if stream is AudioStreamOggVorbis:
+		stream.loop = true
+	_incoming_transmission_player.stream = stream
+	_incoming_transmission_player.play()
+
+
+func stop_incoming_transmission_loop() -> void:
+	_incoming_transmission_player.stop()
+
+
+# Fired once per Survey op resolving — the one-shot completion ding, safe to
+# overlap across several bars resolving close together (pooled). The
+# ambient loop itself is a separate, burst-scoped concern (see
+# stop_survey_ambient above).
+func survey_complete() -> void:
 	play("survey_complete")
 
 
@@ -370,6 +405,14 @@ func destination_reached() -> void:
 	play_vo("destination_reached")
 
 
+# Fired once per arrival by ArrivalScanRow.refresh_for_arrival, right before
+# the parallel scan bars start filling — only when at least one Survey
+# actually started (see Operations.start_all_surveys's return), not on a
+# pure-recap revisit with nothing new to learn.
+func scans_initiated() -> void:
+	play_vo("scans_initiated")
+
+
 # Fired on a completed construction — see HUD._on_structure_constructed,
 # listening to Buildings.structure_constructed (fires for both a new build
 # and a tier upgrade; this VO line plays for either).
@@ -377,15 +420,19 @@ func construction_complete() -> void:
 	play_vo("construction_complete")
 
 
-# Fired the instant any survey resolves — see HUD._on_operation_completed,
-# alongside the existing AudioManager.survey_complete() sfx cue (the short
-# ping) below. Named with a _vo suffix, unlike every other function in this
-# section, only because "survey_complete" was already taken by that sfx cue.
-func survey_complete_vo() -> void:
-	play_vo("survey_complete")
+# Fired once per arrival BURST by ArrivalScanRow._reveal_card, once every
+# card has resolved — not per individual Survey (see that function's own
+# comment on why: this used to be named survey_complete_vo() with an asset
+# key of "survey_complete", the exact same key AudioManager.survey_complete()
+# (the short per-bar ding, still SFX_BASE, unrelated) used — a real asset
+# ended up misplaced in the sfx folder under that shared name, which is
+# exactly the bug that prompted renaming this to scans_complete/"scans_complete"
+# instead: a name that can never collide with the sfx cue again.
+func scans_complete() -> void:
+	play_vo("scans_complete")
 
 
-# Fired right alongside survey_complete_vo(), but only when the just-
+# Fired right alongside scans_complete(), but only when the just-
 # resolved survey's own category actually rolled an anomaly at that body
 # (NativeRate.anomaly_for) — a deliberate attention-grab so the player
 # actually opens the report instead of skipping it, per the anomaly's whole

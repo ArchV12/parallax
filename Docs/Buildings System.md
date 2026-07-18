@@ -318,7 +318,7 @@ has actually run at that body. Revisiting via "Show Results" re-shows the
 same anomaly (both report paths re-derive fresh from `NativeRate` every
 call, no separate cached/persistent state needed). A dedicated
 `AudioManager.anomaly_detected()` voiceover line fires alongside
-`survey_complete_vo()` specifically when the just-resolved survey found one,
+`scans_complete()` specifically when the just-resolved survey found one,
 so it isn't easy to miss/skip past the report.
 
 Construction gating is bespoke (`Buildings.has_required_survey`'s

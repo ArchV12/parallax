@@ -5,9 +5,9 @@
 
 [resource]
 script = ExtResource("1")
-id = "quantum_mineral_imager"
-display_name = "Quantum Mineral Imager"
+id = "quantum_resonance_imager"
+display_name = "Quantum Resonance Imager"
 knowledge_requirements = Dictionary[String, int]({"resource": 600})
 materials_requirements = Dictionary[String, int]({"Titanium": 300, "Water Ice": 200})
-unlock_text = "Commander,\n\nOur engineering division has completed a prototype quantum mineral imager, capable of resolving trace element concentrations invisible to prior instruments.\n\nSpecifications have been uploaded to your vessel.\n\n— Earth Science Directorate"
+unlock_text = "Commander,\n\nOur engineering division has completed a prototype quantum resonance imager, capable of resolving trace element concentrations invisible to prior instruments.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
 grants_instrument = ExtResource("2")

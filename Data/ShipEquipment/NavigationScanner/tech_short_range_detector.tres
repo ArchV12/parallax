@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/NavigationScanner/instrument_short_range_detector.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "short_range_detector"
+display_name = "Short Range Detector"
+knowledge_requirements = Dictionary[String, int]({"astrophysics": 70})
+materials_requirements = Dictionary[String, int]({"Iron": 150, "Silicon": 150})
+unlock_text = "Commander,\n\nA short range detector array will let us identify the largest, nearest bodies immediately upon arrival at an unfamiliar system.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

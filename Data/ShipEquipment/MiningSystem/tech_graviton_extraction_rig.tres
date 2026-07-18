@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/MiningSystem/instrument_graviton_extraction_rig.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "graviton_extraction_rig"
+display_name = "Graviton Extraction Rig"
+knowledge_requirements = Dictionary[String, int]({"resource": 1200, "geological": 600})
+materials_requirements = Dictionary[String, int]({"Platinum": 400, "Iridium": 250})
+unlock_text = "Commander,\n\nOur graviton extraction rig manipulates local gravity to lift ore free of the surrounding rock entirely, our fastest and highest-yield extraction method yet.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

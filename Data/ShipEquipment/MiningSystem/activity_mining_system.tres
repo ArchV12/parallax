@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="ActivityDef" load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/ActivityDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/MiningSystem/instrument_mechanical_excavator.tres" id="2"]
+[ext_resource type="Resource" path="res://Data/Science/Mining/instrument_precision_mining_laser.tres" id="3"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/MiningSystem/instrument_plasma_cutting_array.tres" id="4"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/MiningSystem/instrument_molecular_disassembler.tres" id="5"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/MiningSystem/instrument_graviton_extraction_rig.tres" id="6"]
+
+[resource]
+script = ExtResource("1")
+id = "mining_system"
+display_name = "Mining System"
+knowledge_category = ""
+instruments = Array[InstrumentDef]([ExtResource("2"), ExtResource("3"), ExtResource("4"), ExtResource("5"), ExtResource("6")])
+description = "Speeds up mining, and increases yield at higher tiers"
+icon = ""
+flavor_duration_seconds = 0
+potential_discoveries = Array[String]([])

@@ -49,7 +49,3 @@ func progress() -> float:
 	if duration <= 0.0:
 		return 1.0
 	return clampf(elapsed / duration, 0.0, 1.0)
-
-
-func remaining() -> float:
-	return maxf(duration - elapsed, 0.0)

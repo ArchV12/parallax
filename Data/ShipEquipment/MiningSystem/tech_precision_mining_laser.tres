@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/Science/Mining/instrument_precision_mining_laser.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "precision_mining_laser"
+display_name = "Precision Mining Laser"
+knowledge_requirements = Dictionary[String, int]({"resource": 80, "geological": 40})
+materials_requirements = Dictionary[String, int]({"Iron": 250, "Silicon": 100})
+unlock_text = "Commander,\n\nOur precision mining laser replaces mechanical excavation with a focused cutting beam, extracting ore faster and with far less waste.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

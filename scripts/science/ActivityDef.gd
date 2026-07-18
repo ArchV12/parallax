@@ -18,17 +18,17 @@ extends Resource
 # decision in the roadmap doc).
 @export var instruments: Array[InstrumentDef] = []
 
-# --- Cockpit Activities Panel presentation (gateway/detail/active-operations
-# flow) ---
+# --- ArrivalScanRow presentation (Docs/Arrival Scan System.md) ---
 
 @export var description: String = ""  # short one-line gateway blurb, e.g. "Identify available materials"
 @export var icon: String = ""  # single glyph, e.g. "🔬" — placeholder until real icon assets exist
 
-# In-fiction ("flavor") duration shown to the player — NOT how long the
-# actual progress bar animation takes. Same compression principle travel
-# already uses: the ship "really" takes this long, the player only waits a
-# few real seconds. See ActivitiesPanel's animation duration (still
-# BodyInfoPanel.SCAN_DURATION, unchanged) for the actual real-time wait.
+# In-fiction ("flavor") duration — NOT how long the actual scan bar takes.
+# Same compression principle travel already uses: the ship "really" takes
+# this long, the player only waits a few real seconds. The actual real-time
+# wait is Operations._scan_duration_for's native-rate-driven curve, not this
+# field — currently unused by any UI (no per-category "Estimated Duration"
+# display exists), kept as authored flavor data for whenever one does.
 @export var flavor_duration_seconds: int = 0
 
 # Generic, per-Activity flavor text for the detail panel's "Potential

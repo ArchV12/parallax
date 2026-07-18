@@ -226,12 +226,14 @@ const REBASE_THRESHOLD := 2048.0
 var _sun: DirectionalLight3D
 var _camera: Camera3D
 var _warp_points: WarpPoints
-var _activities_panel: ActivitiesPanel  # right-side "what can I do here" panel — see _build_activities_panel
-var _transmission_banner: EarthTransmissionBanner  # centered milestone notification — see _build_activities_panel
-var _survey_report_panel: SurveyReportPanel  # centered rich survey report (Geological Survey) — see _build_activities_panel
-var _sell_cargo_panel: SellCargoPanel  # Q hotkey AND the command menu's ECONOMY->SELL leaf, Cockpit-only — see _build_activities_panel/_unhandled_input
-var _buildings_panel: BuildingsPanel  # command menu's CONSTRUCTION leaf, Cockpit-only — see _build_activities_panel
-var _structures_readout: StructuresReadout  # always-on left-side "what's running here" readout — see _build_activities_panel
+var _arrival_scan_row: ArrivalScanRow  # top-of-screen parallel Survey scan bars (Docs/Arrival Scan System.md) — see _build_survey_ui
+var _mining_panel: MiningOperationsPanel  # deposit-list gateway, opened via ArrivalScanRow's inline Mine button — see _build_survey_ui
+var _mining_status_strip: MiningStatusStrip  # bottom-right "mining in progress" readout — see _build_survey_ui
+var _transmission_banner: EarthTransmissionBanner  # centered milestone notification — see _build_survey_ui
+var _survey_report_panel: SurveyReportPanel  # centered rich survey report (Geological Survey) — see _build_survey_ui
+var _sell_cargo_panel: SellCargoPanel  # Q hotkey AND the command menu's ECONOMY->SELL leaf, Cockpit-only — see _build_survey_ui/_unhandled_input
+var _buildings_panel: BuildingsPanel  # command menu's CONSTRUCTION leaf, Cockpit-only — see _build_survey_ui
+var _structures_readout: StructuresReadout  # always-on left-side "what's running here" readout — see _build_survey_ui
 var _transit_peak_speed := 1.0  # set per-trip in _build_transit — current_speed_km_s() normalized against this drives warp point intensity, see _process; 1.0 is just a safe non-zero placeholder before the first trip ever sets a real value
 var _transit_burn_duration := 0.0  # set per-trip in _build_transit (flight_profile's t1+t2) — how long the accel+decel burn lasts, used by _process to fire AudioManager.arrival_stop() ARRIVAL_STOP_LEAD_SECONDS before it ends
 var _primary: Node3D
@@ -286,7 +288,7 @@ func _ready() -> void:
 	AmbientManager.play_ship_ambient()
 	_build_environment()
 	_build_universe()
-	_build_activities_panel()
+	_build_survey_ui()
 	if PlayerState.is_traveling:
 		_build_transit()
 	else:
@@ -296,7 +298,7 @@ func _ready() -> void:
 		# shows immediately here instead of waiting for that event.
 		_build_arrival(PlayerState.location_id)
 		_update_orbit_camera()
-		_activities_panel.refresh()
+		_arrival_scan_row.refresh_for_arrival(PlayerState.location_id)
 	PlayerState.travel_completed.connect(_on_travel_completed)
 
 
@@ -451,7 +453,7 @@ func _process(delta: float) -> void:
 				_secondaries[i].rotate_y(SPIN * 0.5 * delta)
 		if _lean_elapsed >= ORBIT_SETTLE_DURATION:
 			_settling = false
-			_activities_panel.refresh()  # genuinely "in orbit" now — see _build_arrival's comment
+			_arrival_scan_row.refresh_for_arrival(PlayerState.location_id)  # genuinely "in orbit" now — see _build_arrival's comment
 		return
 
 	if _primary != null:
@@ -552,25 +554,67 @@ func _build_environment() -> void:
 # deliberately its own CanvasLayer, not routed through HUD (which is shared
 # across every view) or BodyInfoPanel's left-side overlay (a data readout,
 # not an action list). Layer 10 matches SystemView's own overlay: above the
-# 3D scene, below HUD's own layers. Banner is added after the activities
-# panel so it draws on top and intercepts its own DISMISS click.
-func _build_activities_panel() -> void:
+# 3D scene, below HUD's own layers.
+func _build_survey_ui() -> void:
 	var layer := CanvasLayer.new()
 	layer.layer = 10
 	add_child(layer)
-	_activities_panel = ActivitiesPanel.new()
-	layer.add_child(_activities_panel)
+
 	_transmission_banner = EarthTransmissionBanner.new()
-	# Connected to Research directly (not ActivitiesPanel) — a milestone can
-	# be granted by anything that calls Research.add_knowledge, not only a
-	# RUN SURVEY press (e.g. the F2 Cheat Menu's Science Cheat).
-	Research.milestone_reached.connect(_transmission_banner.show_transmission)
+	# Connected to Research directly (not any one activity's UI) — a
+	# blueprint can be unlocked by anything that calls Research.add_knowledge,
+	# not only a Survey resolving (e.g. the F2 Cheat Menu's Science Cheat).
+	#
+	# 2026-07-18: fires on blueprint_unlocked (Knowledge requirements met),
+	# NOT milestone_reached (actual craft/grant) — explicit user ask: the
+	# transmission should read as "Earth has finished the research and sent
+	# us the blueprint," not "the equipment has been built." HUD's own
+	# OperationToast still shows a separate small "MILESTONE: X" toast on the
+	# actual craft (milestone_reached) — that stays unchanged, a real craft
+	# completing is still worth its own (much quieter) notice.
+	#
+	# queue_transmission(), not show_transmission() directly (same day,
+	# follow-up ask) — this no longer pops the full panel open unprompted;
+	# it shows a small "Incoming Earth Transmission" button in the same spot
+	# first, and only opens the panel once the player actually clicks it.
+	Research.blueprint_unlocked.connect(func(_slot_id: String, tech: TechnologyDef) -> void:
+		_transmission_banner.queue_transmission(tech))
 	layer.add_child(_transmission_banner)
 
 	_survey_report_panel = SurveyReportPanel.new()
-	_activities_panel.geological_report_ready.connect(_survey_report_panel.show_geological_report)
-	_activities_panel.resource_report_ready.connect(_survey_report_panel.show_resource_report)
 	layer.add_child(_survey_report_panel)
+
+	# Mining's own gateway (deposit list -> DepositDetailPanel -> BEGIN
+	# EXTRACTION) — a fully self-contained centered popup, same shell as
+	# SurveyReportPanel above, so it doesn't need to live nested inside
+	# anything (Docs/Arrival Scan System.md's "what stays manual" section:
+	# Mining is the one Activity that's still player-initiated, not
+	# auto-fired on arrival).
+	_mining_panel = MiningOperationsPanel.new()
+	# Mirrors the old ActivitiesPanel._start_mining guard — BEGIN EXTRACTION
+	# on DepositDetailPanel should already be disabled while busy, this is
+	# defensive only. MiningStatusStrip picks up the new op itself via
+	# Operations.operation_started, no manual rebuild call needed here.
+	_mining_panel.begin_requested.connect(func(body_id: String, material_name: String) -> void:
+		if Operations.can_start("mining"):
+			Operations.start_mining(body_id, material_name))
+	layer.add_child(_mining_panel)
+
+	# Bottom-right corner readout, visible only while mining is actually
+	# RUNNING — the counterpart to ArrivalScanRow's bars for the one
+	# Activity that isn't auto-fired/instant.
+	_mining_status_strip = MiningStatusStrip.new()
+	layer.add_child(_mining_status_strip)
+
+	# Top-of-screen parallel scan bars (Docs/Arrival Scan System.md) —
+	# arrival auto-fires every owned Survey category in parallel; "See More"
+	# opens the report panel above, "Mine" opens the gateway above.
+	_arrival_scan_row = ArrivalScanRow.new()
+	_arrival_scan_row.geological_report_ready.connect(_survey_report_panel.show_geological_report)
+	_arrival_scan_row.resource_report_ready.connect(_survey_report_panel.show_resource_report)
+	_arrival_scan_row.mine_requested.connect(func(location_id: String) -> void:
+		_mining_panel.open_for(location_id, not Operations.can_start("mining")))
+	layer.add_child(_arrival_scan_row)
 
 	# Q-hotkey (see _unhandled_input) AND the command menu's ECONOMY->SELL leaf
 	# both toggle this — deliberately Cockpit-scene-local rather than a
@@ -591,9 +635,6 @@ func _build_activities_panel() -> void:
 			_buildings_panel.close()
 		else:
 			_buildings_panel.open())
-
-	# OPERATIONS leaf — toggles the same drawer its own tab already does.
-	HUD.operations_requested.connect(_activities_panel.toggle)
 
 	# Always-on, not gated behind any leaf — see StructuresReadout's own
 	# class comment for why this replaced BuildingsPanel's old STRUCTURES
@@ -1175,7 +1216,7 @@ func _build_secondaries(entry: KnownBodies.Entry) -> void:
 func _build_transit() -> void:
 	_in_transit = true
 	_arrival_stop_played = false
-	_activities_panel.show_for_travel()
+	_arrival_scan_row.hide_for_travel()
 	# Just a location-ish readout, same role _view_label always plays — NOT
 	# a status message anymore (see ConsolePanel's always-on ship-status
 	# strip, TravelCalc.ship_status, for "Orienting to Target"/"Acceleration

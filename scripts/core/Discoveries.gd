@@ -16,22 +16,38 @@ extends Node
 
 enum Tier { NONE, SCANNED }
 
-# Earth and Luna start pre-scanned — the vertical slice's fixed starting
-# position (see Cockpit.gd) means the player is already there at boot, so
-# treating them as freshly "unknown" would be a lie the game tells about
-# itself. Every other body still starts unscanned as normal.
-var _scans: Dictionary = {
-	"Earth": Tier.SCANNED,
-	"Luna": Tier.SCANNED,
-}  # id -> Tier
+# id -> Tier, explicit overrides only. Sol-system bodies default to SCANNED
+# without needing an entry here at all (see scan_tier below) — this dict now
+# only exists for anything that deliberately does NOT get that default.
+var _scans: Dictionary = {}
 
 
 func is_scanned(id: String) -> bool:
 	return scan_tier(id) != Tier.NONE
 
 
+# Every body KnownBodies.get_entry() recognizes (every curated planet/moon,
+# and any asteroid already spawned/registered this session) is a Sol-system
+# body. Docs/Ship Equipment.md's "Sol system exception": the game starts in
+# 2037, so humanity already has complete navigational/data knowledge of its
+# own solar system — this isn't a placeholder, it's a permanent fact about
+# Sol specifically. So any such body starts pre-scanned by default, same as
+# Earth/Luna used to be hardcoded here, just generalized to the whole
+# catalog instead of two names. A future non-Sol system's bodies won't
+# resolve via KnownBodies (a Sol-only catalog) and correctly fall through to
+# NONE here, unscanned, without this needing to change later.
+#
+# NOTE: this is deliberately independent of Scanner Array/Research survey
+# state — a body being navigationally known (it exists, you can see its
+# stats, you can fly there) says nothing about whether it's been
+# resource/geological-surveyed. That still requires owning the right
+# Scanner Array tier and running an actual survey.
 func scan_tier(id: String) -> Tier:
-	return _scans.get(id, Tier.NONE)
+	if _scans.has(id):
+		return _scans[id]
+	if KnownBodies.get_entry(id) != null:
+		return Tier.SCANNED
+	return Tier.NONE
 
 
 func mark_scanned(id: String, tier: Tier = Tier.SCANNED) -> void:
@@ -41,7 +57,4 @@ func mark_scanned(id: String, tier: Tier = Tier.SCANNED) -> void:
 # See PlayerState.reset_for_new_game — same "autoloads outlive the scene"
 # problem, applied here.
 func reset_for_new_game() -> void:
-	_scans = {
-		"Earth": Tier.SCANNED,
-		"Luna": Tier.SCANNED,
-	}
+	_scans = {}

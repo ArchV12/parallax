@@ -50,6 +50,15 @@ Explore Further
 
 This loop repeats throughout the entire game.
 
+> **Note:** "Perform Scientific Activities" at a location — originally one
+> manually-triggered Survey at a time — has been redesigned. See
+> `Docs/Arrival Scan System.md` for the current design: arrival auto-fires
+> every owned-instrument Survey in parallel, with scan duration itself
+> driven by the body's native rate for that category. The loop shape above
+> (Travel → Activities → Transmit → Knowledge → Milestones → ...) is
+> unchanged; only how "Perform Scientific Activities" plays out at a
+> location is different now.
+
 ---
 
 # Design Philosophy

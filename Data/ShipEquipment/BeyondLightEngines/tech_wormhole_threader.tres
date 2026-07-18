@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/BeyondLightEngines/instrument_wormhole_threader.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "wormhole_threader"
+display_name = "Wormhole Threader"
+knowledge_requirements = Dictionary[String, int]({"astrophysics": 1100, "anomalies": 500})
+materials_requirements = Dictionary[String, int]({"Palladium": 500, "Iridium": 200})
+unlock_text = "Commander,\n\nWe can now open and stabilize genuine traversable wormholes on demand, threading a real network rather than folding space one jump at a time.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

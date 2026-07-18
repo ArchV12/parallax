@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/CargoHold/instrument_quantum_vault.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "quantum_vault"
+display_name = "Quantum Vault"
+knowledge_requirements = Dictionary[String, int]({"geological": 950})
+materials_requirements = Dictionary[String, int]({"Titanium": 800, "Palladium": 200})
+unlock_text = "Commander,\n\nA quantum vault stores material in a folded pocket of space, our largest possible cargo capacity by a wide margin.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

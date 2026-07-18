@@ -22,9 +22,45 @@ signal milestone_reached(tech: TechnologyDef)
 # change, not just milestone crossings.
 signal knowledge_changed(category_id: String, new_total: int)
 
+# Fired the first time a materials-gated TechnologyDef's Knowledge
+# requirements become met, but BEFORE it's actually crafted/granted —
+# distinct from milestone_reached, which only fires once the tier is
+# actually owned. Fires exactly once per tech (_notified_blueprints below),
+# not on every subsequent add_knowledge/craft-check call. EarthTransmission-
+# Banner (Cockpit.gd) is wired to THIS signal, not milestone_reached, per an
+# explicit user ask (2026-07-18) — the transmission should read as "Earth
+# sent us the blueprint," not "the equipment is built." Deliberately does
+# NOT also drive a named HUD toast (a first pass tried "New Sub-Light Engine
+# upgrade available: Fusion Drive," per Docs/Upgrading.md's own example) —
+# removed per user follow-up: naming the tech before the player even opens
+# the transmission spoiled the reveal. The unnamed "Incoming Earth
+# Transmission" button (EarthTransmissionBanner) is the only surfacing of
+# this signal now; the name stays hidden until actually opened.
+#
+# NOTE: a materials-FREE tech never emits this — it auto-grants straight
+# through milestone_reached the instant Knowledge is met (see
+# _check_milestones below), never passing through the materials-gate branch
+# this signal fires from. Every TechnologyDef today has a real materials
+# cost, so this is a latent gap, not a live bug — but a future materials-
+# free tech would silently get no Earth Transmission at all under the
+# current wiring.
+signal blueprint_unlocked(slot_id: String, tech: TechnologyDef)
+
 # Every known Activity's data file. Hand-authored and hardcoded here rather
 # than scanned from disk — activities are a small, fixed, designed set (see
 # Question 2 Answer.md), same spirit as TravelCalc.ENGINE_TIERS.
+#
+# 2026-07-18: also holds the 6 Ship Equipment slots (Docs/Ship Equipment.md,
+# Docs/Upgrading.md) — EQUIPMENT_SLOT_PATHS below. They share this exact dict
+# (and _activities/_owned_tier/_technologies) rather than a parallel system:
+# the underlying mechanics (owned tier, next tech, can_craft, craft) are
+# already fully generic over an id string, and the one place that iterates
+# ALL ids (known_activities(), read by ResearchPanel) is being rewritten to
+# use equipment_slot_ids() for equipment and stay separate — see that
+# function's own comment. Science Activity ids stay hardcoded lists
+# elsewhere (is_survey_kind, ANOMALY_SOURCE_ACTIVITIES) that equipment slot
+# ids are simply never added to, so nothing survey-specific gets confused by
+# the new ids sharing a dictionary.
 const ACTIVITY_PATHS := {
 	"resource_survey": "res://Data/Science/ResourceSurvey/activity_resource_survey.tres",
 	"geological_survey": "res://Data/Science/GeologicalSurvey/activity_geological_survey.tres",
@@ -34,12 +70,43 @@ const ACTIVITY_PATHS := {
 	"mining": "res://Data/Science/Mining/activity_mining.tres",
 }
 
+# The 6 Ship Equipment slots (Docs/Ship Equipment.md), in that doc's own
+# display order — this exact order is what ResearchPanel's 6 rows use (see
+# equipment_slot_ids()). scanner_array supersedes resource_survey's OWN
+# instrument chain (see that ActivityDef's now-trimmed single-tier
+# instruments array, and TECHNOLOGY_PATHS below no longer having a
+# resource_survey entry) — Scanner Array is a ship-wide slot, not a synonym
+# for the Resource Survey activity, so its chain lives under its own id even
+# though it reuses/renames that same original tier data.
+const EQUIPMENT_SLOT_PATHS := {
+	"sub_light_engines": "res://Data/ShipEquipment/SubLightEngines/activity_sub_light_engines.tres",
+	"beyond_light_engines": "res://Data/ShipEquipment/BeyondLightEngines/activity_beyond_light_engines.tres",
+	"scanner_array": "res://Data/ShipEquipment/ScannerArray/activity_scanner_array.tres",
+	"mining_system": "res://Data/ShipEquipment/MiningSystem/activity_mining_system.tres",
+	"cargo_hold": "res://Data/ShipEquipment/CargoHold/activity_cargo_hold.tres",
+	"navigation_scanner": "res://Data/ShipEquipment/NavigationScanner/activity_navigation_scanner.tres",
+}
+
 # Activities the player owns a starting (tier 0) instrument for from the very
 # beginning — "tools gate activities, not the reverse" (roadmap doc). Mining
 # is owned from the start too, but gated per-location instead by
 # has_resource_survey (see below) — ActivitiesPanel is what actually hides
 # its AVAILABLE row until a Resource Survey has resolved at the current body.
-const STARTING_ACTIVITIES := ["resource_survey", "geological_survey", "astrophysics_survey", "life_sciences_survey", "atmospheric_survey", "mining"]
+#
+# Every Equipment slot is owned from tier 0 too (Docs/Ship Equipment.md's
+# Starting Loadout). Beyond Light Engines' own tier 0 is a real "None"
+# InstrumentDef (Data/ShipEquipment/BeyondLightEngines/instrument_none.tres)
+# rather than owned_tier starting at -1/LOCKED like an un-owned Activity —
+# deliberately, so it uses the exact same "index == owned_tier" tier/tech
+# indexing every other slot already relies on (next_technology/can_craft/
+# craft_technology/_check_milestones all assume owned_tier starts at 0 with
+# a real, if empty, instrument there). Its own instruments array therefore
+# has 6 entries (None + 5 real drives) against 5 TECHNOLOGY_PATHS entries,
+# unlike every other slot's 5-instruments-vs-4-techs shape.
+const STARTING_ACTIVITIES := [
+	"resource_survey", "geological_survey", "astrophysics_survey", "life_sciences_survey", "atmospheric_survey", "mining",
+	"sub_light_engines", "beyond_light_engines", "scanner_array", "mining_system", "cargo_hold", "navigation_scanner",
+]
 
 # Each activity's TechnologyDef chain, in tier order — index N is the tech
 # that advances owned_tier from N to N+1 (there's no entry for tier 0, the
@@ -47,12 +114,52 @@ const STARTING_ACTIVITIES := ["resource_survey", "geological_survey", "astrophys
 # same reason ACTIVITY_PATHS is. geological_survey has no entry yet — only
 # its starting tier (Geological Imager) is known so far, nothing to unlock
 # it TO yet; next_technology() already returns null gracefully for that.
+# resource_survey deliberately has NO entry anymore — its 4-tier chain moved
+# to scanner_array below verbatim (same tech_*.tres files, just re-keyed) the
+# moment Scanner Array became the real ship-wide slot; leaving both active
+# would have meant two parallel, disconnected progressions unlocking the
+# same instruments under two different ids.
+#
+# beyond_light_engines has 5 entries, not 4, unlike every other chain here —
+# it has no free tier 0, so its FIRST tier (Warp Bubble Generator) needs its
+# own real unlock tech too, not just tiers 1-4.
 const TECHNOLOGY_PATHS := {
-	"resource_survey": [
+	"scanner_array": [
 		"res://Data/Science/ResourceSurvey/tech_advanced_spectrometer.tres",
 		"res://Data/Science/ResourceSurvey/tech_deep_penetration_scanner.tres",
 		"res://Data/Science/ResourceSurvey/tech_quantum_mineral_imager.tres",
 		"res://Data/Science/ResourceSurvey/tech_exotic_matter_resonator.tres",
+	],
+	"sub_light_engines": [
+		"res://Data/ShipEquipment/SubLightEngines/tech_fusion_drive.tres",
+		"res://Data/ShipEquipment/SubLightEngines/tech_improved_fusion.tres",
+		"res://Data/ShipEquipment/SubLightEngines/tech_antimatter_drive.tres",
+		"res://Data/ShipEquipment/SubLightEngines/tech_relativistic_cap.tres",
+	],
+	"beyond_light_engines": [
+		"res://Data/ShipEquipment/BeyondLightEngines/tech_warp_bubble_generator.tres",
+		"res://Data/ShipEquipment/BeyondLightEngines/tech_alcubierre_drive.tres",
+		"res://Data/ShipEquipment/BeyondLightEngines/tech_folded_space_drive.tres",
+		"res://Data/ShipEquipment/BeyondLightEngines/tech_wormhole_threader.tres",
+		"res://Data/ShipEquipment/BeyondLightEngines/tech_singularity_drive.tres",
+	],
+	"mining_system": [
+		"res://Data/ShipEquipment/MiningSystem/tech_precision_mining_laser.tres",
+		"res://Data/ShipEquipment/MiningSystem/tech_plasma_cutting_array.tres",
+		"res://Data/ShipEquipment/MiningSystem/tech_molecular_disassembler.tres",
+		"res://Data/ShipEquipment/MiningSystem/tech_graviton_extraction_rig.tres",
+	],
+	"cargo_hold": [
+		"res://Data/ShipEquipment/CargoHold/tech_reinforced_hold.tres",
+		"res://Data/ShipEquipment/CargoHold/tech_modular_cargo_bay.tres",
+		"res://Data/ShipEquipment/CargoHold/tech_compression_hold.tres",
+		"res://Data/ShipEquipment/CargoHold/tech_quantum_vault.tres",
+	],
+	"navigation_scanner": [
+		"res://Data/ShipEquipment/NavigationScanner/tech_short_range_detector.tres",
+		"res://Data/ShipEquipment/NavigationScanner/tech_extended_range_array.tres",
+		"res://Data/ShipEquipment/NavigationScanner/tech_deep_stellar_scan.tres",
+		"res://Data/ShipEquipment/NavigationScanner/tech_stellar_cartography_suite.tres",
 	],
 }
 
@@ -127,6 +234,12 @@ var _knowledge: Dictionary = {}
 # only the way the old boolean was.
 var _surveyed_tier: Dictionary = {}
 
+# TechnologyDef (object identity, Resources compare by reference) -> true,
+# once blueprint_unlocked has fired for it — guards against re-emitting on
+# every subsequent add_knowledge()/_check_milestones() call while the
+# player just hasn't crafted it yet.
+var _notified_blueprints: Dictionary = {}
+
 
 # Loads eagerly in _init (object construction), not _ready — _ready is
 # deferred a frame relative to when other autoloads' _ready bodies run in at
@@ -135,6 +248,8 @@ var _surveyed_tier: Dictionary = {}
 func _init() -> void:
 	for id: String in ACTIVITY_PATHS:
 		_activities[id] = load(ACTIVITY_PATHS[id])
+	for id: String in EQUIPMENT_SLOT_PATHS:
+		_activities[id] = load(EQUIPMENT_SLOT_PATHS[id])
 	for id: String in TECHNOLOGY_PATHS:
 		var list: Array[TechnologyDef] = []
 		for path: String in TECHNOLOGY_PATHS[id]:
@@ -151,6 +266,7 @@ func reset_for_new_game() -> void:
 	_owned_tier.clear()
 	_knowledge.clear()
 	_surveyed_tier.clear()
+	_notified_blueprints.clear()
 	for id: String in _activities:
 		_owned_tier[id] = 0 if id in STARTING_ACTIVITIES else -1
 
@@ -207,6 +323,18 @@ func can_survey_for_new_info(activity_id: String, body_id: String) -> bool:
 	return owned_tier(activity_id) > tier_surveyed_at(activity_id, body_id)
 
 
+# Resource/Geological/Astrophysics/Life Sciences/Atmospheric Survey — the
+# activities that award Knowledge via run_survey and can go stale at a body
+# (see can_survey_for_new_info above). Mining is the one activity_id that
+# isn't a Survey (continuous, never resolves through run_survey at all).
+# Single source of truth for both Operations.gd (which activities the
+# Arrival Scan System auto-fires — see start_all_surveys) and any UI that
+# still needs to distinguish Survey-kind rows from Mining's own.
+func is_survey_kind(activity_id: String) -> bool:
+	return activity_id == "resource_survey" or activity_id == "geological_survey" or activity_id == "astrophysics_survey" \
+			or activity_id == "life_sciences_survey" or activity_id == "atmospheric_survey"
+
+
 func activity_def(activity_id: String) -> ActivityDef:
 	return _activities.get(activity_id)
 
@@ -244,11 +372,30 @@ func available_activities() -> Array[String]:
 # Every activity id that has data at all, unlocked or not — what the
 # Research dashboard lists (Phase 4), unlike available_activities above
 # (which is unlock-filtered, for Cockpit's action list).
+#
+# 2026-07-18: no longer used by ResearchPanel (see equipment_slot_ids()
+# below) — Science Activities don't have their own Research-panel display
+# anymore now that instrument progression lives entirely on Ship Equipment
+# slots. Left in place; still a generically useful "every id with data"
+# query, and nothing currently needs it, but it's cheap to keep working.
 func known_activities() -> Array[String]:
 	var result: Array[String] = []
 	for id: String in _activities:
 		result.append(id)
 	return result
+
+
+# The 6 Ship Equipment slot ids, in Docs/Ship Equipment.md's own display
+# order — what ResearchPanel's 6 rows iterate. Deliberately a fixed ordered
+# array, not EQUIPMENT_SLOT_PATHS.keys() (Dictionary key order isn't a
+# stable, designed ordering the way this array's literal order is).
+const EQUIPMENT_SLOT_IDS: Array[String] = [
+	"sub_light_engines", "beyond_light_engines", "scanner_array", "mining_system", "cargo_hold", "navigation_scanner",
+]
+
+
+func equipment_slot_ids() -> Array[String]:
+	return EQUIPMENT_SLOT_IDS
 
 
 # The TechnologyDef that would advance this activity from its currently
@@ -377,6 +524,9 @@ func _check_milestones() -> Array[TechnologyDef]:
 			if not _requirements_met(tech):
 				break
 			if not tech.materials_requirements.is_empty():
+				if not _notified_blueprints.has(tech):
+					_notified_blueprints[tech] = true
+					blueprint_unlocked.emit(activity_id, tech)
 				break
 			grant_tier(activity_id, tier + 1)
 			granted.append(tech)

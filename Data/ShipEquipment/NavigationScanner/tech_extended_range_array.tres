@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TechnologyDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/TechnologyDef.gd" id="1"]
+[ext_resource type="Resource" path="res://Data/ShipEquipment/NavigationScanner/instrument_extended_range_array.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "extended_range_array"
+display_name = "Extended Range Array"
+knowledge_requirements = Dictionary[String, int]({"astrophysics": 280})
+materials_requirements = Dictionary[String, int]({"Silicon": 350, "Titanium": 150})
+unlock_text = "Commander,\n\nAn extended range array reveals a new system's full planetary layout the moment we arrive, not just what's nearby.\n\nThe blueprint is ready for fabrication — gather the required materials to complete construction.\n\n— Earth Science Directorate"
+grants_instrument = ExtResource("2")

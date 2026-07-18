@@ -4,6 +4,6 @@
 
 [resource]
 script = ExtResource("1")
-id = "quantum_mineral_imager"
-display_name = "Quantum Mineral Imager"
+id = "quantum_resonance_imager"
+display_name = "Quantum Resonance Imager"
 capabilities = Array[String](["Detect Trace Elements"])
