@@ -49,6 +49,13 @@ const MIN_DISTANCE := 0.8
 const MAX_DISTANCE := 60.0
 const ORBIT_SENSITIVITY := 0.008
 const PAN_SENSITIVITY := 0.0012
+# Free-fly: WASD to move, hold RMB to look — unfocused only. Ported verbatim
+# from SystemView.gd's own camera rig (2026-07-18, "duplicate the movement
+# controls" ask) — same multipliers work unmodified since free-fly speed is
+# derived from the current _distance (see _process), which scales with
+# whatever this view's own MIN/MAX_DISTANCE happen to be.
+const FREE_FLY_SPEED_MULT := 0.15
+const FREE_FLY_SHIFT_MULT := 2.0  # hold Shift for a speed boost — see _process
 
 const STOCK_YAW := 0.0
 const STOCK_PITCH := -0.74
@@ -81,10 +88,19 @@ var _yaw := STOCK_YAW
 var _pitch := STOCK_PITCH
 var _distance := STOCK_DISTANCE
 var _target_distance := STOCK_DISTANCE
-var _orbiting := false
 var _panning := false
+var _looking := false  # RMB held — orbits the focused body, or free-fly mouselook when unfocused (see _unhandled_input, matching SystemView.gd)
 var _left_press_pos := Vector2.ZERO
 var _focused_body: Node3D = null
+var _pan_target := Vector3.ZERO  # where the pivot eases to while unfocused — see _process's pivot-follow lerp
+# Camera's actual current local-Z offset from the pivot — eases toward
+# _distance (orbiting a focused body) or 0.0 (free-fly, rotate in place) each
+# frame; see _process. Starts at 0.0 to match the unfocused starting state —
+# _build_camera bakes the stock "pulled back" framing into _pan_target/
+# _pivot.position instead, not this. Same fix as SystemView.gd for "rotating
+# after flying far away sweeps a huge orbit that looks like it's circling
+# the planet."
+var _orbit_offset := 0.0
 
 var _overlay_layer: CanvasLayer
 var _callout_overlay: Control
@@ -97,7 +113,7 @@ var _body_panel: BodyInfoPanel
 var _scan_prompt: ScanPrompt
 var _lock_button: LockButton
 var _callout_go_btn: UIButton
-var _return_scene: String = "res://scenes/system_view.tscn"  # where "back" (Esc or the button) actually goes — see _ready/HUD.pending_return_scene
+var _return_scene: String = "res://scenes/system_view.tscn"  # where Esc with nothing focused goes back to — see _ready/HUD.pending_return_scene. No dedicated back button anymore (2026-07-18) — ViewSwitcher's always-on tab row covers that now.
 
 
 func _ready() -> void:
@@ -111,9 +127,12 @@ func _ready() -> void:
 	_build_system()
 	_build_callout()
 	_build_body_panel()
-	_build_back_button()
 	AmbientManager.play_map_ambient()
 	HUD.set_view("%s System" % _planet_name, "planetary")
+	# Re-clicking the PLANETARY tab while already here recenters instead of
+	# no-opping — matching System view's own HUD.recenter_requested wiring
+	# (see _recenter below).
+	HUD.recenter_requested.connect(_recenter)
 
 
 func _process(delta: float) -> void:
@@ -129,13 +148,48 @@ func _process(delta: float) -> void:
 		var body: Node3D = orbit["body"]
 		body.position = Vector3(cos(angle) * radius, 0.0, sin(angle) * radius)
 
-	var pivot_target := _focused_body.position if _focused_body != null else Vector3.ZERO
+	# Free-fly movement — unfocused only. Ported verbatim from SystemView.gd
+	# (see FREE_FLY_SPEED_MULT's own comment there for the full reasoning).
+	if _focused_body == null:
+		var move := Vector3.ZERO
+		if ControlScheme.is_forward_pressed():
+			move -= _camera.global_basis.z
+		if ControlScheme.is_back_pressed():
+			move += _camera.global_basis.z
+		if ControlScheme.is_right_pressed():
+			move += _camera.global_basis.x
+		if ControlScheme.is_left_pressed():
+			move -= _camera.global_basis.x
+		if Input.is_physical_key_pressed(KEY_SPACE):
+			move += Vector3.UP
+		if Input.is_physical_key_pressed(KEY_CTRL):
+			move += Vector3.DOWN
+		if move.length() > 0.01:
+			var speed_mult := FREE_FLY_SPEED_MULT
+			if Input.is_physical_key_pressed(KEY_SHIFT):
+				speed_mult *= FREE_FLY_SHIFT_MULT
+			var fly_offset := move.normalized() * (_distance * speed_mult) * delta
+			_pivot.position += fly_offset
+			_pan_target += fly_offset
+
+	# Glide the pivot toward wherever it should be — the focused body's live
+	# position, or _pan_target once nothing's focused — instead of snapping.
+	# See SystemView.gd's own copy of this block for the full reasoning.
+	var pivot_target := _focused_body.position if _focused_body != null else _pan_target
 	var t := 1.0 - exp(-delta * FOCUS_SWEEP_RATE)
 	_pivot.position = _pivot.position.lerp(pivot_target, t)
 
 	if not is_equal_approx(_distance, _target_distance):
 		_distance = lerpf(_distance, _target_distance, t)
 		_update_camera()
+
+	# Camera's local offset from the pivot eases between "examining a body"
+	# (offset ~= _distance, camera orbits/swings around it) and "free flight"
+	# (offset ~= 0, camera rotates IN PLACE) — see SystemView.gd's own copy
+	# of this block for the full "huge orbit sweep" bug this fixes.
+	var target_offset := _target_distance if _focused_body != null else 0.0
+	_orbit_offset = lerpf(_orbit_offset, target_offset, t)
+	_camera.position = Vector3(0.0, 0.0, _orbit_offset)
 
 	if _callout_stage == CalloutStage.WAITING_FOR_SWEEP:
 		_sweep_elapsed += delta
@@ -175,7 +229,15 @@ func _build_camera() -> void:
 	_camera = Camera3D.new()
 	_camera.fov = 50.0
 	_pivot.add_child(_camera)
-	_update_camera()
+	_update_camera()  # sets _pivot.rotation from the stock yaw/pitch below
+
+	# Stock framing lives in the pivot's own POSITION, not the camera's local
+	# offset (that's reserved for actually orbiting a focused body — see
+	# _process's _orbit_offset) — same "pulled back" trick as SystemView.gd's
+	# _build_camera, or the very first unfocused frame would put the camera
+	# sitting right on top of the planet.
+	_pan_target = _pivot.basis * Vector3(0.0, 0.0, STOCK_DISTANCE)
+	_pivot.position = _pan_target
 
 	var stars := StarfieldStars.new()
 	stars.follow = _camera
@@ -186,7 +248,10 @@ func _update_camera() -> void:
 	_pitch = clampf(_pitch, -1.45, 1.45)
 	_distance = clampf(_distance, MIN_DISTANCE, MAX_DISTANCE)
 	_pivot.rotation = Vector3(_pitch, _yaw, 0)
-	_camera.position = Vector3(0, 0, _distance)
+	# Camera's own local offset from the pivot is NOT set here — see
+	# _process's _orbit_offset easing, which is now the sole owner of
+	# _camera.position (setting it here too would fight that lerp on every
+	# discrete drag/zoom event this function also runs on).
 
 
 func _build_system() -> void:
@@ -292,10 +357,17 @@ func _build_orbit_ring(radius: float) -> MeshInstance3D:
 
 
 # --- Camera input ---
-# Same interaction model as System view: click a body to focus it, drag to
-# orbit, wheel to zoom, right/middle-drag to pan. Esc clears focus, or
-# leaves back to wherever this view was entered from if nothing's focused
-# (see _return_scene).
+# Same interaction model as System view (ported verbatim 2026-07-18): click
+# a body — select/focus it, camera follows it around its orbit. Hold RMB —
+# rotate (orbits the focused body if there is one, so you can look at it
+# from any angle; turns the free-fly camera in place otherwise); cursor
+# hides for the duration of the hold and reappears on release. Wheel — zoom
+# · Middle-drag — pan · movement keys (WASD or ESDF, see ControlScheme) —
+# free-fly, unfocused only. LMB is click-to-select only, no longer a
+# rotate-drag. Pan/free-fly are no-ops while focused — _process re-glues the
+# pivot to the body every frame. Esc clears focus, or leaves back to
+# wherever this view was entered from if nothing's focused (see
+# _return_scene).
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
@@ -307,33 +379,45 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
+		# Wheel events over a Control that doesn't itself consume them still
+		# reach here unaccepted — same guard as SystemView.gd's own copy of
+		# this block (see that function's comment for why).
+		var over_ui := (mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN) \
+				and get_viewport().gui_get_hovered_control() != null
 		match mb.button_index:
 			MOUSE_BUTTON_WHEEL_UP:
-				_distance *= ZOOM_STEP
-				_target_distance = _distance
-				_update_camera()
+				if _focused_body != null and not over_ui:
+					_distance *= ZOOM_STEP
+					_target_distance = _distance  # manual zoom overrides any focus-zoom in progress
+					_update_camera()
 			MOUSE_BUTTON_WHEEL_DOWN:
-				_distance /= ZOOM_STEP
-				_target_distance = _distance
-				_update_camera()
+				if _focused_body != null and not over_ui:
+					_distance /= ZOOM_STEP
+					_target_distance = _distance
+					_update_camera()
 			MOUSE_BUTTON_LEFT:
-				_orbiting = mb.pressed
+				# Click-to-select only — no longer a rotate-drag.
 				if mb.pressed:
 					_left_press_pos = mb.position
 				elif mb.position.distance_to(_left_press_pos) < CLICK_DRAG_THRESHOLD:
 					_try_select(mb.position)
-			MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE:
+			MOUSE_BUTTON_RIGHT:
+				_looking = mb.pressed
+				Input.mouse_mode = Input.MOUSE_MODE_HIDDEN if mb.pressed else Input.MOUSE_MODE_VISIBLE
+			MOUSE_BUTTON_MIDDLE:
 				_panning = mb.pressed
 	elif event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
-		if _orbiting:
+		if _looking:
 			_yaw -= mm.relative.x * ORBIT_SENSITIVITY
 			_pitch -= mm.relative.y * ORBIT_SENSITIVITY
 			_update_camera()
 		elif _panning and _focused_body == null:
 			var scale_factor := _distance * PAN_SENSITIVITY
-			_pivot.position += (-_camera.global_basis.x * mm.relative.x
+			var offset := (-_camera.global_basis.x * mm.relative.x
 					+ _camera.global_basis.y * mm.relative.y) * scale_factor
+			_pivot.position += offset
+			_pan_target += offset  # keep _process's pivot-follow lerp from pulling the pan straight back to the planet
 
 
 # --- Selection ---
@@ -390,11 +474,19 @@ func _select(body: Node3D, body_radius: float) -> void:
 
 
 func _clear_focus() -> void:
+	# Camera stays exactly where it is instead of sweeping back to the stock
+	# planet-centered view — ported from SystemView.gd's own _clear_focus
+	# (2026-07-13 feedback there: deselecting should just untarget, not yank
+	# you back across the map). See that function's own comment for the full
+	# reasoning on the position/offset bookkeeping handoff below; _recenter
+	# (below) is the explicit "sweep back to stock" action now, same split.
+	var camera_world_pos := _pivot.position + _pivot.basis * Vector3(0.0, 0.0, _orbit_offset)
 	_focused_body = null
+	_pivot.position = camera_world_pos
+	_pan_target = camera_world_pos
+	_orbit_offset = 0.0
+	_camera.position = Vector3.ZERO
 	_target_distance = STOCK_DISTANCE
-	_yaw = STOCK_YAW
-	_pitch = STOCK_PITCH
-	_update_camera()
 
 	if _line_tween != null:
 		_line_tween.kill()
@@ -405,6 +497,20 @@ func _clear_focus() -> void:
 	_scan_prompt.reset()
 	_lock_button.reset()
 	_callout_go_btn.visible = false
+
+
+# The "I flew off into empty space and got lost" recovery — unlike Esc/
+# _clear_focus above (which deliberately leaves the camera exactly where it
+# is), this sweeps back to the stock planet-centered view, so it resets
+# yaw/pitch and recomputes the stock pan target. Ported from SystemView.gd's
+# own _recenter, wired to the same HUD.recenter_requested signal (fired when
+# the PLANETARY tab is re-clicked while already active — see _ready).
+func _recenter() -> void:
+	_clear_focus()
+	_yaw = STOCK_YAW
+	_pitch = STOCK_PITCH
+	_update_camera()
+	_pan_target = _pivot.basis * Vector3(0.0, 0.0, STOCK_DISTANCE)
 
 
 # --- Callout ---
@@ -477,35 +583,6 @@ func _on_scan_finished(id: String) -> void:
 	if _focused_body != null and _focused_body.name == id:
 		_scan_prompt.mark_scanned()
 
-
-# --- Back button ---
-# Esc already does this (see _unhandled_input), but that's not discoverable
-# on its own — and "back" isn't always System view anymore now that
-# PLANETARY is reachable from Cockpit's tab too (see _return_scene), so the
-# button's own label has to match wherever it's actually going, not a fixed
-# "SOLAR SYSTEM" caption that would be a lie whenever you arrived from
-# Cockpit. _return_label() looks the display name up from ViewSwitcher.VIEWS
-# (same {id, label, scene} table the top tab row itself is built from)
-# rather than duplicating a second scene->label mapping here.
-func _build_back_button() -> void:
-	var btn := UIButton.new()
-	btn.text = "◀ %s" % _return_label()
-	btn.solid = true
-	btn.shimmer_enabled = false
-	btn.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	btn.offset_left = 24.0
-	btn.offset_top = 78.0
-	btn.custom_minimum_size = Vector2(0, 30)
-	btn.add_theme_font_size_override("font_size", 13)
-	btn.pressed.connect(func() -> void: HUD.go_to(_return_scene))
-	_overlay_layer.add_child(btn)
-
-
-func _return_label() -> String:
-	for view: Dictionary in ViewSwitcher.VIEWS:
-		if view["scene"] == _return_scene:
-			return view["label"]
-	return "SOLAR SYSTEM"  # fallback — matches this view's original always-System-view behavior
 
 
 var _callout_visible := false

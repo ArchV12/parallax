@@ -52,6 +52,7 @@ static func _build_surface(params: CanonicalBodyParams) -> MeshInstance3D:
 	mesh.radius = params.radius
 	mesh.height = params.radius * 2.0
 	mesh.radial_segments = SPHERE_SEGMENTS
+	@warning_ignore("integer_division")  # SPHERE_SEGMENTS is even by construction; floor division is fine
 	mesh.rings = SPHERE_SEGMENTS / 2
 
 	var mat := StandardMaterial3D.new()
@@ -104,6 +105,7 @@ static func _build_atmosphere(params: CanonicalBodyParams) -> MeshInstance3D:
 	mesh.radius = r
 	mesh.height = r * 2.0
 	mesh.radial_segments = SPHERE_SEGMENTS
+	@warning_ignore("integer_division")  # SPHERE_SEGMENTS is even by construction; floor division is fine
 	mesh.rings = SPHERE_SEGMENTS / 2
 
 	var mat := ShaderMaterial.new()

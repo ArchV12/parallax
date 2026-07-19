@@ -19,8 +19,8 @@ extends Control
 
 const LEFT_MARGIN := 24.0
 const TOP_FRACTION := 1.0 / 3.0
-const ROW_GAP := 10.0
-const LINE_GAP := 1.0
+const ROW_GAP := 10  # int — add_theme_constant_override wants int, not float
+const LINE_GAP := 1  # int — add_theme_constant_override wants int, not float
 
 var _vbox: VBoxContainer
 

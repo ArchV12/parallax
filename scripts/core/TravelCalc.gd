@@ -104,13 +104,16 @@ const ORBIT_SETTLE_DURATION := 2.8  # was 4.0, then trimmed once to 2.8 for paci
 # separate, physically-grounded model: modest acceleration up to a capped
 # cruise speed (0 = uncapped), each tier roughly an order of magnitude
 # faster than the last. Tier 4 (0.99c) puts Pluto at ~5.5 hours — right
-# where "distance/c" says it should be. Off by default (PlayerState.
-# engine_tier_override == -1) — with no tier pinned, PlayerState.
-# start_travel uses ENGINE_ACCEL_KM_S2 directly, exactly like before tiers
-# existed. PINNING a tier DOES now drive the actual trip (see
-# compress_by_tier_reach/TIER_REACH_KM below) — these accel/cap numbers
-# feed PlayerState.real_duration_estimate's honest real-world-scale
-# display number, but never touch the camera/flight_profile directly.
+# where "distance/c" says it should be. 2026-07-18: this ladder now drives
+# real gameplay pacing too, not just the F2 cheat pin — PlayerState.
+# _effective_engine_tier() resolves to the player's real Sub-Light Engines
+# tier (Research.owned_tier) whenever engine_tier_override isn't pinned, so
+# ENGINE_ACCEL_KM_S2 direct/uncapped is now only reachable as a defensive
+# fallback, not the actual starting-game default. Whatever tier resolves
+# DOES drive the actual trip (see compress_by_tier_reach/TIER_REACH_KM
+# below) — these accel/cap numbers ALSO feed PlayerState.
+# real_duration_estimate's honest real-world-scale display number, but
+# never touch the camera/flight_profile directly themselves.
 #
 # real_time_scale (2026-07-12): a DISPLAY-ONLY multiplier applied on top of
 # the accel/cap-derived duration, solely in PlayerState.real_duration_estimate
@@ -162,15 +165,22 @@ const TIER_REACH_KM: Array[float] = [
 # frontier" barely distinguishable from "at the frontier"; log compression
 # is the right tool for "vast multiplicative range -> narrow additive
 # range." _COMPRESS_A is the gameplay duration AT ratio 1.0 (a trip
-# exactly at this tier's own reach) — 120s, the original "Tier 0 to Luna
-# should feel like ~2 minutes" ask. _COMPRESS_B is fitted so ratio 202.4
-# (Tier 0's real Luna-to-Mars distance ratio) lands at 900s (~15 minutes,
-# "prohibitively far" for Tier 0) — every other tier/destination
+# exactly at this tier's own reach) — 60s, revised 2026-07-18 (was 120s)
+# so real Sub-Light Engines progression's Tier 0 gets to Luna in ~1
+# minute, now that owned-tier actually drives gameplay pacing (see
+# PlayerState._effective_engine_tier) instead of only the F2 cheat pin.
+# Since ratio 1.0 is EVERY tier's own reach, not just Tier 0's, this same
+# 60s anchor now applies uniformly at Mars/Jupiter/Pluto/etc. too — each
+# tier's own frontier still feels equally comfortable, just faster
+# board-wide. _COMPRESS_B is unchanged, still fitted so ratio 202.4
+# (Tier 0's real Luna-to-Mars distance ratio) lands close to its original
+# ~15-minute "prohibitively far" target (now ~14 minutes, since the whole
+# curve shifted down by the same flat 60s) — every other tier/destination
 # combination falls out of that SAME fit against ITS OWN reach, not a
 # hand-tuned number per pairing. Floored at MIN_DURATION_SECONDS so a
 # trip well inside a tier's reach (Venus at Tier 1, say) can't compress to
 # zero or negative.
-const _COMPRESS_A := 120.0
+const _COMPRESS_A := 60.0
 const _COMPRESS_B := 146.95
 
 
@@ -180,11 +190,90 @@ static func compress_by_tier_reach(distance_km: float, tier: int) -> float:
 	return maxf(MIN_DURATION_SECONDS, _COMPRESS_A + _COMPRESS_B * log(maxf(ratio, 0.001)))
 
 
+# --- Beyond Light Engines / interstellar travel (2026-07-18) ---
+# "Travel to stars should mirror travel around the solar system... same
+# system, just different distance units and different engine" — direct
+# user design decision. This is the EXACT same compress_by_tier_reach
+# shape/tuning above (same _COMPRESS_A/_COMPRESS_B, same log-compression-
+# of-distance-over-reach idea, same MIN_DURATION_SECONDS floor), just with
+# its own reach table in light-years instead of TIER_REACH_KM's km, keyed
+# by Research.owned_tier("beyond_light_engines") instead of Sub-Light's
+# effective tier. Ratio is dimensionless (distance/reach in the SAME unit
+# either way), so reusing the identical formula/constants is exact, not an
+# approximation — no separate tuning pass needed.
+#
+# Reach anchors are real stars from NearbyStars.gd, same "anchor to a real
+# destination, not a round number" precedent TIER_REACH_KM already set
+# (Luna/Mars/Jupiter/Pluto there; Proxima Centauri/Barnard's Star/Wolf 359/
+# Ross 154 here) — Beyond Light Engines Tier 0 (Warp Bubble Generator)
+# comfortably reaches Proxima Centauri (the actual closest real star) and
+# nothing much past it, exactly mirroring how Sub-Light Tier 0 comfortably
+# reaches Luna. Tier 4 sits at 2x the catalog's current farthest star (Ross
+# 154), same "easier all around, room for the catalog to grow" pattern
+# TIER_REACH_KM's own Tier 4 uses for Pluto.
+const STAR_TIER_REACH_LY: Array[float] = [
+	4.24,   # Tier 0 — Proxima Centauri (closest real star)
+	5.96,   # Tier 1 — Barnard's Star
+	7.86,   # Tier 2 — Wolf 359
+	9.68,   # Tier 3 — Ross 154 (comfortably covers every star in NearbyStars today)
+	19.36,  # Tier 4 — beyond Ross 154 (2x, room for the catalog to grow)
+]
+
+
+static func compress_by_star_tier_reach(distance_ly: float, tier: int) -> float:
+	var reach_ly: float = STAR_TIER_REACH_LY[clampi(tier, 0, STAR_TIER_REACH_LY.size() - 1)]
+	var ratio := distance_ly / maxf(reach_ly, 0.001)
+	return maxf(MIN_DURATION_SECONDS, _COMPRESS_A + _COMPRESS_B * log(maxf(ratio, 0.001)))
+
+
+# Real light-years in a km — for converting NearbyStars' distance_ly into the
+# same km unit every other distance in this file already works in, so
+# flight_profile/estimate need no separate interstellar code path of their
+# own, just a correctly-computed distance_km input (see estimate() below).
+const LY_TO_KM := 9.4607e12
+
+
+# Real 3D distance (light-years) between two star systems — Sol is the fixed
+# origin NearbyStars.Entry.position_ly() is built around, so "Sol" resolves
+# to Vector3.ZERO directly and any other system resolves via its own
+# NearbyStars catalog entry. Symmetric and correct for a return trip (Proxima
+# -> Sol comes out identical to Sol -> Proxima), and generalizes cleanly to a
+# hypothetical future third system (a real vector subtraction, not "distance
+# from Sol" hardcoded as the only direction that works) — though today only
+# Sol<->Proxima ever actually resolves to a real KnownBodies trip; every
+# other star in NearbyStars has no curated system to travel TO yet.
+static func star_distance_ly(system_a: String, system_b: String) -> float:
+	if system_a == system_b:
+		return 0.0
+	return _star_position_ly(system_a).distance_to(_star_position_ly(system_b))
+
+
+static func _star_position_ly(star_system: String) -> Vector3:
+	if star_system == "Sol":
+		return Vector3.ZERO
+	var star_entry := NearbyStars.get_entry(star_system)
+	return star_entry.position_ly() if star_entry != null else Vector3.ZERO
+
+
 static func estimate(from_id: String, to_id: String, accel_km_s2: float = ENGINE_ACCEL_KM_S2, cruise_cap_km_s: float = 0.0) -> Dictionary:
 	var from_entry := KnownBodies.get_entry(from_id)
 	var to_entry := KnownBodies.get_entry(to_id)
 	if from_entry == null or to_entry == null:
-		return {"local": true, "distance_au": 0.0, "distance_km": 0.0, "duration_sec": MIN_DURATION_SECONDS}
+		return {"local": true, "interstellar": false, "distance_au": 0.0, "distance_ly": 0.0, "distance_km": 0.0, "duration_sec": MIN_DURATION_SECONDS}
+
+	# Interstellar (2026-07-18) — a different star entirely, not just far away
+	# within the same system. _real_distance_km's radial-AU approximation
+	# would otherwise compare Proxima b's au_distance (0.0485, around ITS OWN
+	# star) against Earth's (1.0, around Sol) as if they shared an origin —
+	# a physically meaningless near-zero "distance." Real light-year distance
+	# between the two STARS (not the specific bodies) is what actually
+	# matters at this scale — see star_distance_ly.
+	if from_entry.star_system != to_entry.star_system:
+		var ly := star_distance_ly(from_entry.star_system, to_entry.star_system)
+		var result := _finish_estimate(false, ly * LY_TO_KM, accel_km_s2, cruise_cap_km_s)
+		result["interstellar"] = true
+		result["distance_ly"] = ly
+		return result
 
 	var local := _same_system(from_entry, to_entry)
 	var distance_km := _real_distance_km(from_entry, to_entry)
@@ -198,7 +287,10 @@ static func estimate(from_id: String, to_id: String, accel_km_s2: float = ENGINE
 	# currently sits, only how far out).
 	if not local and to_id == Destination.locked_id and Destination.locked_distance_km >= 0.0:
 		distance_km = Destination.locked_distance_km
-	return _finish_estimate(local, distance_km, accel_km_s2, cruise_cap_km_s)
+	var result := _finish_estimate(local, distance_km, accel_km_s2, cruise_cap_km_s)
+	result["interstellar"] = false
+	result["distance_ly"] = 0.0
+	return result
 
 
 # A body that's both focused AND locked needs to report two DIFFERENT
@@ -219,7 +311,11 @@ static func _finish_estimate(local: bool, distance_km: float, accel_km_s2: float
 	var profile := flight_profile(distance_km, accel_km_s2, cruise_cap_km_s)
 	var burn_duration: float = profile["burn_duration"]
 	var duration := maxf(DEPARTURE_HOLD_SECONDS + burn_duration + ARRIVAL_HOLD_SECONDS, MIN_DURATION_SECONDS)
-	return {"local": local, "distance_au": distance_km / AU_KM, "distance_km": distance_km, "duration_sec": duration}
+	# interstellar/distance_ly default false/0.0 here — estimate()'s
+	# interstellar branch overwrites both after calling this; every other
+	# caller (estimate_for_distance, the non-interstellar branch) is
+	# correctly local-scale and leaves these defaults alone.
+	return {"local": local, "interstellar": false, "distance_au": distance_km / AU_KM, "distance_ly": 0.0, "distance_km": distance_km, "duration_sec": duration}
 
 
 # The single source of truth for the whole burn/cruise/decel shape of a
@@ -244,13 +340,13 @@ static func _finish_estimate(local: bool, distance_km: float, accel_km_s2: float
 static func flight_profile(distance_km: float, accel_km_s2: float, cruise_cap_km_s: float = 0.0) -> Dictionary:
 	var natural_peak := sqrt(maxf(accel_km_s2 * distance_km, 0.0))
 	if cruise_cap_km_s <= 0.0 or natural_peak <= cruise_cap_km_s or accel_km_s2 <= 0.0:
-		var t1 := (natural_peak / accel_km_s2) if accel_km_s2 > 0.0 else 0.0
+		var uncapped_t1 := (natural_peak / accel_km_s2) if accel_km_s2 > 0.0 else 0.0
 		return {
 			"cruise_speed": natural_peak,
-			"t1": t1,
+			"t1": uncapped_t1,
 			"accel_dist": distance_km * 0.5,
 			"cruise_dist": 0.0,
-			"burn_duration": t1 + t1,
+			"burn_duration": uncapped_t1 + uncapped_t1,
 		}
 
 	var t1 := cruise_cap_km_s / accel_km_s2
@@ -333,7 +429,7 @@ static func _anchor_au(entry: KnownBodies.Entry) -> float:
 # Live speed for a trip in progress — reads flight_profile() directly (see
 # class comment) rather than its own formula, so this can never show a
 # number that disagrees with what Cockpit's camera is actually doing.
-static func current_speed_km_s(distance_km: float, duration_sec: float, elapsed_sec: float, accel_km_s2: float, cruise_cap_km_s: float = 0.0) -> float:
+static func current_speed_km_s(distance_km: float, _duration_sec: float, elapsed_sec: float, accel_km_s2: float, cruise_cap_km_s: float = 0.0) -> float:
 	var motion_elapsed := maxf(elapsed_sec - DEPARTURE_HOLD_SECONDS, 0.0)
 	if distance_km <= 0.001:
 		return 0.0
@@ -400,6 +496,8 @@ static func ship_status(distance_km: float, elapsed_sec: float, accel_km_s2: flo
 
 
 static func format_distance(estimate_result: Dictionary) -> String:
+	if estimate_result.get("interstellar", false):
+		return "DISTANCE: %.2f ly" % (estimate_result["distance_ly"] as float)
 	if estimate_result["local"]:
 		return "DISTANCE: Local orbital transfer"
 	return "DISTANCE: %.2f AU" % (estimate_result["distance_au"] as float)
@@ -413,10 +511,14 @@ static func format_distance(estimate_result: Dictionary) -> String:
 static func format_duration(seconds: float) -> String:
 	var s := maxi(0, int(ceil(seconds)))
 	if s < 3600:
+		@warning_ignore("integer_division")  # floor division into whole minutes/seconds is the intent
 		return "%d:%02d" % [s / 60, s % 60]
 	if s < 86400:
+		@warning_ignore("integer_division")  # floor division into whole hours/minutes is the intent
 		return "%dh %02dm" % [s / 3600, (s % 3600) / 60]
 	const SECONDS_PER_YEAR := 31557600  # 365.25 days — close enough for a display readout, not an orbital calculation
 	if s < SECONDS_PER_YEAR:
+		@warning_ignore("integer_division")  # floor division into whole days/hours is the intent
 		return "%dd %02dh" % [s / 86400, (s % 86400) / 3600]
+	@warning_ignore("integer_division")  # floor division into whole years/days is the intent
 	return "%dy %dd" % [s / SECONDS_PER_YEAR, (s % SECONDS_PER_YEAR) / 86400]

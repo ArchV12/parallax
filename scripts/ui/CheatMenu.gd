@@ -5,9 +5,14 @@ extends Control
 # replacing the old single on/off "cheat engine" boost. Lets a tester pin
 # PlayerState.engine_tier_override to any of TravelCalc.ENGINE_TIERS (or
 # back off, "Normal") to preview the real-time-scale model — see the
-# travel-time-scale brainstorm in parallax-core-design-decisions memory —
-# without needing to actually reach that tier through progression, which
-# doesn't exist yet.
+# travel-time-scale brainstorm in parallax-core-design-decisions memory.
+#
+# 2026-07-18: Sub-Light Engines progression is now real (PlayerState.
+# _effective_engine_tier falls back to Research.owned_tier("sub_light_
+# engines") when nothing's pinned here), so this picker's main remaining
+# job is previewing tiers the player hasn't crafted yet — combine with the
+# EQUIPMENT CHEAT section's Free Upgrades toggle below to reach them
+# properly instead.
 #
 # Same overlay shape as PauseMenu (backdrop + centered UIPanel), but no
 # open/close animation — this is a snap-open dev tool, not a gameplay beat
@@ -19,6 +24,7 @@ var _panel: UIPanel
 var _status_label: Label
 var _science_status_label: Label
 var _economy_status_label: Label
+var _equipment_cheat_check: CheckBox
 
 
 func _ready() -> void:
@@ -68,6 +74,9 @@ func _ready() -> void:
 	_build_science_cheat(vbox)
 
 	vbox.add_child(HSeparator.new())
+	_build_equipment_cheat(vbox)
+
+	vbox.add_child(HSeparator.new())
 	_build_economy_cheat(vbox)
 
 	vbox.add_child(HSeparator.new())
@@ -79,6 +88,7 @@ func toggle() -> void:
 	if visible:
 		_refresh_status()
 		_refresh_science_status()
+		_equipment_cheat_check.button_pressed = Research.free_upgrades
 		_refresh_economy_status()
 
 
@@ -197,6 +207,29 @@ func _refresh_science_status() -> void:
 	_science_status_label.text = "Resource Knowledge: %d — %s" % [
 		Research.knowledge("resource"), instrument.display_name if instrument != null else "—"
 	]
+
+
+# Toggles Research.free_upgrades (see that var's comment) — lets a tester
+# walk the entire Ship Equipment tier ladder (ResearchPanel's 6x5 grid) by
+# just clicking each card, with no real Knowledge grind or materials
+# stockpile needed first. Session-level, not reset by New Game — see
+# free_upgrades' own comment for why.
+func _build_equipment_cheat(parent: VBoxContainer) -> void:
+	var title := Label.new()
+	title.text = "EQUIPMENT CHEAT"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_color_override("font_color", UITheme.accent)
+	parent.add_child(title)
+
+	_equipment_cheat_check = CheckBox.new()
+	_equipment_cheat_check.text = "Free Upgrades (skip Knowledge/Materials cost)"
+	_equipment_cheat_check.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_equipment_cheat_check.add_theme_font_size_override("font_size", 13)
+	_equipment_cheat_check.button_pressed = Research.free_upgrades
+	_equipment_cheat_check.toggled.connect(func(pressed: bool) -> void:
+		Research.free_upgrades = pressed)
+	parent.add_child(_equipment_cheat_check)
 
 
 # Fast-forwards Credits for testing anything gated behind Economy.balance

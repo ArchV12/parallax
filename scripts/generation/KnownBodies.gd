@@ -23,8 +23,16 @@ class Entry:
 	var fallback_color: Color = Color.WHITE
 	var atmo_color: Color = Color.WHITE
 	var radius_ratio: float = 1.0    # Earth = 1.0
-	var au_distance: float = 0.0     # semi-major axis from Sol; unused for moons (0 for Sol itself)
-	var parent: String = ""          # "" = orbits Sol directly; else the parent body's name
+	var au_distance: float = 0.0     # semi-major axis from this body's own star (see star_system) — 0 for a star itself; unused for moons
+	var parent: String = ""          # "" = orbits its system's star directly; else the parent body's name — unchanged meaning, still just "does this orbit a star or a planet"
+	# 2026-07-18 — which star system this body belongs to (Proxima Centauri
+	# system, first non-Sol content — see the "order of things" design
+	# chat). Defaults "Sol" so every pre-existing entry needs zero changes;
+	# only a genuinely new system's own star + planets set this explicitly.
+	# `parent`'s own meaning is untouched by this — it still only answers
+	# "orbits a star directly, or a planet" — this is the orthogonal
+	# "which star" answer planets_of(star_name) filters on.
+	var star_system: String = "Sol"
 	var parent_distance_km: float = 0.0  # real semi-major axis around `parent`; only set for moons (0/unused otherwise) — see TravelCalc, Cockpit's moon anchoring
 	var atmosphere: float = 0.0
 	var atmo_falloff: float = 1.5
@@ -121,6 +129,16 @@ class Entry:
 	# orbital period, atmosphere, ...) are real either way — this flag is
 	# purely about which renderer draws the body, not what's true about it.
 	var use_canonical_art: bool = true
+	# Navigation Scanner gating (2026-07-18) — the ship-wide equipment tier
+	# (Research.owned_tier("navigation_scanner")) needed to even know this
+	# body exists, i.e. for it to render/list at all in a non-Sol SystemView.
+	# Default 0 means "detected from the start" — every Sol body stays this
+	# way regardless (Sol's full navigational knowledge is a permanent
+	# narrative fact, not a placeholder — see the ship-equipment design
+	# memory's "Sol system exception"), so this field is simply never read
+	# for _star_system_name == "Sol". Only a non-Sol system's own bodies use
+	# it meaningfully; SystemView.gd is what actually filters on it.
+	var min_nav_tier: int = 0
 
 	# Builds a ready-to-generate CanonicalBodyParams at the given display
 	# radius — every caller lives at a different scale (Cosmic Forge's dev
@@ -157,6 +175,28 @@ static func get_entry(body_name: String) -> Entry:
 	_ensure_built()
 	if _catalog.has(body_name):
 		return _catalog[body_name]
+	return _synthesize_entry(body_name)
+
+
+# 2026-07-18 — the extension point for whatever future procedural-body kind
+# needs the same "not in the curated catalog, but still a real resolvable
+# body" contract asteroids already have (see the parallax-universe-
+# generation-architecture memory's "existence + count" tier — a future
+# procedural star system's planets/moons would be the next real case).
+# Asteroids are the only kind today; a second kind is a new branch here,
+# not a change to get_entry itself.
+#
+# Whatever a new branch adds MUST set body_type — nearly every consumer
+# (NativeRate's geology/atmospheric/life_sciences formulas, BodyInfoPanel's
+# data-panel layout, Deposits' size scaling, CanonicalBodyGenerator's
+# render path) branches on it to decide which OTHER fields it's even safe
+# to read, the same way _synthesize_asteroid_entry below only bothers
+# setting the fields an Asteroid-branch consumer actually looks at and
+# leaves everything else at Entry's own class defaults. _make_moon and the
+# planet-building block in _ensure_built are the two existing reference
+# shapes for "what a fully-fleshed-out Entry looks like" if a new
+# synthesizer needs to set more than asteroids currently do.
+static func _synthesize_entry(body_name: String) -> Entry:
 	return _synthesize_asteroid_entry(body_name)
 
 
@@ -202,16 +242,29 @@ static func _synthesize_asteroid_entry(body_name: String) -> Entry:
 	return e
 
 
-# All Sol-orbiting bodies (planets + Pluto), in real distance order —
-# excludes moons. What System view's orbital map iterates over.
-static func planets() -> Array[Entry]:
+# All planets (+ dwarf planets) of the given star, in real distance order —
+# excludes moons and the star itself. What System view's orbital map
+# iterates over, now parameterized per star (2026-07-18, Proxima Centauri
+# system — see the "order of things" design chat) rather than hardcoded to
+# Sol. `entry.parent == ""` still just means "orbits a star directly, not a
+# planet" (unchanged meaning) — star_system is the new filter that actually
+# picks WHICH star's planets come back.
+static func planets_of(star_name: String) -> Array[Entry]:
 	_ensure_built()
 	var result: Array[Entry] = []
 	for entry: Entry in _catalog.values():
-		if entry.parent == "" and entry.body_name != "Sol":
+		if entry.parent == "" and entry.body_name != star_name and entry.star_system == star_name:
 			result.append(entry)
 	result.sort_custom(func(a: Entry, b: Entry) -> bool: return a.au_distance < b.au_distance)
 	return result
+
+
+# Sol-only convenience wrapper — every pre-existing caller (Cockpit,
+# LocationsPanel, BodyInfoPanel's planet count) wants Sol specifically and
+# should stay exactly as-is; only SystemView.gd's now-parameterized build
+# needed the general planets_of() above.
+static func planets() -> Array[Entry]:
+	return planets_of("Sol")
 
 
 static func sol() -> Entry:
@@ -259,25 +312,25 @@ static func _ensure_built() -> void:
 	if not _catalog.is_empty():
 		return
 
-	var sol := Entry.new()
-	sol.body_name = "Sol"
-	sol.texture_subdir = "sol"
-	sol.fallback_color = Color(1.0, 0.85, 0.55)
-	sol.atmo_color = Color(1.0, 0.75, 0.35)
-	sol.radius_ratio = 109.2
-	sol.au_distance = 0.0
-	sol.atmosphere = 0.5
-	sol.atmo_falloff = 1.5
-	sol.self_luminous = true
-	sol.emission_energy = 1.5
-	sol.body_type = "Star"
-	sol.real_radius_km = 695700.0
-	sol.has_solid_surface = false
-	sol.spectral_type = "G2V"
-	sol.surface_temp_k = 5778.0
-	sol.star_turbulence = 0.4      # matches StarParams.gd default
-	sol.star_spot_activity = 0.15  # matches StarParams.gd default
-	_catalog[sol.body_name] = sol
+	var sol_entry := Entry.new()
+	sol_entry.body_name = "Sol"
+	sol_entry.texture_subdir = "sol"
+	sol_entry.fallback_color = Color(1.0, 0.85, 0.55)
+	sol_entry.atmo_color = Color(1.0, 0.75, 0.35)
+	sol_entry.radius_ratio = 109.2
+	sol_entry.au_distance = 0.0
+	sol_entry.atmosphere = 0.5
+	sol_entry.atmo_falloff = 1.5
+	sol_entry.self_luminous = true
+	sol_entry.emission_energy = 1.5
+	sol_entry.body_type = "Star"
+	sol_entry.real_radius_km = 695700.0
+	sol_entry.has_solid_surface = false
+	sol_entry.spectral_type = "G2V"
+	sol_entry.surface_temp_k = 5778.0
+	sol_entry.star_turbulence = 0.4      # matches StarParams.gd default
+	sol_entry.star_spot_activity = 0.15  # matches StarParams.gd default
+	_catalog[sol_entry.body_name] = sol_entry
 
 	var mercury := Entry.new()
 	mercury.body_name = "Mercury"
@@ -548,3 +601,98 @@ static func _ensure_built() -> void:
 	_catalog["Nix"] = _make_moon("Nix", "Pluto", 17.5, 24.9, 48694.0)
 	_catalog["Kerberos"] = _make_moon("Kerberos", "Pluto", 6.0, 32.1, 57783.0)
 	_catalog["Hydra"] = _make_moon("Hydra", "Pluto", 18.0, 38.5, 64738.0)
+
+	# --- Proxima Centauri system (2026-07-18) --- First non-Sol content —
+	# see the "order of things" design chat leading up to this. Same "curate
+	# what's real, invent the rest" precedent Sol's own catalog follows:
+	# Proxima Centauri b is a REAL confirmed exoplanet (minimum mass, orbital
+	# period/distance are real measurements); its radius/atmosphere/surface
+	# details are informed speculation, since no direct measurement of
+	# either exists — same honesty gap real astronomy itself has. Proxima
+	# Centauri c is a real CANDIDATE (less certain than b), included for a
+	# second body rather than a lone-planet system; its mass is a real
+	# estimate, composition/classification is speculative. No moons — real
+	# astronomy has none confirmed for either, and inventing them wholesale
+	# would break the "curate what's real" rule this whole catalog follows.
+	# texture_subdir intentionally has no real asset behind it for any of
+	# these three (nobody's ever photographed an exoplanet's surface, and
+	# never will) — use_canonical_art = false on all three routes SystemView
+	# through the fully-procedural generators (StarGenerator/PlanetGenerator/
+	# GasGiantGenerator) instead of CanonicalBodyGenerator's real-texture
+	# path, same "no real art, render procedurally, seeded off the name so
+	# it looks the same every visit" precedent PlanetarySystemView's own
+	# moons already established. fallback_color/atmo_color below still feed
+	# to_params() for anything that DOES fall through to CanonicalBody
+	# Generator (nothing does today, kept as an honest fallback regardless).
+	var proxima := Entry.new()
+	proxima.body_name = "Proxima Centauri"
+	proxima.texture_subdir = "proxima_centauri"
+	proxima.fallback_color = Color(0.9, 0.4, 0.3)  # matches NearbyStars.gd's own color for this star
+	proxima.atmo_color = Color(0.95, 0.5, 0.35)
+	proxima.radius_ratio = 16.8  # ~0.154 solar radii, Earth-relative like every other entry
+	proxima.au_distance = 0.0    # the star of its own system, orbits nothing — same as Sol
+	proxima.atmosphere = 0.5
+	proxima.atmo_falloff = 1.5
+	proxima.self_luminous = true
+	proxima.emission_energy = 0.6  # real M dwarf — much dimmer than Sol's 1.5
+	proxima.body_type = "Star"
+	proxima.real_radius_km = 107000.0
+	proxima.has_solid_surface = false
+	proxima.spectral_type = "M5.5Ve"
+	proxima.surface_temp_k = 3042.0
+	# Real astronomy: M dwarfs like Proxima are known for dramatically
+	# higher magnetic activity/flare frequency than Sol (Proxima is
+	# specifically famous for large flares) — well above Sol's 0.4/0.15.
+	proxima.star_turbulence = 0.75
+	proxima.star_spot_activity = 0.6
+	proxima.star_system = "Proxima Centauri"
+	proxima.use_canonical_art = false
+	_catalog[proxima.body_name] = proxima
+
+	var proxima_b := Entry.new()
+	proxima_b.body_name = "Proxima Centauri b"
+	proxima_b.texture_subdir = "proxima_centauri_b"
+	proxima_b.fallback_color = Color(0.55, 0.42, 0.35)  # speculative rocky/tidally-locked tone
+	proxima_b.atmo_color = Color(0.6, 0.5, 0.45)
+	proxima_b.radius_ratio = 1.1  # real min mass ~1.07 Earth masses, Earth-like density assumed
+	proxima_b.au_distance = 0.0485  # real — a red dwarf's habitable zone sits very close in
+	proxima_b.atmosphere = 0.15  # speculative/thin — real atmosphere presence is still an open question (stellar-wind stripping risk)
+	proxima_b.atmo_falloff = 1.5
+	proxima_b.body_type = "Terrestrial Planet"
+	proxima_b.real_radius_km = 7000.0
+	proxima_b.orbital_period_days = 11.2  # real
+	proxima_b.has_atmosphere = true
+	proxima_b.has_solid_surface = true
+	proxima_b.surface_pressure_atm = 0.3  # speculative
+	proxima_b.moon_count = 0
+	proxima_b.terrain_ruggedness = 0.65  # speculative — likely tidally locked, real geological stress
+	proxima_b.star_system = "Proxima Centauri"
+	proxima_b.use_canonical_art = false
+	proxima_b.min_nav_tier = 0  # real, confirmed exoplanet — detectable with the starting scanner
+	_catalog[proxima_b.body_name] = proxima_b
+
+	var proxima_c := Entry.new()
+	proxima_c.body_name = "Proxima Centauri c"
+	proxima_c.texture_subdir = "proxima_centauri_c"
+	proxima_c.fallback_color = Color(0.5, 0.55, 0.65)  # cold, distant, possibly ice/gas-rich
+	proxima_c.atmo_color = Color(0.55, 0.6, 0.7)
+	proxima_c.radius_ratio = 1.8  # real mass estimate ~7 Earth masses; treated as a sub-Neptune/super-Earth
+	proxima_c.au_distance = 1.5  # real estimate
+	proxima_c.atmosphere = 0.3
+	proxima_c.atmo_falloff = 1.3
+	proxima_c.body_type = "Ice Giant"  # cold and distant enough to treat like Uranus/Neptune rather than a rocky world
+	proxima_c.real_radius_km = 11500.0
+	proxima_c.orbital_period_days = 1900.0  # real ~5.2 years
+	proxima_c.has_atmosphere = true
+	proxima_c.has_solid_surface = false
+	proxima_c.moon_count = 0
+	proxima_c.gas_turbulence = 0.3
+	proxima_c.gas_storminess = 0.25
+	proxima_c.gas_band_contrast = 0.1
+	proxima_c.star_system = "Proxima Centauri"
+	proxima_c.use_canonical_art = false
+	# Real astronomy: c is a genuine but LESS CERTAIN candidate than b (still
+	# unconfirmed by direct detection) — gating it behind Tier 1 mirrors that
+	# real-world uncertainty as a gameplay fact, not an arbitrary choice.
+	proxima_c.min_nav_tier = 1
+	_catalog[proxima_c.body_name] = proxima_c

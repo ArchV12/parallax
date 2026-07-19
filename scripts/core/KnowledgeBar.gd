@@ -27,8 +27,17 @@ const CATEGORY_LABELS := {
 	"engineering": "ENGINEERING",
 }
 
+# Same count-up idiom as HUD's _credits_label (see _on_balance_changed there):
+# ticks arrive in rapid, uneven succession (every whole Knowledge point,
+# across however many structures happen to be running), so each tick restarts
+# the tween from whatever the label currently shows rather than from the true
+# total, and a fresh tick mid-count just redirects it instead of stacking.
+const COUNT_SECONDS := 0.6
+
 var _name_labels: Dictionary = {}   # category_id -> Label
 var _value_labels: Dictionary = {}  # category_id -> Label
+var _display_values: Dictionary = {}  # category_id -> int, value currently shown mid-count
+var _tweens: Dictionary = {}  # category_id -> Tween
 
 
 func _ready() -> void:
@@ -58,15 +67,28 @@ func _ready() -> void:
 		value_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		tile.add_child(value_label)
 		_value_labels[category_id] = value_label
+		_display_values[category_id] = Research.knowledge(category_id)
 
 	Research.knowledge_changed.connect(_on_knowledge_changed)
 	UITheme.theme_changed.connect(_on_theme_changed)
 
 
 func _on_knowledge_changed(category_id: String, new_total: int) -> void:
+	var existing_tween: Tween = _tweens.get(category_id)
+	if existing_tween != null and existing_tween.is_valid():
+		existing_tween.kill()
+	var start_value: int = _display_values.get(category_id, new_total)
+	var tween := create_tween()
+	tween.tween_method(_set_display_value.bind(category_id), start_value, new_total, COUNT_SECONDS) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_tweens[category_id] = tween
+
+
+func _set_display_value(value: int, category_id: String) -> void:
+	_display_values[category_id] = value
 	var label: Label = _value_labels.get(category_id)
 	if label != null:
-		label.text = str(new_total)
+		label.text = str(value)
 
 
 func _on_theme_changed() -> void:

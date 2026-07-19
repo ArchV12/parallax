@@ -1,4 +1,4 @@
-[gd_resource type="Resource" script_class="ResourceSurveyData" load_steps=8 format=3]
+[gd_resource type="Resource" script_class="ResourceSurveyData" load_steps=15 format=3]
 
 [ext_resource type="Script" path="res://scripts/science/ResourceSurveyData.gd" id="1"]
 [ext_resource type="Script" path="res://scripts/science/ResourceMaterialFinding.gd" id="2"]
@@ -9,6 +9,7 @@ material_name = "Iron"
 abundance = "Abundant"
 note_label = "Extraction"
 note_value = "Favorable"
+min_scanner_tier = 0
 
 [sub_resource type="Resource" id="2"]
 script = ExtResource("2")
@@ -16,6 +17,7 @@ material_name = "Aluminum"
 abundance = "Moderate"
 note_label = "Extraction"
 note_value = "Favorable"
+min_scanner_tier = 0
 
 [sub_resource type="Resource" id="3"]
 script = ExtResource("2")
@@ -23,6 +25,7 @@ material_name = "Silicon"
 abundance = "Common"
 note_label = "Extraction"
 note_value = "Favorable"
+min_scanner_tier = 0
 
 [sub_resource type="Resource" id="4"]
 script = ExtResource("2")
@@ -30,6 +33,7 @@ material_name = "Titanium"
 abundance = "Trace"
 note_label = "Extraction"
 note_value = "Difficult"
+min_scanner_tier = 0
 
 [sub_resource type="Resource" id="5"]
 script = ExtResource("2")
@@ -37,8 +41,65 @@ material_name = "Water Ice"
 abundance = "Confirmed"
 note_label = "Location"
 note_value = "Polar Regions"
+min_scanner_tier = 0
+
+[sub_resource type="Resource" id="6"]
+script = ExtResource("2")
+material_name = "Nickel"
+abundance = "Common"
+note_label = "Extraction"
+note_value = "Favorable"
+min_scanner_tier = 0
+
+[sub_resource type="Resource" id="7"]
+script = ExtResource("2")
+material_name = "Copper"
+abundance = "Moderate"
+note_label = "Extraction"
+note_value = "Favorable"
+min_scanner_tier = 0
+
+[sub_resource type="Resource" id="8"]
+script = ExtResource("2")
+material_name = "Sulfur"
+abundance = "Moderate"
+note_label = "Extraction"
+note_value = "Favorable"
+min_scanner_tier = 0
+
+[sub_resource type="Resource" id="9"]
+script = ExtResource("2")
+material_name = "Dry Ice (CO2 Frost)"
+abundance = "Confirmed"
+note_label = "Location"
+note_value = "Polar Ice Caps"
+min_scanner_tier = 1
+
+[sub_resource type="Resource" id="10"]
+script = ExtResource("2")
+material_name = "Iridium"
+abundance = "Trace"
+note_label = "Extraction"
+note_value = "Difficult"
+min_scanner_tier = 2
+
+[sub_resource type="Resource" id="11"]
+script = ExtResource("2")
+material_name = "Rare Earth Concentrate"
+abundance = "Trace"
+note_label = "Extraction"
+note_value = "Difficult"
+min_scanner_tier = 3
+
+[sub_resource type="Resource" id="12"]
+script = ExtResource("2")
+material_name = "Cryptobiotic Residue"
+abundance = "Trace"
+note_label = "Location"
+note_value = "Subsurface Permafrost Core"
+min_scanner_tier = 3
 
 [resource]
 script = ExtResource("1")
 body_id = "Mars"
-materials = Array[ResourceMaterialFinding]([SubResource("1"), SubResource("2"), SubResource("3"), SubResource("4"), SubResource("5")])
+materials = Array[ResourceMaterialFinding]([SubResource("1"), SubResource("2"), SubResource("3"), SubResource("4"), SubResource("5"), SubResource("6"), SubResource("7"), SubResource("8"), SubResource("9"), SubResource("10"), SubResource("11"), SubResource("12")])

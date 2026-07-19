@@ -242,9 +242,10 @@ var _secondary_is_universe_body: Array[bool] = []  # parallel to _secondaries
 var _secondaries_built_for := ""                 # KnownBodies id the current _secondaries set was built for — _build_transit pre-spawns them at trip start, and this is how _build_arrival knows not to spawn a duplicate set on top (see _build_secondaries)
 var _primary_is_universe_body := false    # avoids double-spinning a body that's both _primary/_secondary AND in _universe_bodies (which all spin every frame regardless — see _process)
 
-var _universe_bodies: Dictionary = {}     # body_name -> Node3D — Sol + all 9 planets, persistent for the whole scene's life
+var _universe_bodies: Dictionary = {}     # body_name -> Node3D — the CURRENT star system's star + planets, persistent until an interstellar arrival rebuilds it (see _rebuild_universe_for)
 var _universe_positions: Dictionary = {}  # body_name -> Vector3 — ditto, positions only (also used before a body's node exists, e.g. while computing a moon's anchor)
-var _sol_position := Vector3.ZERO         # cached from _build_universe — needed every time _point_sun_at re-aims the light
+var _sol_position := Vector3.ZERO         # the CURRENT system's own star position (name kept from when Sol was the only star ever built — see _build_universe) — needed every time _point_sun_at re-aims the light
+var _current_star_system := "Sol"         # which system _universe_bodies/_universe_positions are currently built for — see _rebuild_universe_for
 
 var _transit_body: Node3D              # only ever set when the DESTINATION is a moon (ad hoc, not persistent) — null for a planet/Sol destination, which is already alive in _universe_bodies
 var _transit_start_pos := Vector3.ZERO # an entry point near wherever we're departing FROM
@@ -287,7 +288,13 @@ var _sun_lean_to_pos := Vector3.ZERO    # position the sun should be aimed at on
 func _ready() -> void:
 	AmbientManager.play_ship_ambient()
 	_build_environment()
-	_build_universe()
+	# The system PlayerState is (or, mid-interstellar-trip, still WAS —
+	# location_id only updates on arrival) currently in — see _build_universe.
+	# A mid-trip interstellar re-entry builds this fresh then immediately
+	# tears it back down again in _build_transit's warp branch; simpler than
+	# threading a "skip it" special case through here for a scene this small.
+	var start_entry := KnownBodies.get_entry(PlayerState.location_id)
+	_build_universe(start_entry.star_system if start_entry != null else "Sol")
 	_build_survey_ui()
 	if PlayerState.is_traveling:
 		_build_transit()
@@ -643,52 +650,105 @@ func _build_survey_ui() -> void:
 	layer.add_child(_structures_readout)
 
 
-# --- Universe (Sol + all planets, persistent for the scene's whole life) ---
+# --- Universe (the CURRENT star system's own star + planets, persistent
+# until an interstellar arrival tears it down and rebuilds for the new
+# system — see _rebuild_universe_for/_build_arrival) ---
 
-func _build_universe() -> void:
-	var sol_entry := KnownBodies.sol()
-	var sol_pos := _camera_base_forward * SOL_DISTANCE
-	_sol_position = sol_pos
-	_universe_positions[sol_entry.body_name] = sol_pos
-	var sol_display_radius := _primary_radius_for(sol_entry)
-	var sol_params := sol_entry.to_params(sol_display_radius)
-	# KnownBodies' emission_energy (1.5) is tuned for Cosmic Forge's plain
-	# viewer — barely above env.glow_hdr_threshold there, so bloom would be
-	# nearly invisible. Cockpit wants Sol to actually blow out, so it gets
-	# its own much higher figure here, same spirit as Earth's atmosphere
-	# override just below.
-	sol_params.emission_energy = 8.0
-	var sol_body := CanonicalBodyGenerator.generate(sol_params)
-	sol_body.position = sol_pos
-	sol_body.rotation.y = randf_range(0.0, TAU)
-	add_child(sol_body)
-	_universe_bodies[sol_entry.body_name] = sol_body
+# Parameterized 2026-07-18 (was Sol-only) — same "same rig, different
+# KnownBodies.get_entry/planets_of lookup" generalization SystemView.gd's
+# own _build_system already went through for the Stellar View/Proxima arc.
+# Positions still hang off _camera_base_forward * SOL_DISTANCE — the name
+# is a holdover from when Sol was the only star this ever built for; the
+# math itself just means "the current system's star sits at a fixed anchor
+# point," which is equally true for any single star system considered on
+# its own local-space terms.
+func _build_universe(star_system_name: String) -> void:
+	var star_entry := KnownBodies.get_entry(star_system_name)
+	if star_entry == null:
+		star_entry = KnownBodies.sol()
+		star_system_name = "Sol"
+	_current_star_system = star_system_name
 
-	for entry: KnownBodies.Entry in KnownBodies.planets():
+	var star_pos := _camera_base_forward * SOL_DISTANCE
+	_sol_position = star_pos
+	_universe_positions[star_entry.body_name] = star_pos
+	var star_display_radius := _primary_radius_for(star_entry)
+	var star_body: Node3D
+	if star_entry.body_name == "Sol":
+		var sol_params := star_entry.to_params(star_display_radius)
+		# KnownBodies' emission_energy (1.5) is tuned for Cosmic Forge's
+		# plain viewer — barely above env.glow_hdr_threshold there, so
+		# bloom would be nearly invisible. Cockpit wants Sol to actually
+		# blow out, so it gets its own much higher figure here, same spirit
+		# as Earth's atmosphere override just below. Every OTHER star (no
+		# real texture, fully procedural — see _generate_body) just uses
+		# its own real curated emission_energy instead; only Sol gets this
+		# Cockpit-specific dramatic-bloom override.
+		sol_params.emission_energy = 8.0
+		star_body = CanonicalBodyGenerator.generate(sol_params)
+	else:
+		star_body = _generate_body(star_entry, star_display_radius)
+	star_body.position = star_pos
+	star_body.rotation.y = randf_range(0.0, TAU)
+	add_child(star_body)
+	_universe_bodies[star_entry.body_name] = star_body
+
+	for entry: KnownBodies.Entry in KnownBodies.planets_of(star_system_name):
+		# Navigation Scanner fog-of-war (2026-07-18) — same gate SystemView.
+		# gd's own _build_system uses; Sol stays permanently fully known by
+		# design (see the ship-equipment design memory's "Sol system
+		# exception"), so this only ever filters a non-Sol system.
+		if star_system_name != "Sol" and entry.min_nav_tier > Research.owned_tier("navigation_scanner"):
+			continue
 		var dir := _seeded_direction(entry.body_name, PLANET_CONE_DEG)
 		var dist := entry.au_distance * PLANET_DIST_AU_TO_UNITS
-		var pos := sol_pos + dir * dist
+		var pos := star_pos + dir * dist
 		_universe_positions[entry.body_name] = pos
 
 		var radius := _primary_radius_for(entry)
-		var params := entry.to_params(radius)
+		var body: Node3D
 		if entry.body_name == "Earth":
+			var params := entry.to_params(radius)
 			params.atmosphere = 0.20
 			params.atmo_falloff = 3.0
-		var body := CanonicalBodyGenerator.generate(params)
+			body = CanonicalBodyGenerator.generate(params)
+		else:
+			body = _generate_body(entry, radius)
 		body.position = pos
 		body.rotation.y = randf_range(0.0, TAU)
 		add_child(body)
 		_universe_bodies[entry.body_name] = body
 
-	# Initial guess only — Earth is the default starting body (see class
-	# comment), but whichever body is actually arrived at overrides this
-	# properly in _build_arrival, once _primary is known. Aiming at Earth's
-	# real position here (rather than the world origin, which is nowhere
-	# near any body once PLANET_DIST_* pushed everything thousands of units
-	# out) keeps the visible Sol disc and the lit hemisphere in agreement
-	# even during the one frame before _build_arrival runs.
-	_point_sun_at(_universe_positions.get("Earth", Vector3.ZERO))
+	# Initial guess only — Earth is the default starting body for a fresh
+	# Sol load (see class comment), but whichever body is actually arrived
+	# at overrides this properly in _build_arrival, once _primary is known.
+	# Aiming at Earth's real position here (rather than the world origin,
+	# which is nowhere near any body once PLANET_DIST_* pushed everything
+	# thousands of units out) keeps the visible Sol disc and the lit
+	# hemisphere in agreement even during the one frame before _build_
+	# arrival runs. A non-Sol system has no equivalent "default start body"
+	# guess to make — aiming at the star's own position is the closest
+	# sensible placeholder, immediately corrected the same way once _build_
+	# arrival knows the real arrival body.
+	if star_system_name == "Sol":
+		_point_sun_at(_universe_positions.get("Earth", star_pos))
+	else:
+		_point_sun_at(star_pos)
+
+
+# Frees the previous star system's persistent bodies and builds a fresh
+# universe for the new one — called only from _build_arrival, the moment an
+# interstellar trip's destination star differs from whatever's currently
+# built (see that function). Sol's own planets are just as disposable as
+# Proxima's here — there's only ever one system's worth of persistent bodies
+# alive at a time, never both at once, so leaving Sol for Proxima frees Sol's
+# 9 planets exactly the same way arriving back home later frees Proxima's.
+func _rebuild_universe_for(star_system_name: String) -> void:
+	for body: Node3D in _universe_bodies.values():
+		body.queue_free()
+	_universe_bodies.clear()
+	_universe_positions.clear()
+	_build_universe(star_system_name)
 
 
 # Aims the sun FROM its real position along the given direction, then
@@ -844,32 +904,79 @@ func _spawn_moon_body(entry: KnownBodies.Entry) -> Node3D:
 	return body
 
 
-# Luna (and every planet/Sol) has real photographic art and renders through
-# CanonicalBodyGenerator; every other real moon here (Phobos through Hydra —
-# see Entry.use_canonical_art in KnownBodies) has no texture at all and must
-# go through MoonGenerator instead, same as PlanetarySystemView._build_moon_body
-# — using CanonicalBodyGenerator for those looks like a flat, untextured ball
-# (it was silently falling back to fallback_color/Color.WHITE, since
-# texture_subdir is only ever set for canonical-art entries).
+# Luna (and every Sol planet/Sol itself) has real photographic art and
+# renders through CanonicalBodyGenerator; everything else with no real
+# texture (every other real moon, and now — 2026-07-18 — any non-canonical
+# Star/Gas Giant/Ice Giant/Terrestrial Planet, e.g. Proxima Centauri's own
+# star and planets) goes through the matching fully-procedural generator by
+# body_type instead, mirroring SystemView._build_body's exact dispatch (same
+# param-setting per generator) rather than the old moon-only assumption this
+# function used to make. Using CanonicalBodyGenerator for any of these looks
+# like a flat, untextured ball (silently falling back to fallback_color/
+# Color.WHITE, since texture_subdir is only ever set for canonical-art
+# entries) — the same "blank color" bug SystemView hit and fixed first.
 func _generate_body(entry: KnownBodies.Entry, radius: float) -> Node3D:
 	if entry.body_type == "Asteroid":
 		return _generate_asteroid_body(entry, radius)
 	if entry.use_canonical_art:
 		return CanonicalBodyGenerator.generate(entry.to_params(radius))
-	var rng := RandomNumberGenerator.new()
-	rng.seed = entry.body_name.hash()
-	var params := MoonParams.new()
-	params.seed_value = entry.body_name.hash()
-	params.radius = radius
-	params.surface_roughness = rng.randf_range(0.01, 0.04)
-	params.crater_density = rng.randf_range(0.25, 0.85)
-	# crater_size is the MAX radius now (power-law distributed below it, see
-	# CraterField.make) — range widened from the old average-semantics
-	# (0.10, 0.28) so typical craters stay a similar visible size.
-	params.crater_size = rng.randf_range(0.2, 0.5)
-	params.crater_depth = rng.randf_range(0.03, 0.08)
-	params.detail = 4
-	var body := MoonGenerator.generate(params)
+
+	var body: Node3D
+	match entry.body_type:
+		"Star":
+			var params := StarParams.new()
+			params.seed_value = entry.body_name.hash()
+			params.radius = radius
+			params.temperature = entry.surface_temp_k
+			params.turbulence = entry.star_turbulence
+			params.spot_activity = entry.star_spot_activity
+			params.corona = entry.atmosphere
+			params.corona_falloff = entry.atmo_falloff
+			body = StarGenerator.generate(params)
+		"Gas Giant", "Ice Giant":
+			var giant_rng := RandomNumberGenerator.new()
+			giant_rng.seed = entry.body_name.hash()
+			var params := GasGiantParams.new()
+			params.seed_value = entry.body_name.hash()
+			params.radius = radius
+			params.band_scale = giant_rng.randf_range(1.0, 1.4)
+			params.turbulence = entry.gas_turbulence
+			params.storminess = entry.gas_storminess
+			params.band_contrast = entry.gas_band_contrast
+			params.atmosphere = entry.atmosphere
+			params.atmo_falloff = entry.atmo_falloff
+			params.ice = entry.body_type == "Ice Giant"
+			body = GasGiantGenerator.generate(params)
+		"Terrestrial Planet", "Dwarf Planet":
+			var planet_rng := RandomNumberGenerator.new()
+			planet_rng.seed = entry.body_name.hash()
+			var params := PlanetParams.new()
+			params.seed_value = entry.body_name.hash()
+			params.radius = radius
+			params.continent_scale = planet_rng.randf_range(0.8, 1.4)
+			params.terrain_height = planet_rng.randf_range(0.04, 0.08)
+			params.roughness = planet_rng.randf_range(0.4, 0.6)
+			params.ocean_level = entry.ocean_level
+			params.atmosphere = entry.atmosphere
+			params.atmo_falloff = entry.atmo_falloff
+			params.detail = 5
+			body = PlanetGenerator.generate(params)
+		_:  # Moon, or anything else — the original moon-only behavior
+			var rng := RandomNumberGenerator.new()
+			rng.seed = entry.body_name.hash()
+			var params := MoonParams.new()
+			params.seed_value = entry.body_name.hash()
+			params.radius = radius
+			params.surface_roughness = rng.randf_range(0.01, 0.04)
+			params.crater_density = rng.randf_range(0.25, 0.85)
+			# crater_size is the MAX radius now (power-law distributed below
+			# it, see CraterField.make) — range widened from the old
+			# average-semantics (0.10, 0.28) so typical craters stay a
+			# similar visible size.
+			params.crater_size = rng.randf_range(0.2, 0.5)
+			params.crater_depth = rng.randf_range(0.03, 0.08)
+			params.detail = 4
+			body = MoonGenerator.generate(params)
 	body.name = entry.body_name
 	return body
 
@@ -931,6 +1038,24 @@ func _build_arrival(location_id: String) -> void:
 	if entry == null:
 		entry = KnownBodies.get_entry("Earth")
 		location_id = "Earth"
+
+	# Interstellar arrival (2026-07-18) — the universe currently built is
+	# either the DEPARTURE system's (a cold load straight into a foreign
+	# system, e.g. re-entering Cockpit mid-warp) or nothing at all (the
+	# normal warp-transit path already freed it — see _build_interstellar_
+	# transit). Either way it isn't the ARRIVAL system's, so rebuild before
+	# anything below tries to find _primary in it. Interstellar destinations
+	# are always the star itself (Stellar View's GO only ever targets a
+	# star name — further in-system travel is a separate, same-system trip
+	# handled entirely by the branch below), so this only ever fires once
+	# per interstellar hop, not on every ordinary in-system arrival.
+	if entry.star_system != _current_star_system:
+		_rebuild_universe_for(entry.star_system)
+		# A brand-new star's lighting must SNAP instantly, not slew — the
+		# continuous in-flight sun blend (_process's _in_transit branch) was
+		# tracking the warp corridor's synthetic direction, not any real
+		# star, so there's nothing meaningful to have been slewing FROM.
+		was_in_transit = false
 
 	_primary_display_radius = _primary_radius_for(entry)
 	_primary_orbit_mult = _orbit_mult_for(entry)
@@ -1240,7 +1365,9 @@ func _build_transit() -> void:
 	var entry := KnownBodies.get_entry(target_id)
 	var from_entry := KnownBodies.get_entry(from_id)
 
-	if entry != null and from_entry != null:
+	if entry != null and from_entry != null and entry.star_system != from_entry.star_system:
+		_build_interstellar_transit(entry)
+	elif entry != null and from_entry != null:
 		var end_body: Node3D
 		if _universe_bodies.has(target_id):
 			end_body = _universe_bodies[target_id]
@@ -1357,6 +1484,71 @@ func _build_transit() -> void:
 	# else: re-entering an already-in-progress trip — _process recomputes
 	# the correct position/orientation from PlayerState every frame anyway,
 	# so nothing extra needed here; just don't replay the maneuver.
+
+
+# Unlike a same-system trip, the destination body isn't already a real,
+# positioned node anywhere — Proxima's star doesn't exist in THIS scene's
+# local space until _build_arrival rebuilds the universe for it. But every
+# system's own star DOES always rebuild at the exact same fixed anchor point
+# (_camera_base_forward * SOL_DISTANCE — see _build_universe's star_pos),
+# regardless of which system it is, so that anchor is known in advance and
+# can be flown toward for real, exactly like a same-system trip flies toward
+# a real body's real position. Real interstellar space is also genuinely
+# empty over these distances — there's nothing to fly PAST — so the
+# departure universe is freed outright rather than kept around as scenery
+# (nothing in it matters again until _build_arrival rebuilds fresh for
+# whichever system the ship actually ends up in).
+#
+# 2026-07-19 bug fix: an earlier version flew a synthetic corridor in a
+# fixed world direction (_camera_base_forward) with no relation to the
+# star's actual anchor position — since the camera's position drifts away
+# from world-origin-relative anchors during ordinary orbiting (see
+# REBASE_THRESHOLD's own comment on why bodies aren't near the origin), the
+# ship arrived facing wherever that arbitrary corridor happened to end, not
+# facing the star, and only _begin_orbit_settle's post-arrival reorientation
+# visibly turned it to face correctly. Flying toward the REAL anchor point
+# (not an arbitrary direction) makes the ship arrive already facing it, same
+# as every same-system arrival already does.
+func _build_interstellar_transit(target_entry: KnownBodies.Entry) -> void:
+	for body: Node3D in _universe_bodies.values():
+		body.queue_free()
+	_universe_bodies.clear()
+	_universe_positions.clear()
+	# _current_star_system is deliberately left untouched here — _build_
+	# arrival still needs to see it disagree with the ARRIVAL system's own
+	# star_system to know a rebuild is owed (see that function). _rebuild_
+	# universe_for freeing an already-empty _universe_bodies at that point
+	# is a harmless no-op.
+
+	_transit_body = null
+	_hidden_from_body = null
+	_secondaries.clear()
+	_secondary_is_universe_body.clear()
+	_secondaries_built_for = ""
+
+	var star_anchor := _camera_base_forward * SOL_DISTANCE
+	var travel_dir := star_anchor - _camera.position
+	var dir := travel_dir.normalized() if travel_dir.length() > 0.01 else _camera_base_forward
+	var end_radius := _primary_radius_for(target_entry)
+
+	_transit_start_pos = _camera.position
+	_transit_target_anchor = star_anchor
+	_transit_target_radius = end_radius
+	# Entry point just outside the star's own orbit shell, on the side
+	# facing back the way we came — same "don't stop dead center inside the
+	# body" shape a same-system arrival's end_pos already uses.
+	_transit_end_pos = star_anchor - dir * (end_radius * _orbit_mult_for(target_entry))
+	_camera.position = _transit_start_pos
+	if _warp_points != null:
+		_warp_points.set_axis(dir)
+
+	# Sun direction is irrelevant with no bodies left to light — held fixed
+	# for the duration rather than slewing toward anything real; _build_
+	# arrival snaps it correctly the instant the new system's universe is
+	# built (see that function's own comment on forcing was_in_transit
+	# false for an interstellar arrival specifically).
+	_sun_lean_from_dir = _sun.global_basis.z if _sun != null else dir
+	_sun_lean_to_pos = star_anchor
 
 
 # Rotates the camera from an arbitrary off-heading orientation onto its

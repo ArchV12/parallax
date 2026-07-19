@@ -30,10 +30,19 @@ extends Control
 # from SystemView/PlanetarySystemView's callout GO buttons and
 # LocationsPanel's footer GO button; nothing here commits a trip.
 
+# Emitted dynamically via emit_signal(entry["signal"]) below (see MENU's
+# own "signal" string keys) — the analyzer can't trace a string-keyed
+# emit_signal call back to these declarations, hence the ignores; every one
+# of these five is genuinely wired up and used by HUD's own .connect() calls.
+@warning_ignore("unused_signal")
 signal system_pressed
+@warning_ignore("unused_signal")
 signal research_pressed
+@warning_ignore("unused_signal")
 signal cargo_pressed
+@warning_ignore("unused_signal")
 signal construction_pressed
+@warning_ignore("unused_signal")
 signal sell_pressed
 
 # No OPERATIONS leaf anymore (Docs/Arrival Scan System.md) — Surveys

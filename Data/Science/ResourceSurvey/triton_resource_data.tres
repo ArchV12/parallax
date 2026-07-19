@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="ResourceSurveyData" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/ResourceSurveyData.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/science/ResourceMaterialFinding.gd" id="2"]
+
+[sub_resource type="Resource" id="1"]
+script = ExtResource("2")
+material_name = "Methane Ice"
+abundance = "Trace"
+note_label = "Extraction"
+note_value = "Favorable"
+min_scanner_tier = 1
+
+[sub_resource type="Resource" id="2"]
+script = ExtResource("2")
+material_name = "Liquid Nitrogen Pockets"
+abundance = "Moderate"
+note_label = "Location"
+note_value = "Sub-Surface Geysers"
+min_scanner_tier = 2
+
+[sub_resource type="Resource" id="3"]
+script = ExtResource("2")
+material_name = "Umbral Quartz"
+abundance = "Trace"
+note_label = "Extraction"
+note_value = "Difficult"
+min_scanner_tier = 4
+
+[resource]
+script = ExtResource("1")
+body_id = "Triton"
+materials = Array[ResourceMaterialFinding]([SubResource("1"), SubResource("2"), SubResource("3")])

@@ -43,6 +43,15 @@ const SPIN := 0.03             # rad/s — idle rotation, purely for a "living" 
 # this rate Mercury completes a lap in ~2 minutes; Pluto barely crawls,
 # which is itself realistic — outer planets really do move that much slower).
 const ORBIT_SPEED := 0.013
+# Mercury's own real pace under the formula above (0.39 AU) — the fastest
+# anything should ever visibly spin, regardless of which system is on
+# screen. Needed once a non-Sol system could exist (2026-07-18, Proxima
+# Centauri): Proxima b's real orbit (0.0485 AU, ~8x closer than Mercury)
+# would otherwise spin ~20x faster than Mercury under the raw 1/distance^1.5
+# formula — same "nearly unclickable" bug PlanetarySystemView.gd's own
+# ORBIT_SPEED tuning already hit and fixed for Phobos, caught here before
+# it ever shipped instead of after a bug report.
+const MAX_ORBIT_SPEED := 0.0534
 
 # --- Asteroids (still no survey data — that's the next step; population and
 # orbits are now real seed-derived generation, not fixed dummies) ---
@@ -193,6 +202,16 @@ enum CalloutStage { HIDDEN, WAITING_FOR_SWEEP, REVEALING_LINE, TYPING_NAME, DONE
 var _bodies: Array[Node3D] = []
 var _orbits: Array[Dictionary] = []  # body, radius, body_radius, angle, speed, atmo — see _build_system/_process
 
+# 2026-07-18 — which star system to build, and where "back" goes. "" /
+# Sol-defaults preserve every existing entry point (the SOLAR SYSTEM tab,
+# any direct go_to("res://scenes/system_view.tscn") call) exactly as
+# before; only HUD.go_to_system_view (Stellar View's GO button reaching a
+# curated star) ever sets these to something else. See that function's own
+# comment — this is a PREVIEW of another system, not a real relocate;
+# PlayerState.location_id is untouched regardless of which system is shown.
+var _star_system_name := "Sol"
+var _return_scene := "res://scenes/cockpit.tscn"
+
 var _pivot: Node3D
 var _camera: Camera3D
 var _yaw := STOCK_YAW
@@ -234,16 +253,34 @@ var _location_marker_ring_radius := 0.0
 
 
 func _ready() -> void:
+	_star_system_name = HUD.pending_star_system_name if HUD.pending_star_system_name != "" else "Sol"
+	HUD.pending_star_system_name = ""
+	if HUD.pending_return_scene != "":
+		_return_scene = HUD.pending_return_scene
+	HUD.pending_return_scene = ""
+
 	_build_environment()
 	_build_camera()
 	_build_system()
-	_build_asteroids()
+	# Asteroids (the Main Belt/NEA/Centaur/Trojan populations) and the Known
+	# Locations sidebar are both Sol-specific content/infrastructure — the
+	# former is real solar-system flavor with no equivalent designed yet for
+	# another system, the latter reads real Discoveries/travel state that
+	# only means anything for Sol today (see LocationsPanel.gd, itself
+	# hardcoded to KnownBodies.sol()/planets()). Skipping both for a
+	# non-Sol preview is more honest than showing Sol's own asteroid belt
+	# or destination list floating incongruously around a different star.
+	if _star_system_name == "Sol":
+		_build_asteroids()
+		_build_locations_panel()
 	_build_callout()
 	_build_location_marker()
 	_build_body_panel()
-	_build_locations_panel()
 	AmbientManager.play_map_ambient()
-	HUD.set_view("Solar System", "solar_system")
+	# "Solar System" stays the exact existing label/wording for Sol — only a
+	# genuinely different system gets the generic "<Star> System" form.
+	var view_name := "Solar System" if _star_system_name == "Sol" else "%s System" % _star_system_name
+	HUD.set_view(view_name, "solar_system")
 	# Re-clicking the SOLAR SYSTEM tab while already here recenters instead
 	# of no-opping — see HUD.recenter_requested's own comment.
 	HUD.recenter_requested.connect(_recenter)
@@ -440,45 +477,53 @@ func _update_camera() -> void:
 
 
 func _build_system() -> void:
-	var sol_entry := KnownBodies.sol()
-	var sol_radius := BODY_MIN_RADIUS + BODY_SIZE_SCALE * sqrt(sol_entry.radius_ratio)
-	var sol := CanonicalBodyGenerator.generate(sol_entry.to_params(sol_radius))
-	add_child(sol)
-	_bodies.append(sol)
-	# Sol never orbits — radius 0 and speed 0 keep it pinned at the origin
-	# every frame — but folding it into _orbits too means click-selection
-	# and camera-follow (both driven by this array) work uniformly for Sol
-	# without a separate special case.
+	var star_entry := KnownBodies.get_entry(_star_system_name)
+	var star_radius := BODY_MIN_RADIUS + BODY_SIZE_SCALE * sqrt(star_entry.radius_ratio)
+	var star := _build_body(star_entry, star_radius)
+	add_child(star)
+	_bodies.append(star)
+	# The star never orbits — radius 0 and speed 0 keep it pinned at the
+	# origin every frame — but folding it into _orbits too means click-
+	# selection and camera-follow (both driven by this array) work
+	# uniformly for it without a separate special case.
 	_orbits.append({
-		"body": sol,
+		"body": star,
 		"radius": 0.0,
-		"body_radius": sol_radius,
+		"body_radius": star_radius,
 		"angle": 0.0,
 		"speed": 0.0,
-		"atmo": sol.get_node_or_null("Atmosphere") as MeshInstance3D,
+		"atmo": star.get_node_or_null("Atmosphere") as MeshInstance3D,
 	})
 
-	# Sol lights every planet from its own position — a single directional
-	# light (as Cockpit/Cosmic Forge use) would light every planet from the
-	# same fixed direction regardless of where it actually sits relative to
-	# Sol, which breaks the moment more than one body is on screen at once.
-	var sun_light := OmniLight3D.new()
-	sun_light.light_color = Color(1.0, 0.96, 0.88)
-	sun_light.light_energy = 3.0
-	sun_light.omni_range = 200.0
-	add_child(sun_light)
+	# The star lights every planet from its own position — a single
+	# directional light (as Cockpit/Cosmic Forge use) would light every
+	# planet from the same fixed direction regardless of where it actually
+	# sits relative to the star, which breaks the moment more than one body
+	# is on screen at once.
+	var star_light := OmniLight3D.new()
+	star_light.light_color = Color(1.0, 0.96, 0.88)
+	star_light.light_energy = 3.0
+	star_light.omni_range = 200.0
+	add_child(star_light)
 
-	for entry: KnownBodies.Entry in KnownBodies.planets():
+	for entry: KnownBodies.Entry in KnownBodies.planets_of(_star_system_name):
+		# Navigation Scanner fog-of-war (2026-07-18) — Sol is permanently
+		# fully known by design (see the ship-equipment design memory's "Sol
+		# system exception"), so this only ever filters a non-Sol system.
+		# An undetected body simply doesn't get built at all this pass —
+		# no placeholder blip yet, that's a possible future refinement.
+		if _star_system_name != "Sol" and entry.min_nav_tier > Research.owned_tier("navigation_scanner"):
+			continue
 		var display_r := BASE_GAP + LOG_SCALE * log(entry.au_distance + 1.0)
 		add_child(_build_orbit_ring(display_r))
 
 		var body_r := BODY_MIN_RADIUS + BODY_SIZE_SCALE * sqrt(entry.radius_ratio)
-		var body := CanonicalBodyGenerator.generate(entry.to_params(body_r))
+		var body := _build_body(entry, body_r)
 		var start_angle := randf_range(0.0, TAU)  # rerolled each load
 		# Position (and sun_dir below) set immediately, not just registered
 		# for _process to place next frame — otherwise every planet flashes
-		# at the origin (Sol's own position), wrongly lit, for one frame
-		# before its orbit angle first applies.
+		# at the origin (the star's own position), wrongly lit, for one
+		# frame before its orbit angle first applies.
 		body.position = Vector3(cos(start_angle) * display_r, 0.0, sin(start_angle) * display_r)
 		add_child(body)
 		_bodies.append(body)
@@ -493,9 +538,70 @@ func _build_system() -> void:
 			"radius": display_r,
 			"body_radius": body_r,
 			"angle": start_angle,
-			"speed": ORBIT_SPEED / pow(entry.au_distance, 1.5),
+			"speed": minf(ORBIT_SPEED / pow(entry.au_distance, 1.5), MAX_ORBIT_SPEED),
 			"atmo": atmo,
 		})
+
+
+# Real photographic texture (or CanonicalBodyGenerator's own flat-color
+# fallback) for every Sol body — every one of them has use_canonical_art
+# at its true default, so this always takes that branch for Sol. A body
+# with NO texture and no prospect of ever getting one (Proxima Centauri's
+# system, 2026-07-18 — nobody has ever photographed an exoplanet's
+# surface, and never will) instead renders through the SAME fully-
+# procedural generators Cosmic Forge/PlanetarySystemView's own moons
+# already use, seeded off its own name so it looks the same every visit —
+# CanonicalBodyGenerator's flat-color fallback would otherwise be the only
+# option, which reads as "missing texture," not "deliberately never
+# photographed." Mirrors PlanetarySystemView._build_moon_body's exact
+# use_canonical_art branch, generalized across body_type since a star
+# system (unlike a planet's moons) can have more than one kind of body.
+func _build_body(entry: KnownBodies.Entry, display_radius: float) -> Node3D:
+	if entry.use_canonical_art:
+		return CanonicalBodyGenerator.generate(entry.to_params(display_radius))
+
+	var body: Node3D
+	match entry.body_type:
+		"Star":
+			var params := StarParams.new()
+			params.seed_value = entry.body_name.hash()
+			params.radius = display_radius
+			params.temperature = entry.surface_temp_k
+			params.turbulence = entry.star_turbulence
+			params.spot_activity = entry.star_spot_activity
+			params.corona = entry.atmosphere
+			params.corona_falloff = entry.atmo_falloff
+			body = StarGenerator.generate(params)
+		"Gas Giant", "Ice Giant":
+			var rng := RandomNumberGenerator.new()
+			rng.seed = entry.body_name.hash()
+			var params := GasGiantParams.new()
+			params.seed_value = entry.body_name.hash()
+			params.radius = display_radius
+			params.band_scale = rng.randf_range(1.0, 1.4)
+			params.turbulence = entry.gas_turbulence
+			params.storminess = entry.gas_storminess
+			params.band_contrast = entry.gas_band_contrast
+			params.atmosphere = entry.atmosphere
+			params.atmo_falloff = entry.atmo_falloff
+			params.ice = entry.body_type == "Ice Giant"
+			body = GasGiantGenerator.generate(params)
+		_:  # Terrestrial Planet, Dwarf Planet, or anything else — a real terrain surface is the sensible default
+			var rng := RandomNumberGenerator.new()
+			rng.seed = entry.body_name.hash()
+			var params := PlanetParams.new()
+			params.seed_value = entry.body_name.hash()
+			params.radius = display_radius
+			params.continent_scale = rng.randf_range(0.8, 1.4)
+			params.terrain_height = rng.randf_range(0.04, 0.08)
+			params.roughness = rng.randf_range(0.4, 0.6)
+			params.ocean_level = entry.ocean_level
+			params.atmosphere = entry.atmosphere
+			params.atmo_falloff = entry.atmo_falloff
+			params.detail = 5
+			body = PlanetGenerator.generate(params)
+	body.name = entry.body_name
+	return body
 
 
 # Existence + count for a population, purely a function of its own seed
@@ -803,7 +909,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if _focused_body != null:
 			_clear_focus()
 		else:
-			HUD.go_to("res://scenes/cockpit.tscn")
+			HUD.go_to(_return_scene)
 		return
 
 	if event is InputEventMouseButton:
@@ -1197,7 +1303,10 @@ func _on_scan_requested(id: String) -> void:
 func _on_scan_finished(id: String) -> void:
 	if _focused_body != null and _focused_body.name == id:
 		_scan_prompt.mark_scanned()
-	_locations_panel.refresh()
+	# _locations_panel isn't built at all for a non-Sol preview (see _ready)
+	# — nothing to refresh there.
+	if _locations_panel != null:
+		_locations_panel.refresh()
 
 
 # --- Known Locations panel ---
@@ -1356,7 +1465,18 @@ func _type_callout_label(for_body: Node3D) -> void:
 		# asteroid was actually spawned) — so a body that's visible/
 		# selectable here has always already been registered, and this never
 		# blocks a real, clickable asteroid.
-		if KnownBodies.get_entry(for_body.name) != null:
+		#
+		# 2026-07-18 — ALSO gated to _star_system_name == "Sol" now that a
+		# non-Sol preview's bodies (Proxima Centauri's planets) resolve
+		# non-null through get_entry too. Locking one would write a real
+		# Destination.locked_id whose au_distance is relative to a DIFFERENT
+		# star than every other Sol body's — TravelCalc's distance math
+		# would compare them as if measured from the same origin, producing
+		# a physically meaningless number, and Cockpit's transit-build would
+		# try to fly there using Sol-scale AU physics. This preview is
+		# look-but-don't-lock until real interstellar travel exists — see
+		# HUD.go_to_system_view's own comment.
+		if _star_system_name == "Sol" and KnownBodies.get_entry(for_body.name) != null:
 			_lock_button.present(for_body.name)
 		if Discoveries.is_scanned(for_body.name):
 			var entry := KnownBodies.get_entry(for_body.name)

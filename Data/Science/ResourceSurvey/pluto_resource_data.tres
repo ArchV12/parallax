@@ -1,0 +1,57 @@
+[gd_resource type="Resource" script_class="ResourceSurveyData" load_steps=8 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/ResourceSurveyData.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/science/ResourceMaterialFinding.gd" id="2"]
+
+[sub_resource type="Resource" id="1"]
+script = ExtResource("2")
+material_name = "Methane Ice"
+abundance = "Common"
+note_label = "Extraction"
+note_value = "Favorable"
+min_scanner_tier = 1
+
+[sub_resource type="Resource" id="2"]
+script = ExtResource("2")
+material_name = "Dry Ice (CO2 Frost)"
+abundance = "Trace"
+note_label = "Extraction"
+note_value = "Favorable"
+min_scanner_tier = 1
+
+[sub_resource type="Resource" id="3"]
+script = ExtResource("2")
+material_name = "Liquid Nitrogen Pockets"
+abundance = "Abundant"
+note_label = "Location"
+note_value = "Sputnik Planitia Glacier"
+min_scanner_tier = 2
+
+[sub_resource type="Resource" id="4"]
+script = ExtResource("2")
+material_name = "Cryptobiotic Residue"
+abundance = "Trace"
+note_label = "Location"
+note_value = "Suspected Subsurface Ocean"
+min_scanner_tier = 3
+
+[sub_resource type="Resource" id="5"]
+script = ExtResource("2")
+material_name = "Umbral Quartz"
+abundance = "Trace"
+note_label = "Extraction"
+note_value = "Difficult"
+min_scanner_tier = 4
+
+[sub_resource type="Resource" id="6"]
+script = ExtResource("2")
+material_name = "Chronite"
+abundance = "Trace"
+note_label = "Location"
+note_value = "Localized Temporal Drift Zone"
+min_scanner_tier = 4
+
+[resource]
+script = ExtResource("1")
+body_id = "Pluto"
+materials = Array[ResourceMaterialFinding]([SubResource("1"), SubResource("2"), SubResource("3"), SubResource("4"), SubResource("5"), SubResource("6")])

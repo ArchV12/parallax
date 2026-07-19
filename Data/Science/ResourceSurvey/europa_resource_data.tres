@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="ResourceSurveyData" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/ResourceSurveyData.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/science/ResourceMaterialFinding.gd" id="2"]
+
+[sub_resource type="Resource" id="1"]
+script = ExtResource("2")
+material_name = "Water Ice"
+abundance = "Abundant"
+note_label = "Location"
+note_value = "Global Ice Shell"
+min_scanner_tier = 0
+
+[sub_resource type="Resource" id="2"]
+script = ExtResource("2")
+material_name = "Geode Quartz Pockets"
+abundance = "Trace"
+note_label = "Location"
+note_value = "Fractured Ice Ridges"
+min_scanner_tier = 3
+
+[sub_resource type="Resource" id="3"]
+script = ExtResource("2")
+material_name = "Cryptobiotic Residue"
+abundance = "Trace"
+note_label = "Location"
+note_value = "Subsurface Ocean Vent"
+min_scanner_tier = 3
+
+[resource]
+script = ExtResource("1")
+body_id = "Europa"
+materials = Array[ResourceMaterialFinding]([SubResource("1"), SubResource("2"), SubResource("3")])

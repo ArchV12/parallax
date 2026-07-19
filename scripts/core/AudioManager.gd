@@ -441,6 +441,30 @@ func anomaly_detected() -> void:
 	play_vo("anomaly_detected")
 
 
+# Fired once per "Incoming Earth Transmission" button appearance — see
+# EarthTransmissionBanner._set_incoming_visible. Named with the _vo suffix,
+# same reasoning as scans_complete() above: sfx/incoming_transmission.ogg
+# (the looped ambient, see start_incoming_transmission_loop below) already
+# uses the bare "incoming_transmission" name for a DIFFERENT file under
+# SFX_BASE — this is deliberately the VO_BASE counterpart, not a collision.
+func incoming_transmission_vo() -> void:
+	play_vo("incoming_transmission")
+
+
+# Fired on DISMISS, closing out a read Earth Transmission — see
+# EarthTransmissionBanner._on_dismiss_pressed.
+func technology_unlocked() -> void:
+	play_vo("technology_unlocked")
+
+
+# Fired on a successful Research.craft_technology() — see
+# ResearchPanel._on_card_pressed. Gated by the caller on the craft actually
+# succeeding (a stale/failed press shouldn't announce an install that
+# didn't happen).
+func install_complete() -> void:
+	play_vo("install_complete")
+
+
 # Stops any currently-playing instance of this sfx — for repeating/interruptible
 # sounds that need to cut off immediately rather than ring out to their
 # natural end.

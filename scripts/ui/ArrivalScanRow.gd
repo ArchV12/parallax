@@ -38,7 +38,7 @@ const TOP_MARGIN := 92.0
 const RIGHT_MARGIN := 24.0
 const BOTTOM_MARGIN := 110.0
 const CARD_WIDTH := 260.0
-const CARD_SEPARATION := 12.0
+const CARD_SEPARATION := 12  # int — add_theme_constant_override wants int, not float
 # Same reasoning as ActivitiesPanel's own SCROLLBAR_GUTTER — Godot's default
 # ScrollContainer scrollbar overlays content instead of reserving space for
 # it, so this keeps the thumb clear of each card's own right edge/border.
@@ -430,11 +430,16 @@ func _populate_rated_result(activity_id: String, def: ActivityDef, result_box: V
 
 
 func _populate_resource_result(result_box: VBoxContainer, location_id: String, anomaly: AnomalyResult) -> void:
+	# Deposits.deposits_for, not the raw Research.resource_data_for materials
+	# list, for the summary line and Mine gating below — already filtered to
+	# whatever the player's current Scanner Array tier can actually detect
+	# (see ResourceMaterialFinding.min_scanner_tier). `data` itself is still
+	# needed for the Details button's resource_report_ready payload below;
+	# SurveyReportPanel.show_resource_report re-filters it internally.
 	var data := Research.resource_data_for(location_id)
 	var names: Array[String] = []
-	if data != null:
-		for finding: ResourceMaterialFinding in data.materials:
-			names.append(finding.material_name)
+	for deposit: DepositInfo in Deposits.deposits_for(location_id):
+		names.append(deposit.material_name)
 
 	var summary := Label.new()
 	summary.text = ", ".join(names) if not names.is_empty() else "No materials detected."

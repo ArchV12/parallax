@@ -19,31 +19,68 @@ var travel_duration: float = 0.0
 var travel_elapsed: float = 0.0
 var travel_distance_km: float = 0.0  # real distance for the CURRENT trip — see TravelCalc; Cockpit derives a live speed readout from this against travel_duration
 # The accel/cap that actually flies the ship for the CURRENT trip — see
-# start_travel/resolve_travel_engine. With no tier pinned this is just
-# ENGINE_ACCEL_KM_S2 uncapped, exactly like before tiers existed. With a
-# tier pinned, this is a GAMEPLAY-scale accel solved so the trip's own
-# burn_duration lands on TravelCalc.compress_by_tier_reach's compressed
-# number — NOT the tier's own real accel/cap directly (that was tried
-# 2026-07-11 and immediately broken: pinning Tier 0 made an actual Moon
-# trip take real DAYS of wall-clock waiting). The tier's real accel/cap
-# only ever feeds travel_real_duration_sec below, never the camera.
+# start_travel/resolve_travel_engine. Once a valid engine tier resolves
+# (see _effective_engine_tier — in practice always true, since Sub-Light
+# Engines is owned from tier 0 onward), this is a GAMEPLAY-scale accel
+# solved so the trip's own burn_duration lands on TravelCalc.
+# compress_by_tier_reach's compressed number — NOT the tier's own real
+# accel/cap directly (that was tried 2026-07-11 and immediately broken:
+# pinning Tier 0 made an actual Moon trip take real DAYS of wall-clock
+# waiting). The tier's real accel/cap only ever feeds
+# travel_real_duration_sec below, never the camera. ENGINE_ACCEL_KM_S2
+# uncapped (the pre-tiers flat default) is now only reachable if no valid
+# tier resolves at all — a defensive fallback, not the normal path.
 var travel_accel_km_s2: float = TravelCalc.ENGINE_ACCEL_KM_S2
 var travel_cruise_cap_km_s: float = 0.0
 
 # What THIS SAME trip takes under the tier's REAL (physically-grounded)
 # physics — display-only (the "(REAL: ...)" annotation in ConsolePanel),
 # computed alongside travel_duration in start_travel but never fed into the
-# actual flight. 0.0 when no tier is selected (engine_tier_override == -1),
-# meaning there's nothing "real" to show. See the travel-time-scale
-# brainstorm in parallax-core-design-decisions memory.
+# actual flight. 0.0 only if _effective_engine_tier() can't resolve a valid
+# tier at all (defensive — Sub-Light Engines is always owned from tier 0
+# onward, so in practice this always has something real to show once a
+# trip starts). See the travel-time-scale brainstorm in
+# parallax-core-design-decisions memory.
 var travel_real_duration_sec: float = 0.0
 
-# Cheat menu (F2 in HUD) — pins the ship to one of TravelCalc.ENGINE_TIERS.
-# -1 = off, use ENGINE_ACCEL_KM_S2 uncapped exactly like before tiers
-# existed. Applied at the moment a trip STARTS (see start_travel), not
-# retroactively to one already in progress — changing tiers mid-flight just
-# means the next GO gets it.
+# Cheat menu (F2 in HUD) — pins the ship to one of TravelCalc.ENGINE_TIERS,
+# overriding the player's real Sub-Light Engines progression below. -1 = no
+# pin, defer to _effective_engine_tier()'s real-progression fallback.
+# Applied at the moment a trip STARTS (see start_travel), not retroactively
+# to one already in progress — changing tiers mid-flight just means the
+# next GO gets it.
 var engine_tier_override: int = -1
+
+
+# The tier that actually flies the ship right now. engine_tier_override
+# (the F2 cheat pin) wins if set; otherwise this falls back to the
+# player's real Sub-Light Engines equipment tier (Research.owned_tier) —
+# 2026-07-18 hookup: previously engine_tier_override was the ONLY thing
+# that could ever select a real ENGINE_TIERS entry, so crafting Fusion
+# Drive/Improved Fusion/etc. had no gameplay effect at all. Sub-Light
+# Engines is owned from tier 0 (STARTING_ACTIVITIES), so this always
+# resolves to a valid ENGINE_TIERS index in practice — the "-1, fall back
+# to flat ENGINE_ACCEL_KM_S2" path in resolve_travel_engine/
+# real_duration_estimate below is now purely defensive.
+func _effective_engine_tier() -> int:
+	if engine_tier_override >= 0:
+		return engine_tier_override
+	return Research.owned_tier("sub_light_engines")
+
+
+# True if from_id/to_id belong to different star systems — Sub-Light
+# Engines/compress_by_tier_reach has no role here at all (direct user design
+# decision: "sub-light engines have no use here, we are only using the
+# beyond light engines"), see resolve_travel_engine's interstellar branch.
+# Defensive false (not interstellar) if either id doesn't resolve — the
+# existing local-orbital-transfer fallback already covers that case
+# elsewhere (TravelCalc.estimate/resolve_travel_engine).
+func _is_interstellar(from_id: String, to_id: String) -> bool:
+	var from_entry := KnownBodies.get_entry(from_id)
+	var to_entry := KnownBodies.get_entry(to_id)
+	if from_entry == null or to_entry == null:
+		return false
+	return from_entry.star_system != to_entry.star_system
 
 
 func start_travel(target_id: String) -> void:
@@ -63,14 +100,15 @@ func start_travel(target_id: String) -> void:
 
 
 # What a from_id -> to_id trip should ACTUALLY fly at right now, given the
-# current engine_tier_override — shared by start_travel (the real snapshot)
-# and ConsolePanel's not-yet-departed ETA preview, so the preview never
-# shows a number GO doesn't honor.
+# ship's current effective engine tier (_effective_engine_tier) — shared by
+# start_travel (the real snapshot) and ConsolePanel's not-yet-departed ETA
+# preview, so the preview never shows a number GO doesn't honor.
 #
-# No tier pinned: the fixed gameplay-pacing default, unchanged from before
-# tiers existed.
+# No valid tier resolved (defensive only — see _effective_engine_tier's
+# comment): the fixed gameplay-pacing default, unchanged from before tiers
+# existed.
 #
-# Tier pinned: the tier's REAL accel/cap (see ENGINE_TIERS) computes this
+# Valid tier: that tier's REAL accel/cap (see ENGINE_TIERS) computes this
 # trip's genuine real-world duration (real_duration_sec, for display only —
 # see travel_real_duration_sec) — but what actually FLIES is a synthetic
 # gameplay accel solved backward from TravelCalc.compress_by_tier_reach's
@@ -82,28 +120,68 @@ func start_travel(target_id: String) -> void:
 # target instead of whatever the flat default naturally produces. This is
 # what makes each tier's own frontier body feel "comfortable" and anything
 # past it feel like a real stretch, at every tier, not just Tier 0.
+# Beyond Light Engines is the one equipment slot with NO free starting tier
+# (owned_tier 0 == "None," a real placeholder InstrumentDef — its 5 real
+# drives sit at owned_tier 1-5, one off from every other slot's 0-4 — see
+# the ship-equipment design memory). Maps owned tier 1-5 -> STAR_TIER_REACH_LY
+# index 0-4, same mapping Stellar View's own callout already uses
+# independently for its travel-time preview (see StellarView._select) — this
+# is what makes GO actually fly the trip that preview promised. Tier 0
+# ("None") has no valid index at all, handled by the caller (resolve_travel_
+# engine returns early before this is ever consulted at tier 0 — see below).
+func _beyond_light_tier_index() -> int:
+	return Research.owned_tier("beyond_light_engines") - 1
+
+
 func resolve_travel_engine(from_id: String, to_id: String) -> Dictionary:
-	if engine_tier_override < 0 or engine_tier_override >= TravelCalc.ENGINE_TIERS.size():
+	if _is_interstellar(from_id, to_id):
+		var bl_tier := _beyond_light_tier_index()
+		if bl_tier < 0:
+			# No real Beyond Light Engine owned yet — travel_to() already
+			# refuses to start a trip in this state (see its own comment);
+			# this is a defensive fallback only, matching the "no valid
+			# tier resolved" shape every other branch here already uses.
+			return {"accel_km_s2": TravelCalc.ENGINE_ACCEL_KM_S2, "cruise_cap_km_s": 0.0, "real_duration_sec": 0.0}
+		var from_entry := KnownBodies.get_entry(from_id)
+		var to_entry := KnownBodies.get_entry(to_id)
+		var distance_ly := TravelCalc.star_distance_ly(from_entry.star_system, to_entry.star_system)
+		var distance_km := distance_ly * TravelCalc.LY_TO_KM
+		var gameplay_duration := TravelCalc.compress_by_star_tier_reach(distance_ly, bl_tier)
+		var motion_target := maxf(
+				gameplay_duration - TravelCalc.DEPARTURE_HOLD_SECONDS - TravelCalc.ARRIVAL_HOLD_SECONDS, 1.0)
+		var accel_km_s2 := (distance_km * 4.0) / (motion_target * motion_target)
+		# real_duration_sec 0.0, deliberately, not routed through real_
+		# duration_estimate at all — there's no real-physics accel/cruise
+		# ladder for a fictional warp drive the way ENGINE_TIERS has for
+		# Sub-Light, so there's nothing honest to show. ShipStatusStrip's
+		# "(REAL: ...)" annotation already gates on travel_real_duration_sec
+		# > 0.0, so this alone is enough to hide it for an interstellar trip.
+		return {"accel_km_s2": accel_km_s2, "cruise_cap_km_s": 0.0, "real_duration_sec": 0.0}
+
+	var tier := _effective_engine_tier()
+	if tier < 0 or tier >= TravelCalc.ENGINE_TIERS.size():
 		return {"accel_km_s2": TravelCalc.ENGINE_ACCEL_KM_S2, "cruise_cap_km_s": 0.0, "real_duration_sec": 0.0}
 	var real_sec := real_duration_estimate(from_id, to_id)
 	var distance_km: float = TravelCalc.estimate(from_id, to_id).get("distance_km", 0.0)
-	var gameplay_duration := TravelCalc.compress_by_tier_reach(distance_km, engine_tier_override)
+	var gameplay_duration := TravelCalc.compress_by_tier_reach(distance_km, tier)
 	var motion_target := maxf(
 			gameplay_duration - TravelCalc.DEPARTURE_HOLD_SECONDS - TravelCalc.ARRIVAL_HOLD_SECONDS, 1.0)
 	var accel_km_s2 := (distance_km * 4.0) / (motion_target * motion_target)
 	return {"accel_km_s2": accel_km_s2, "cruise_cap_km_s": 0.0, "real_duration_sec": real_sec}
 
 
-# What a from_id -> to_id trip would take under the currently cheat-menu-
-# selected engine tier's REAL physics — 0.0 if no tier is selected. Scaled
+# What a from_id -> to_id trip would take under the ship's current
+# effective engine tier's REAL physics (_effective_engine_tier) — 0.0 if no
+# valid tier resolves (defensive only, see that function's comment). Scaled
 # by the tier's own real_time_scale (see TravelCalc.ENGINE_TIERS) — display
 # only, corrects how unrealistically fast the raw accel/cap ladder reads at
 # interplanetary range without touching the accel/cap values that actually
 # drive gameplay pacing.
 func real_duration_estimate(from_id: String, to_id: String) -> float:
-	if engine_tier_override < 0 or engine_tier_override >= TravelCalc.ENGINE_TIERS.size():
+	var tier_index := _effective_engine_tier()
+	if tier_index < 0 or tier_index >= TravelCalc.ENGINE_TIERS.size():
 		return 0.0
-	var tier: Dictionary = TravelCalc.ENGINE_TIERS[engine_tier_override]
+	var tier: Dictionary = TravelCalc.ENGINE_TIERS[tier_index]
 	var est := TravelCalc.estimate(from_id, to_id, tier["accel_km_s2"], tier["cruise_cap_km_s"])
 	var scale: float = tier.get("real_time_scale", 1.0)
 	return est["duration_sec"] * scale
@@ -141,6 +219,13 @@ func reset_for_new_game() -> void:
 # to follow up with a scene transition (e.g. HUD.go_to the cockpit).
 func travel_to(id: String) -> bool:
 	if is_traveling or id == location_id or id == "":
+		return false
+	# No real Beyond Light Engine yet (owned_tier 0, "None") -> refuse an
+	# interstellar trip outright rather than silently falling back to
+	# resolve_travel_engine's defensive ENGINE_ACCEL_KM_S2 shape, which
+	# would fly a genuinely interstellar distance at ordinary in-system
+	# gameplay pacing (i.e. a light-year trip "completing" in seconds).
+	if _is_interstellar(location_id, id) and _beyond_light_tier_index() < 0:
 		return false
 	Destination.lock(id)
 	start_travel(id)

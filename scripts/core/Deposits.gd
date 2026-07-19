@@ -155,13 +155,18 @@ const MIN_DEPLETE_SECONDS := 12.0
 # extreme-small-body case this floor exists for.
 const MIN_UNITS_FRACTION := 0.01
 
-# 2026-07-14 — the ship's cargo hold isn't infinite. Hardcoded flat number
-# for now (no per-material breakdown, no upgrade path yet) — total units
-# across EVERY material combined, same "ship-wide, not per-body" shape
-# inventory() itself already has. Operations._tick_mining is what actually
-# enforces this during a running operation (stops the instant the hold
-# would exceed it — see that function); this file just tracks the number.
-const CARGO_CAPACITY := 20000
+# 2026-07-14 — the ship's cargo hold isn't infinite. Total units across
+# EVERY material combined, same "ship-wide, not per-body" shape inventory()
+# itself already has. Operations._tick_mining is what actually enforces
+# this during a running operation (stops the instant the hold would exceed
+# it — see that function); this file just tracks the number.
+#
+# 2026-07-18 — scaled by Cargo Hold equipment tier (Docs/Ship Equipment.md)
+# instead of the old flat 20,000: 5,000 at T0 up to 100,000 at T4, linear
+# (23,750/tier). A first-guess curve, not playtested — easy to retune, it's
+# just the one array. cargo_capacity() replaces the old CARGO_CAPACITY
+# constant; callers now call the function instead of reading a constant.
+const CARGO_CAPACITY_BY_TIER: Array[int] = [5000, 28750, 52500, 76250, 100000]
 
 var _remaining_fraction: Dictionary = {}  # "body_id:material_name" -> float
 var _material_amounts: Dictionary = {}    # material_name -> int, player's running inventory
@@ -175,26 +180,36 @@ func reset_for_new_game() -> void:
 # Every deposit derivable at this body right now — empty if no Resource
 # Survey has ever resolved here (Research.resource_data_for returns null),
 # same "nothing to show" honesty as Research's own *_data_for methods.
+# Further filtered to whatever the player's CURRENT Scanner Array tier can
+# actually detect (see ResourceMaterialFinding.min_scanner_tier) — a body
+# surveyed back at T0 silently grows more entries here the moment the
+# player upgrades, no re-survey required.
 func deposits_for(body_id: String) -> Array[DepositInfo]:
 	var result: Array[DepositInfo] = []
 	var survey := Research.resource_data_for(body_id)
 	if survey == null:
 		return result
 	for finding: ResourceMaterialFinding in survey.materials:
-		result.append(_build_deposit(body_id, finding))
+		if _is_detected(finding):
+			result.append(_build_deposit(body_id, finding))
 	return result
 
 
 # A single named deposit at a body, or null if that material was never
-# detected there (or the body has no survey at all).
+# detected there (the body has no survey at all, or the player's current
+# Scanner Array tier can't pick it out yet — see min_scanner_tier).
 func deposit_for(body_id: String, material_name: String) -> DepositInfo:
 	var survey := Research.resource_data_for(body_id)
 	if survey == null:
 		return null
 	for finding: ResourceMaterialFinding in survey.materials:
-		if finding.material_name == material_name:
+		if finding.material_name == material_name and _is_detected(finding):
 			return _build_deposit(body_id, finding)
 	return null
+
+
+func _is_detected(finding: ResourceMaterialFinding) -> bool:
+	return finding.min_scanner_tier <= Research.owned_tier("scanner_array")
 
 
 func _build_deposit(body_id: String, finding: ResourceMaterialFinding) -> DepositInfo:
@@ -210,20 +225,46 @@ func _build_deposit(body_id: String, finding: ResourceMaterialFinding) -> Deposi
 	return deposit
 
 
+# --- Mining System equipment tier scaling (2026-07-18, Docs/Ship
+# Equipment.md) --- Two independent levers, "faster AND bigger haul":
+# MINING_TIME_MULT_BY_TIER shrinks depletion_seconds per tier (T0
+# unchanged); MINING_YIELD_MULT_BY_TIER grows total_units() per tier
+# instead (see that function). Since extraction_rate_per_second is
+# total_units/depletion_seconds, the two compound automatically — more
+# material, arriving faster — without any extra wiring.
+#
+# The time multiplier is applied INSIDE depletion_seconds' MIN_DEPLETE_
+# SECONDS floor (see below), not after it — a top-tier rig meaningfully
+# shrinks a Massive deposit's minutes-long extraction, but can never push
+# a floor-bound tiny-asteroid deposit below that floor. The floor's whole
+# job is legibility (2026-07-14 report: "mining finishes before I can
+# even see the numbers move" — see MIN_DEPLETE_SECONDS' own comment), and
+# that guarantee should hold at every equipment tier, not just T0.
+const MINING_TIME_MULT_BY_TIER: Array[float] = [1.0, 0.8, 0.6, 0.4, 0.2]
+const MINING_YIELD_MULT_BY_TIER: Array[float] = [1.0, 1.125, 1.25, 1.375, 1.5]
+
+
+func _mining_tier() -> int:
+	return clampi(Research.owned_tier("mining_system"), 0, MINING_TIME_MULT_BY_TIER.size() - 1)
+
+
 # How long this SPECIFIC deposit (its own size tier, at its own body's real
-# scale, at its own extraction difficulty) takes to fully deplete under
-# continuous mining — the base tier duration scaled by the same
-# _size_multiplier as total_units, floored at MIN_DEPLETE_SECONDS for
-# legibility (see that constant's own comment), THEN scaled again by
-# DIFFICULTY_TIME_MULT (applied last, after the floor, so difficulty still
-# has an effect even on a floor-bound tiny asteroid deposit — a Hard Trace
-# deposit takes noticeably longer than an Easy one even though both would
-# otherwise floor to the identical MIN_DEPLETE_SECONDS). The one shared
-# duration both rate functions below derive from, so they can never diverge
-# from each other the way independently-floored numbers could.
+# scale, at its own extraction difficulty, at the player's own Mining
+# System tier) takes to fully deplete under continuous mining — the base
+# tier duration scaled by the same _size_multiplier as total_units AND the
+# current MINING_TIME_MULT_BY_TIER speed bonus, floored at
+# MIN_DEPLETE_SECONDS for legibility (see that constant's own comment),
+# THEN scaled again by DIFFICULTY_TIME_MULT (applied last, after the
+# floor, so difficulty still has an effect even on a floor-bound tiny
+# asteroid deposit — a Hard Trace deposit takes noticeably longer than an
+# Easy one even though both would otherwise floor to the identical
+# MIN_DEPLETE_SECONDS). The one shared duration both rate functions below
+# derive from, so they can never diverge from each other the way
+# independently-floored numbers could.
 func depletion_seconds(deposit: DepositInfo) -> float:
 	var seconds: int = DEPLETE_SECONDS_BY_SIZE.get(deposit.deposit_size, DEPLETE_SECONDS_BY_SIZE[DEFAULT_DEPOSIT_SIZE])
-	var base_duration := maxf(float(seconds) * _size_multiplier(deposit.body_id), MIN_DEPLETE_SECONDS)
+	var time_mult := MINING_TIME_MULT_BY_TIER[_mining_tier()]
+	var base_duration := maxf(float(seconds) * _size_multiplier(deposit.body_id) * time_mult, MIN_DEPLETE_SECONDS)
 	var difficulty_mult: float = DIFFICULTY_TIME_MULT.get(
 			deposit.extraction_difficulty, DIFFICULTY_TIME_MULT[DEFAULT_EXTRACTION_DIFFICULTY])
 	return base_duration * difficulty_mult
@@ -263,10 +304,15 @@ func depletion_rate_per_second(deposit: DepositInfo) -> float:
 # survey that found something at all should never display as a literal
 # zero- or one-unit deposit, even on the smallest possible asteroid, but
 # the floor still has to keep a "Massive" reading bigger than a "Trace" one.
+# MINING_YIELD_MULT_BY_TIER (see that constant's own comment) is applied
+# last, after size-scaling and its floor — the player's current Mining
+# System tier means the SAME deposit yields more, not a special case for
+# small deposits only.
 func total_units(deposit: DepositInfo) -> int:
 	var base: int = TOTAL_UNITS_BY_SIZE.get(deposit.deposit_size, TOTAL_UNITS_BY_SIZE[DEFAULT_DEPOSIT_SIZE])
 	var floor_units := roundi(float(base) * MIN_UNITS_FRACTION)
-	return maxi(floor_units, roundi(float(base) * _size_multiplier(deposit.body_id)))
+	var size_scaled := maxi(floor_units, roundi(float(base) * _size_multiplier(deposit.body_id)))
+	return roundi(float(size_scaled) * MINING_YIELD_MULT_BY_TIER[_mining_tier()])
 
 
 func _size_multiplier(body_id: String) -> float:
@@ -346,7 +392,7 @@ func inventory() -> Dictionary:
 	return _material_amounts.duplicate()
 
 
-# Summed across every material — CARGO_CAPACITY is one shared hold, not a
+# Summed across every material — cargo_capacity() is one shared hold, not a
 # per-material allowance. Computed fresh from _material_amounts every call
 # rather than tracked as a running counter, so it stays correct even though
 # the hold can also shrink (spend_materials, crafting) as well as grow.
@@ -357,12 +403,17 @@ func total_cargo_used() -> int:
 	return total
 
 
+func cargo_capacity() -> int:
+	var tier := clampi(Research.owned_tier("cargo_hold"), 0, CARGO_CAPACITY_BY_TIER.size() - 1)
+	return CARGO_CAPACITY_BY_TIER[tier]
+
+
 func cargo_space_remaining() -> int:
-	return maxi(0, CARGO_CAPACITY - total_cargo_used())
+	return maxi(0, cargo_capacity() - total_cargo_used())
 
 
 func is_cargo_full() -> bool:
-	return total_cargo_used() >= CARGO_CAPACITY
+	return total_cargo_used() >= cargo_capacity()
 
 
 func _key(body_id: String, material_name: String) -> String:
@@ -372,9 +423,11 @@ func _key(body_id: String, material_name: String) -> String:
 # Thousands-separated integer — "big numbers feel good for the player" (per
 # the user's own framing when deposits were scaled up), so a bare
 # "1000000" reading as a wall of digits would undercut the whole point.
-# Static, same "shared formatting utility living on the relevant data-model
-# class" idiom as ActivityDef.format_duration.
-static func format_units(n: int) -> String:
+# Not static (unlike ActivityDef.format_duration) — every call site reaches
+# this through the Deposits autoload singleton, not the script's type
+# directly, which is exactly what triggers GDScript's STATIC_CALLED_ON_
+# INSTANCE warning on a static func. No internal state needed either way.
+func format_units(n: int) -> String:
 	var digits := str(n)
 	var result := ""
 	var count := 0

@@ -183,6 +183,23 @@ const RESOURCE_DATA_PATHS := {
 	"Earth": "res://Data/Science/ResourceSurvey/earth_resource_data.tres",
 	"Mars": "res://Data/Science/ResourceSurvey/mars_resource_data.tres",
 	"Luna": "res://Data/Science/ResourceSurvey/luna_resource_data.tres",
+	# 2026-07-18 — Scanner Array tier-gating pass (see ResourceMaterialFinding.
+	# min_scanner_tier): moons/gas giants/ice giant/dwarf planet/star all
+	# newly authored, none had Resource Survey data before this.
+	"Io": "res://Data/Science/ResourceSurvey/io_resource_data.tres",
+	"Europa": "res://Data/Science/ResourceSurvey/europa_resource_data.tres",
+	"Titan": "res://Data/Science/ResourceSurvey/titan_resource_data.tres",
+	"Triton": "res://Data/Science/ResourceSurvey/triton_resource_data.tres",
+	"Jupiter": "res://Data/Science/ResourceSurvey/jupiter_resource_data.tres",
+	"Saturn": "res://Data/Science/ResourceSurvey/saturn_resource_data.tres",
+	"Uranus": "res://Data/Science/ResourceSurvey/uranus_resource_data.tres",
+	"Neptune": "res://Data/Science/ResourceSurvey/neptune_resource_data.tres",
+	"Pluto": "res://Data/Science/ResourceSurvey/pluto_resource_data.tres",
+	"Sol": "res://Data/Science/ResourceSurvey/sol_resource_data.tres",
+	# Completes every PLANET's coverage — Mercury/Venus were the only two
+	# curated planets still missing survey data.
+	"Mercury": "res://Data/Science/ResourceSurvey/mercury_resource_data.tres",
+	"Venus": "res://Data/Science/ResourceSurvey/venus_resource_data.tres",
 }
 
 var _activities: Dictionary = {}  # activity_id -> ActivityDef, loaded once at startup
@@ -239,6 +256,15 @@ var _surveyed_tier: Dictionary = {}
 # every subsequent add_knowledge()/_check_milestones() call while the
 # player just hasn't crafted it yet.
 var _notified_blueprints: Dictionary = {}
+
+# CheatMenu's "FREE UPGRADES" toggle (2026-07-18) — bypasses both the
+# Knowledge and materials checks in can_craft/craft_technology below, so a
+# tester can walk the full Ship Equipment tier ladder without grinding real
+# Knowledge or materials. Deliberately NOT cleared by reset_for_new_game,
+# unlike PlayerState.engine_tier_override — a tester driving repeated New
+# Games to retest the upgrade pipeline shouldn't have to re-toggle it each
+# time; it's a session-level dev switch, not gameplay state.
+var free_upgrades: bool = false
 
 
 # Loads eagerly in _init (object construction), not _ready — _ready is
@@ -444,12 +470,18 @@ func geological_data_for(body_id: String) -> GeologicalSurveyData:
 # yet, generates and caches one instead — there's no way to hand-author a
 # file for an id that doesn't exist until a seeded population rolls it at
 # runtime (see the universe-generation-architecture memory's "generate each
-# tier of a body's data only when first needed" rule). Still null for
-# anything else (a real moon with no authored survey, a typo, ...) — same
-# honesty as before this existed.
+# tier of a body's data only when first needed" rule). 2026-07-18: the same
+# "generate what doesn't need bespoke authorship" idea now also covers
+# every catalogued moon WITHOUT a hand-authored file (see
+# _ensure_moon_data/MoonResourceGenerator) — Luna/Io/Europa/Titan/Triton
+# keep their real files, everything else (Phobos, Ganymede, Enceladus,
+# Charon, ...) rolls procedurally the first time it's asked for. Still null
+# for anything genuinely unrecognized (a typo, an id KnownBodies has never
+# heard of) — same honesty as before this existed.
 func resource_data_for(body_id: String) -> ResourceSurveyData:
 	if not _resource_data.has(body_id):
 		_ensure_asteroid_data(body_id)
+		_ensure_moon_data(body_id)
 	return _resource_data.get(body_id)
 
 
@@ -477,6 +509,23 @@ func _ensure_asteroid_data(body_id: String) -> void:
 	var rolled := AsteroidResourceGenerator.generate(body_id)
 	_resource_data[body_id] = rolled["survey"]
 	_asteroid_radius_km[body_id] = rolled["radius_km"]
+
+
+# Companion to _ensure_asteroid_data above, same no-op-if-already-cached
+# shape — but for catalogued Moon-type bodies instead of procedural
+# asteroid designations. No radius to roll/cache here (unlike asteroids, a
+# moon's real_radius_km is already a curated KnownBodies fact), so this
+# only ever needs to fill in _resource_data. KnownBodies.get_entry already
+# covers real moons AND asteroids alike, so the body_type == "Moon" check
+# is what keeps this from double-generating for an asteroid id that
+# _ensure_asteroid_data above already claimed.
+func _ensure_moon_data(body_id: String) -> void:
+	if _resource_data.has(body_id):
+		return
+	var entry := KnownBodies.get_entry(body_id)
+	if entry == null or entry.body_type != "Moon":
+		return
+	_resource_data[body_id] = MoonResourceGenerator.generate(body_id)
 
 
 # Registered by SystemView the instant it actually spawns an asteroid — see
@@ -554,10 +603,16 @@ func is_craftable(activity_id: String) -> bool:
 
 # Whether craft_technology(activity_id) would actually succeed right now —
 # Knowledge requirements met AND every material in materials_requirements
-# is currently affordable (Deposits.material_amount).
+# is currently affordable (Deposits.material_amount). free_upgrades (see
+# that var's comment) skips both checks — only whether a next tier exists
+# at all still gates it.
 func can_craft(activity_id: String) -> bool:
 	var tech := next_technology(activity_id)
-	if tech == null or not _requirements_met(tech):
+	if tech == null:
+		return false
+	if free_upgrades:
+		return true
+	if not _requirements_met(tech):
 		return false
 	for material_name: String in tech.materials_requirements:
 		if Deposits.material_amount(material_name) < tech.materials_requirements[material_name]:
@@ -582,7 +637,7 @@ func craft_technology(activity_id: String) -> TechnologyDef:
 	if not can_craft(activity_id):
 		return null
 	var tech := next_technology(activity_id)
-	if not Deposits.spend_materials(tech.materials_requirements):
+	if not free_upgrades and not Deposits.spend_materials(tech.materials_requirements):
 		return null  # can_craft already checked this — defensive only
 	var tier := owned_tier(activity_id)
 	grant_tier(activity_id, tier + 1)

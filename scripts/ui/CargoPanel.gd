@@ -18,22 +18,22 @@ extends Control
 # (Research.equipment_slot_ids()/current_instrument()) — this used to be a
 # mix of one real read (Scanner Array, via the old resource_survey id) and
 # five hardcoded Tier 0 placeholders (Docs/Ship Equipment.md's own gaps at
-# the time). Every row here is now a real, equal read; no more placeholders,
-# no more special-casing Sub-Light Engines against the F2 cheat menu — that
-# remains a separate dev-only travel-physics pin (PlayerState.
-# engine_tier_override), unrelated to what tier is actually owned.
+# the time). Every row here is now a real, equal read. Sub-Light Engines'
+# owned tier is also now the real gameplay-driving one (see PlayerState.
+# _effective_engine_tier) — the F2 cheat menu's engine_tier_override just
+# overrides it for testing, it's no longer a wholly separate system.
 #
 # A capacity readout (2026-07-14 ask, same day) sits in its own strip across
 # the bottom of the main Cargo panel, above the Close button — total units
-# held across every material vs. Deposits.CARGO_CAPACITY (a flat, hardcoded
-# hold size for now — no per-material limits, no upgrade path yet). This is
-# purely a display; the actual stop-mining-at-capacity enforcement lives in
-# Operations._tick_mining, which is the thing that actually has to decide
-# mid-tick whether another unit still fits.
+# held across every material vs. Deposits.cargo_capacity() (Cargo Hold
+# equipment-tier-scaled since 2026-07-18 — no per-material limits though).
+# This is purely a display; the actual stop-mining-at-capacity enforcement
+# lives in Operations._tick_mining, which is the thing that actually has to
+# decide mid-tick whether another unit still fits.
 
 const PANEL_WIDTH := 380.0
 const EQUIPMENT_PANEL_WIDTH := 240.0
-const PANEL_GAP := 12.0
+const PANEL_GAP := 12  # int — add_theme_constant_override wants int, not float
 const LIST_HEIGHT := 420.0
 # Godot's default ScrollContainer scrollbar overlays content instead of
 # reserving space for it — this much right margin on the scrolled content
@@ -290,5 +290,6 @@ func _make_bar_style(col: Color, alpha: float) -> StyleBoxFlat:
 
 func _update_capacity() -> void:
 	var used := Deposits.total_cargo_used()
-	_capacity_value.text = "%s / %s" % [Deposits.format_units(used), Deposits.format_units(Deposits.CARGO_CAPACITY)]
-	_capacity_bar.value = float(used) / float(Deposits.CARGO_CAPACITY)
+	var capacity := Deposits.cargo_capacity()
+	_capacity_value.text = "%s / %s" % [Deposits.format_units(used), Deposits.format_units(capacity)]
+	_capacity_bar.value = float(used) / float(capacity)

@@ -23,7 +23,7 @@ extends Control
 # once) row visibility can change on any frame.
 
 const CORNER_MARGIN := 24.0
-const ROW_GAP := 4.0
+const ROW_GAP := 4  # int — add_theme_constant_override wants int, not float
 
 const SPEED_REFRESH_INTERVAL := 0.1  # updating every frame reads as digit-flicker at this font size — see _process
 const LOCAL_DISTANCE_THRESHOLD_KM := TravelCalc.AU_KM * 0.05  # below this, the live in-flight distance reads in KM (a same-system hop like Earth<->Luna, ~384K km, would show as "0.00 AU" otherwise); at/above it, AU — see _process
@@ -150,7 +150,7 @@ func _update_live_distance_preview() -> void:
 # frame rather than wiring a change signal for it.
 func _update_cargo_label() -> void:
 	var used := Deposits.total_cargo_used()
-	_cargo_label.text = "CARGO: %s / %s" % [Deposits.format_units(used), Deposits.format_units(Deposits.CARGO_CAPACITY)]
+	_cargo_label.text = "CARGO: %s / %s" % [Deposits.format_units(used), Deposits.format_units(Deposits.cargo_capacity())]
 
 
 # Once you've arrived somewhere you'd already locked as a destination, the

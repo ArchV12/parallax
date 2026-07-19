@@ -261,8 +261,8 @@ func _on_operation_completed(op_id: String) -> void:
 	var def := Research.activity_def(op.activity_id)
 	if def != null and NativeRate.anomaly_for(op.location_id, def.knowledge_category) != null:
 		AudioManager.anomaly_detected()
-	var name := def.display_name.to_upper() if def != null else op.activity_id.to_upper()
-	_operation_toast.show_toast("%s COMPLETE — %s" % [name, op.location_id])
+	var activity_label := def.display_name.to_upper() if def != null else op.activity_id.to_upper()
+	_operation_toast.show_toast("%s COMPLETE — %s" % [activity_label, op.location_id])
 
 
 # Mining-kind only — fires the instant a continuous mining operation ends,
@@ -414,10 +414,15 @@ func set_view(view_name: String, view_id: String) -> void:
 	_command_menu.set_cockpit_context(view_id == "cockpit")
 
 
-# Only System view actually has a "recenter" concept today — a reclick on
-# any other already-active tab stays a genuine no-op.
+# System view AND Planetary System view both have a "recenter" concept
+# (2026-07-18: Planetary System view now duplicates System view's whole
+# free-fly camera rig, recenter included — see PlanetarySystemView.gd's own
+# _recenter) — a reclick on any other already-active tab stays a genuine
+# no-op. Both views listen on the SAME signal rather than needing their own;
+# whichever one is actually mounted is the only one connected to it at a
+# given moment, so there's no risk of firing into the wrong scene.
 func _on_active_tab_reclicked(id: String) -> void:
-	if id == "solar_system":
+	if id == "solar_system" or id == "planetary":
 		recenter_requested.emit()
 
 
@@ -443,11 +448,20 @@ var pending_planet_name: String = ""
 var pending_return_scene: String = ""
 
 
+# Which star system System view should build — "" (default) means Sol,
+# so every EXISTING entry point (the SOLAR SYSTEM tab, anything that just
+# calls go_to("res://scenes/system_view.tscn") directly) keeps working
+# unchanged. Only go_to_system_view below (2026-07-18, Stellar View's GO
+# button reaching a curated star) ever sets this to something else.
+var pending_star_system_name: String = ""
+
+
 # See PlayerState.reset_for_new_game — stray pending-navigation state left
 # over from a previous session shouldn't leak into a fresh one.
 func reset_for_new_game() -> void:
 	pending_planet_name = ""
 	pending_return_scene = ""
+	pending_star_system_name = ""
 
 
 func go_to_planetary_system(planet_name: String) -> void:
@@ -455,6 +469,23 @@ func go_to_planetary_system(planet_name: String) -> void:
 	var current_scene := get_tree().current_scene
 	pending_return_scene = current_scene.scene_file_path if current_scene != null else "res://scenes/system_view.tscn"
 	go_to("res://scenes/planetary_system_view.tscn")
+
+
+# Stellar View's GO button reaching a star with real curated KnownBodies
+# content (Proxima Centauri today — see StellarView.gd) — same stash-
+# before-switch pattern go_to_planetary_system above uses. Deliberately a
+# PREVIEW, not a real relocate: PlayerState.location_id is untouched, so
+# System view's own "YOU ARE HERE" marker correctly just doesn't show
+# (there's no live orbital data for wherever the player actually still is,
+# in a system that isn't the one on screen) rather than showing something
+# wrong. Full "you actually live here now" support (Cockpit, Mining,
+# LocationsPanel, Resource Survey data all becoming multi-system-aware) is
+# real future work, not done by this.
+func go_to_system_view(star_system_name: String) -> void:
+	pending_star_system_name = star_system_name
+	var current_scene := get_tree().current_scene
+	pending_return_scene = current_scene.scene_file_path if current_scene != null else "res://scenes/stellar_view.tscn"
+	go_to("res://scenes/system_view.tscn")
 
 
 # --- System / pause menu ---

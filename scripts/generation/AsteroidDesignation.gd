@@ -25,6 +25,7 @@ static func generate(seed_value: int) -> String:
 	# How far into the half-month's sequence — occasionally rolls far enough
 	# to need a cycle suffix, same as a real crowded half-month would.
 	var position := rng.randi() % 300
+	@warning_ignore("integer_division")  # floor division into a whole cycle count is the intent
 	var cycle := position / SEQUENCE_LETTERS.length()
 	var seq_letter := SEQUENCE_LETTERS[position % SEQUENCE_LETTERS.length()]
 	var suffix := "" if cycle == 0 else str(cycle)

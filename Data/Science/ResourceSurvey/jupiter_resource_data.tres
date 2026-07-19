@@ -1,0 +1,57 @@
+[gd_resource type="Resource" script_class="ResourceSurveyData" load_steps=8 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/ResourceSurveyData.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/science/ResourceMaterialFinding.gd" id="2"]
+
+[sub_resource type="Resource" id="1"]
+script = ExtResource("2")
+material_name = "Hydrogen"
+abundance = "Abundant"
+note_label = "Location"
+note_value = "Upper Cloud Deck"
+min_scanner_tier = 0
+
+[sub_resource type="Resource" id="2"]
+script = ExtResource("2")
+material_name = "Ammonia Gas"
+abundance = "Common"
+note_label = "Location"
+note_value = "Upper Cloud Deck"
+min_scanner_tier = 1
+
+[sub_resource type="Resource" id="3"]
+script = ExtResource("2")
+material_name = "Methane Gas"
+abundance = "Moderate"
+note_label = "Location"
+note_value = "Upper Cloud Deck"
+min_scanner_tier = 1
+
+[sub_resource type="Resource" id="4"]
+script = ExtResource("2")
+material_name = "Deuterium"
+abundance = "Trace"
+note_label = "Location"
+note_value = "Deep Atmosphere"
+min_scanner_tier = 2
+
+[sub_resource type="Resource" id="5"]
+script = ExtResource("2")
+material_name = "Helium-3"
+abundance = "Trace"
+note_label = "Location"
+note_value = "Convective Layer"
+min_scanner_tier = 3
+
+[sub_resource type="Resource" id="6"]
+script = ExtResource("2")
+material_name = "Neon"
+abundance = "Trace"
+note_label = "Location"
+note_value = "Convective Layer"
+min_scanner_tier = 3
+
+[resource]
+script = ExtResource("1")
+body_id = "Jupiter"
+materials = Array[ResourceMaterialFinding]([SubResource("1"), SubResource("2"), SubResource("3"), SubResource("4"), SubResource("5"), SubResource("6")])

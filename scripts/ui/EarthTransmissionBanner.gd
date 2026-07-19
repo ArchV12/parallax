@@ -114,7 +114,7 @@ func _on_incoming_pressed() -> void:
 # (close_animated only tweens scale/modulate, it never flips .visible back
 # off, so that flag alone isn't a reliable "is a transmission showing" test).
 func _on_dismiss_pressed() -> void:
-	AudioManager.play_vo("technology_unlocked")
+	AudioManager.technology_unlocked()
 	_panel.close_animated()
 	_showing_panel = false
 	if not _pending.is_empty():
@@ -133,6 +133,6 @@ func _set_incoming_visible(v: bool) -> void:
 	_incoming_button.visible = v
 	if v:
 		AudioManager.start_incoming_transmission_loop()
-		AudioManager.play_vo("incoming_transmission")
+		AudioManager.incoming_transmission_vo()
 	else:
 		AudioManager.stop_incoming_transmission_loop()

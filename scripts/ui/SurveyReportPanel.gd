@@ -222,13 +222,24 @@ func show_resource_report(location_id: String, data: ResourceSurveyData, categor
 	_clear_body()
 
 	_add_section_header("DETECTED MATERIALS")
-	for i in data.materials.size():
-		var finding: ResourceMaterialFinding = data.materials[i]
+	# Filtered to whatever the player's CURRENT Scanner Array tier can
+	# actually pick out (see ResourceMaterialFinding.min_scanner_tier) — same
+	# gate Deposits.deposits_for applies, enforced here too since this panel
+	# renders straight from the raw ResourceSurveyData its caller passed in,
+	# not through Deposits at all.
+	var detected: Array[ResourceMaterialFinding] = []
+	for finding: ResourceMaterialFinding in data.materials:
+		if finding.min_scanner_tier <= Research.owned_tier("scanner_array"):
+			detected.append(finding)
+	if detected.is_empty():
+		_add_plain_line("No materials detected.")  # same wording as ArrivalScanRow's own empty state
+	for i in detected.size():
+		var finding := detected[i]
 		_add_material_name(finding.material_name)
 		_add_field_line("Abundance", finding.abundance)
 		if finding.note_label != "":
 			_add_field_line(finding.note_label, finding.note_value)
-		if i < data.materials.size() - 1:
+		if i < detected.size() - 1:
 			var spacer := Control.new()
 			spacer.custom_minimum_size = Vector2(0, 4)  # small breathing room between materials, no divider line — see the sample's own spacing
 			_body_box.add_child(spacer)

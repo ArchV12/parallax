@@ -39,6 +39,7 @@ extends Resource
 
 
 static func format_duration(total_seconds: int) -> String:
+	@warning_ignore("integer_division")  # floor division is the intent — minutes, not a fraction
 	var minutes := total_seconds / 60
 	var seconds := total_seconds % 60
 	return "%02d:%02d" % [minutes, seconds]

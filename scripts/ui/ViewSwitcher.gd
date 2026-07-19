@@ -28,7 +28,7 @@ const VIEWS: Array[Dictionary] = [
 	{"id": "cockpit", "label": "COCKPIT", "scene": "res://scenes/cockpit.tscn"},
 	{"id": "solar_system", "label": "SOLAR SYSTEM", "scene": "res://scenes/system_view.tscn"},
 	{"id": "planetary", "label": "PLANETARY", "scene": "res://scenes/planetary_system_view.tscn"},  # not routed generically — see _on_tab_pressed, this needs a resolved planet name first
-	{"id": "stellar", "label": "STELLAR", "scene": ""},
+	{"id": "stellar", "label": "STELLAR", "scene": "res://scenes/stellar_view.tscn"},  # 2026-07-18 — flat 2D board of nearby real stars, no travel wired yet (see StellarView.gd's own class comment)
 	{"id": "galactic", "label": "GALACTIC", "scene": ""},
 ]
 

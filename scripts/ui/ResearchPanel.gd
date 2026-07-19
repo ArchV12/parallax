@@ -351,7 +351,7 @@ func _requirements_tooltip(tech: TechnologyDef) -> String:
 func _on_card_pressed(slot_id: String) -> void:
 	var tech := Research.craft_technology(slot_id)
 	if tech != null:
-		AudioManager.play_vo("install_complete")
+		AudioManager.install_complete()
 	_rebuild()
 
 

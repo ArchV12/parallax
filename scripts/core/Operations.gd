@@ -50,13 +50,23 @@ var _next_op_id: int = 0
 # still spinning after the others finished IS the hint something's here —
 # instead of only through report prose. Capped, not linear: a rate-100 body
 # still resolves inside a few seconds, it just takes the longest.
-const MIN_SCAN_SECONDS := 3.0
-const MAX_SCAN_SECONDS := 7.0
+#
+# Scanner Array equipment tier (Docs/Ship Equipment.md) scales all of this —
+# 2026-07-18 design pass, revised same day: T0 should genuinely feel slow,
+# so the floor was pushed up another +5s at T0 (10s) while T4 stays pinned
+# at the original 1s floor — the 5 tiers interpolate linearly between those
+# two anchors (a 2.25s step, not a round number, but the two endpoints are
+# the ones that actually matter for feel). Spread still held constant at 4s
+# so the ceiling drops in lockstep rather than compressing the curve.
+const MIN_SCAN_SECONDS_BY_TIER: Array[float] = [10.0, 7.75, 5.5, 3.25, 1.0]
+const SCAN_SPREAD_SECONDS := 4.0
 # Resource Survey has no NativeRate.for_category branch — it's Deposits-
 # driven (abundance/deposit size), not a 0-100 native-rate score like the
-# other 4 categories — so it gets a flat duration instead of the rate curve.
-# Matches MIN_SCAN_SECONDS — every Survey, rated or flat, has the same floor.
-const RESOURCE_SCAN_SECONDS := 3.0
+# other 4 categories — so it gets a flat duration per tier instead of the
+# rate curve. Own anchors (5s at T0, 1s at T4, same 2026-07-18 pass) — not
+# tied to MIN_SCAN_SECONDS_BY_TIER's curve, just a coincidentally clean -1s/
+# tier step since both endpoints land on integers.
+const RESOURCE_SCAN_SECONDS_BY_TIER: Array[float] = [5.0, 4.0, 3.0, 2.0, 1.0]
 
 
 func _ready() -> void:
@@ -150,18 +160,21 @@ func start_all_surveys(location_id: String) -> Array[String]:
 
 
 # A body's native rate for this category, mapped to a real-time scan
-# duration in [MIN_SCAN_SECONDS, MAX_SCAN_SECONDS]. Clamped before mapping —
-# astrophysics()/life_sciences() aren't hard-capped at 100 upstream (a ringed
-# gas giant with many moons, or a bonus-stacked goldilocks world, can land
-# slightly over), and this curve must never exceed MAX_SCAN_SECONDS.
+# duration in [min, min + SCAN_SPREAD_SECONDS] for the player's current
+# Scanner Array tier. Clamped before mapping — astrophysics()/
+# life_sciences() aren't hard-capped at 100 upstream (a ringed gas giant
+# with many moons, or a bonus-stacked goldilocks world, can land slightly
+# over), and this curve must never exceed the tier's ceiling.
 func _scan_duration_for(activity_id: String, location_id: String) -> float:
+	var tier := clampi(Research.owned_tier("scanner_array"), 0, MIN_SCAN_SECONDS_BY_TIER.size() - 1)
 	if activity_id == "resource_survey":
-		return RESOURCE_SCAN_SECONDS
+		return RESOURCE_SCAN_SECONDS_BY_TIER[tier]
+	var min_seconds := MIN_SCAN_SECONDS_BY_TIER[tier]
 	var def := Research.activity_def(activity_id)
 	if def == null:
-		return MIN_SCAN_SECONDS
+		return min_seconds
 	var rate := clampf(NativeRate.for_category(def.knowledge_category, location_id), 0.0, 100.0)
-	return MIN_SCAN_SECONDS + (rate / 100.0) * (MAX_SCAN_SECONDS - MIN_SCAN_SECONDS)
+	return min_seconds + (rate / 100.0) * SCAN_SPREAD_SECONDS
 
 
 # Mining's counterpart to start_survey — always for exactly one material at
@@ -239,14 +252,14 @@ func _resolve(op: ActiveOperation) -> void:
 
 # One continuous-mining tick's worth of progress, called every frame while
 # a mining operation is RUNNING. Clamps this tick's effective delta to
-# whichever comes first — the deposit hitting 0%, or the cargo hold hitting
-# CARGO_CAPACITY (see Deposits.cargo_space_remaining) — so a single large
-# delta (a lag spike, or just bad luck on frame timing) can never overshoot
-# past either limit. Fractional yield accumulates on the operation itself
-# (mining_yield_accumulator) and is only committed to Deposits' inventory
-# once it crosses a whole-unit boundary — the player's inventory should only
-# ever hold whole numbers, but depletion itself stays smooth every frame
-# regardless of where that boundary falls.
+# whichever comes first — the deposit hitting 0%, or the cargo hold filling
+# up (Deposits.cargo_space_remaining, capacity from cargo_capacity()) — so a
+# single large delta (a lag spike, or just bad luck on frame timing) can
+# never overshoot past either limit. Fractional yield accumulates on the
+# operation itself (mining_yield_accumulator) and is only committed to
+# Deposits' inventory once it crosses a whole-unit boundary — the player's
+# inventory should only ever hold whole numbers, but depletion itself stays
+# smooth every frame regardless of where that boundary falls.
 func _tick_mining(op: ActiveOperation, delta: float) -> void:
 	var deposit := Deposits.deposit_for(op.location_id, op.deposit_material)
 	if deposit == null or deposit.remaining_fraction <= 0.0:
@@ -283,7 +296,7 @@ func _tick_mining(op: ActiveOperation, delta: float) -> void:
 
 # The one place a mining operation actually ends, for any of the four
 # reasons (player-initiated stop_mining, departure — see _on_travel_started,
-# hitting 0% remaining, or hitting CARGO_CAPACITY — both in _tick_mining).
+# hitting 0% remaining, or hitting cargo_capacity() — both in _tick_mining).
 # Erases it immediately rather than moving it to a COMPLETE-awaiting-dismiss
 # state — there's nothing left to view, everything in summary was already
 # committed to Deposits' inventory as it ticked (see _tick_mining).
