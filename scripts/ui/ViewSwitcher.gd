@@ -130,6 +130,18 @@ func _on_tab_pressed(id: String, scene: String) -> void:
 	if id == "planetary":
 		HUD.go_to_planetary_system(_current_planet_for_view())
 		return
+	# SOLAR SYSTEM shows whichever star system the player is actually IN —
+	# same "route dynamically off current location" shape PLANETARY already
+	# uses just above, via the same HUD.go_to_system_view/pending_star_
+	# system_name machinery Stellar View's own GO button uses. 2026-07-19
+	# fix: this used to be a fixed scene path (view_selected.emit(scene)
+	# below), which always showed Sol regardless of where the player really
+	# was — confusing/wrong the instant a second system (Proxima) became
+	# reachable, since standing there and hitting SOLAR SYSTEM silently
+	# showed Sol instead.
+	if id == "solar_system":
+		HUD.go_to_system_view(_current_star_system_for_view())
+		return
 	if scene == "":
 		return
 	view_selected.emit(scene)
@@ -143,3 +155,10 @@ func _current_planet_for_view() -> String:
 	if entry == null:
 		return "Earth"
 	return entry.parent if entry.parent != "" else entry.body_name
+
+
+# Whatever star system SOLAR SYSTEM should open on — Sol by default, same
+# fallback shape _current_planet_for_view uses.
+func _current_star_system_for_view() -> String:
+	var entry := KnownBodies.get_entry(PlayerState.location_id)
+	return entry.star_system if entry != null else "Sol"

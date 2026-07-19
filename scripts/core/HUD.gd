@@ -101,6 +101,13 @@ func _process(_delta: float) -> void:
 	if _fps_label.visible:
 		_fps_label.text = "FPS: %d" % Engine.get_frames_per_second()
 	_layout_knowledge_bar()
+	# Polled rather than signal-driven (2026-07-19) — same "cheap enough to
+	# just poll" call _update_cargo_label already makes elsewhere. Needs to
+	# be every-frame now, not just on PlayerState.location_changed (arrival
+	# only): PlayerState.live_current_year() interpolates continuously
+	# WHILE traveling too, so the calendar visibly counts up in sync with
+	# the trip instead of sitting frozen and jumping only at the end.
+	_refresh_year_label()
 	# Persistent reminder that a tier is pinned even when the cheat menu
 	# itself is closed — polled rather than signal-driven since PlayerState.
 	# engine_tier_override can also change without the menu's own knowledge
@@ -118,6 +125,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		_fps_label.visible = not _fps_label.visible
 	elif event.keycode == KEY_F2:
 		_cheat_menu.toggle()
+	elif event.keycode == KEY_F3:
+		# One-shot dev shortcut (2026-07-19) — instantly maxes every Ship
+		# Equipment slot, no menu needed. Deliberately separate from F2's
+		# CheatMenu.free_upgrades toggle (that one lets you CRAFT freely
+		# from the panel; this one skips crafting entirely and just grants
+		# the top tier of everything at once) — see Research.max_all_
+		# equipment's own comment.
+		Research.max_all_equipment()
+		_operation_toast.show_toast("EQUIPMENT CHEAT: ALL SLOTS MAXED")
 
 
 func _build_fade() -> void:
@@ -140,7 +156,7 @@ func _build_hud() -> void:
 	_year_label.offset_right = -24
 	_year_label.offset_top = 20
 	_year_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_year_label.text = "YEAR 2037"
+	_refresh_year_label()
 
 	_view_label = _make_label(Control.PRESET_TOP_LEFT)
 	_view_label.offset_left = 24
@@ -301,6 +317,17 @@ func _on_milestone_reached(tech: TechnologyDef) -> void:
 # does this (construction_complete.ogg plays either way).
 func _on_structure_constructed(_category_id: String, _body_id: String) -> void:
 	AudioManager.construction_complete()
+
+
+# One decimal place — a single interstellar hop always adds several whole
+# years (every reachable star is 4+ ly away), so a bare integer would still
+# read fine, but showing the fraction is what actually sells "the mechanic
+# is real" (see PlayerState.current_year) rather than looking like the same
+# static "YEAR 2037" it used to be with a different number. Reads live_
+# current_year, not current_year directly, so this counts up smoothly while
+# a trip is in progress instead of jumping only at arrival.
+func _refresh_year_label() -> void:
+	_year_label.text = "YEAR %.1f" % PlayerState.live_current_year()
 
 
 func _build_pause() -> void:

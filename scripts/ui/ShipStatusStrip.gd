@@ -26,7 +26,6 @@ const CORNER_MARGIN := 24.0
 const ROW_GAP := 4  # int — add_theme_constant_override wants int, not float
 
 const SPEED_REFRESH_INTERVAL := 0.1  # updating every frame reads as digit-flicker at this font size — see _process
-const LOCAL_DISTANCE_THRESHOLD_KM := TravelCalc.AU_KM * 0.05  # below this, the live in-flight distance reads in KM (a same-system hop like Earth<->Luna, ~384K km, would show as "0.00 AU" otherwise); at/above it, AU — see _process
 
 const SHIP_STATUS_PREFIX := "SHIP STATUS: "  # the static, never-typed part — see _ship_status_prefix_label/_ship_status_value_label
 # Noticeably quicker than SystemView/PlanetarySystemView/BootSequence's
@@ -97,6 +96,15 @@ func _process(delta: float) -> void:
 			var speed := TravelCalc.current_speed_km_s(
 					PlayerState.travel_distance_km, PlayerState.travel_duration, PlayerState.travel_elapsed,
 					PlayerState.travel_accel_km_s2, PlayerState.travel_cruise_cap_km_s)
+			var interstellar := PlayerState.is_current_trip_interstellar()
+			# This trip's own peak speed — same flight_profile() call Cockpit.
+			# gd's _build_transit already makes for the identical reason (its
+			# own _transit_peak_speed, driving the warp-point effect's
+			# intensity) — see format_speed_km_s's own comment for why an
+			# interstellar readout needs this instead of a raw velocity unit.
+			var peak_speed: float = TravelCalc.flight_profile(
+					PlayerState.travel_distance_km, PlayerState.travel_accel_km_s2,
+					PlayerState.travel_cruise_cap_km_s)["cruise_speed"]
 
 			# Same motion_elapsed/flight_progress Cockpit's own camera curve
 			# reads (see TravelCalc.flight_progress) — so this shrinking
@@ -107,16 +115,23 @@ func _process(delta: float) -> void:
 					PlayerState.travel_distance_km, motion_elapsed,
 					PlayerState.travel_accel_km_s2, PlayerState.travel_cruise_cap_km_s)
 			var remaining_km := PlayerState.travel_distance_km * (1.0 - progress)
-			var distance_text := ("%.0f KM" % remaining_km) if PlayerState.travel_distance_km < LOCAL_DISTANCE_THRESHOLD_KM \
-					else ("%.2f AU" % (remaining_km / TravelCalc.AU_KM))
-			_ship_status_distance_label.text = "·  DISTANCE: %s" % distance_text
+			# 2026-07-19: was a hand-rolled KM-vs-AU choice here — an
+			# interstellar trip's remaining distance showed as literally
+			# millions of "AU" (technically correct, unreadable). TravelCalc.
+			# format_distance_km auto-picks KM/AU/LY by magnitude instead —
+			# see that function's own comment.
+			_ship_status_distance_label.text = "·  DISTANCE: %s" % TravelCalc.format_distance_km(remaining_km)
 
 			var eta_text := "ETA: %s" % TravelCalc.format_duration(PlayerState.travel_remaining())
 			if PlayerState.travel_real_duration_sec > 0.0:
 				var real_remaining := PlayerState.travel_real_duration_sec * (1.0 - PlayerState.travel_progress())
 				eta_text += "  (REAL: %s)" % TravelCalc.format_duration(real_remaining)
-			_dest_line.text = "EN ROUTE TO %s  ·  %s  ·  SPEED: %.1f KM/S" % [
-					PlayerState.travel_target_id.to_upper(), eta_text, speed]
+			# Same 2026-07-19 fix, speed side — see format_speed_km_s's own
+			# comment for why an interstellar trip shows warp % instead of a
+			# literal velocity number (no unit makes that number small).
+			_dest_line.text = "EN ROUTE TO %s  ·  %s  ·  SPEED: %s" % [
+					PlayerState.travel_target_id.to_upper(), eta_text,
+					TravelCalc.format_speed_km_s(speed, interstellar, peak_speed)]
 
 	_layout_corner()
 

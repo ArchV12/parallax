@@ -262,6 +262,9 @@ func _ready() -> void:
 	_build_environment()
 	_build_camera()
 	_build_system()
+	_build_callout()
+	_build_location_marker()
+	_build_body_panel()
 	# Asteroids (the Main Belt/NEA/Centaur/Trojan populations) and the Known
 	# Locations sidebar are both Sol-specific content/infrastructure — the
 	# former is real solar-system flavor with no equivalent designed yet for
@@ -270,12 +273,14 @@ func _ready() -> void:
 	# hardcoded to KnownBodies.sol()/planets()). Skipping both for a
 	# non-Sol preview is more honest than showing Sol's own asteroid belt
 	# or destination list floating incongruously around a different star.
+	# MUST come after _build_callout — _build_locations_panel adds itself
+	# to _overlay_layer, which only exists once _build_callout has run
+	# (2026-07-19 bug: this used to run first, crashing on a null
+	# _overlay_layer the instant Sol's Known Locations panel tried to build,
+	# i.e. on every ordinary System View visit, not just a Proxima one).
 	if _star_system_name == "Sol":
 		_build_asteroids()
 		_build_locations_panel()
-	_build_callout()
-	_build_location_marker()
-	_build_body_panel()
 	AmbientManager.play_map_ambient()
 	# "Solar System" stays the exact existing label/wording for Sol — only a
 	# genuinely different system gets the generic "<Star> System" form.
@@ -1466,17 +1471,24 @@ func _type_callout_label(for_body: Node3D) -> void:
 		# selectable here has always already been registered, and this never
 		# blocks a real, clickable asteroid.
 		#
-		# 2026-07-18 — ALSO gated to _star_system_name == "Sol" now that a
-		# non-Sol preview's bodies (Proxima Centauri's planets) resolve
-		# non-null through get_entry too. Locking one would write a real
-		# Destination.locked_id whose au_distance is relative to a DIFFERENT
-		# star than every other Sol body's — TravelCalc's distance math
-		# would compare them as if measured from the same origin, producing
-		# a physically meaningless number, and Cockpit's transit-build would
-		# try to fly there using Sol-scale AU physics. This preview is
-		# look-but-don't-lock until real interstellar travel exists — see
-		# HUD.go_to_system_view's own comment.
-		if _star_system_name == "Sol" and KnownBodies.get_entry(for_body.name) != null:
+		# 2026-07-18 — was ALSO gated to _star_system_name == "Sol": locking a
+		# non-Sol body would write a real Destination.locked_id whose
+		# au_distance is relative to a DIFFERENT star than the player's real
+		# location, and back then TravelCalc's distance math had no notion of
+		# "different star" at all — it would've compared the two au_distance
+		# figures as if measured from the same origin, a physically
+		# meaningless number. That gap is closed now (2026-07-19): TravelCalc.
+		# estimate() detects a star_system mismatch and routes through real
+		# light-year math (see its own comment), and PlayerState.travel_to
+		# refuses an interstellar trip outright without a real Beyond Light
+		# Engine — so LOCK is safe for ANY body here now, Sol or not. This
+		# view is also only ever reached showing the system the player is
+		# REALLY in (ViewSwitcher/HUD.go_to_system_view both resolve off
+		# PlayerState.location_id — see ViewSwitcher._current_star_system_
+		# for_view), not a detached preview anymore, so a same-system lock
+		# here (Proxima Centauri b while standing at Proxima Centauri) is
+		# exactly as safe as locking Mars from Earth always was.
+		if KnownBodies.get_entry(for_body.name) != null:
 			_lock_button.present(for_body.name)
 		if Discoveries.is_scanned(for_body.name):
 			var entry := KnownBodies.get_entry(for_body.name)

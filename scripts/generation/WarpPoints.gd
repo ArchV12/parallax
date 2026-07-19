@@ -87,6 +87,7 @@ var warp_axis := Vector3(0.0, 0.0, -1.0)
 var _target_warp := 0.0
 var _warp := 0.0
 var _scroll := 0.0
+var _speed_mult := 1.0  # see set_style
 var _mesh_instance: MeshInstance3D
 var _material: ShaderMaterial
 
@@ -117,6 +118,26 @@ func set_axis(world_dir: Vector3) -> void:
 			_apply_axis_uniforms()
 
 
+# Reskins the SAME point field rather than building a second effect
+# (2026-07-19) — an interstellar Beyond Light warp reads as visibly more
+# intense than an ordinary Sub-Light burn: a color tint (default white, i.e.
+# no change — every existing Sub-Light call site just never calls this),
+# a scroll-speed multiplier layered on top of the existing warp_strength
+# ramp, and a point-size multiplier standing in for "denser" without
+# actually rebuilding the mesh (STAR_COUNT is baked at _ready() time; a
+# bigger/brighter point reads as a thicker stream of the same count, which
+# is cheaper and avoids a mesh rebuild call site altogether). Each Cockpit
+# scene load builds a brand-new WarpPoints instance (see Cockpit.gd's class
+# comment on GO always routing through a fresh scene), so there's no stale
+# tint to reset between trips — a same-system trip simply never calls this
+# and gets the shader's own plain-white defaults.
+func set_style(tint: Color, speed_mult: float, size_mult: float) -> void:
+	_speed_mult = speed_mult
+	if _material != null:
+		_material.set_shader_parameter("tint", Vector3(tint.r, tint.g, tint.b))
+		_material.set_shader_parameter("size_mult", size_mult)
+
+
 func _apply_axis_uniforms() -> void:
 	# Any vector not parallel to warp_axis works as a seed for building an
 	# orthonormal perpendicular pair — swap to a different seed on the rare
@@ -135,7 +156,7 @@ func _process(delta: float) -> void:
 	_warp = move_toward(_warp, _target_warp, WARP_RESPONSE * delta)
 	_mesh_instance.visible = _warp > 0.001
 	if _mesh_instance.visible:
-		_scroll = fmod(_scroll + SCROLL_SPEED * _warp * delta, TUNNEL_LENGTH)
+		_scroll = fmod(_scroll + SCROLL_SPEED * _speed_mult * _warp * delta, TUNNEL_LENGTH)
 		_material.set_shader_parameter("warp_strength", _warp)
 		_material.set_shader_parameter("scroll", _scroll)
 
@@ -186,6 +207,10 @@ uniform float scroll = 0.0;
 uniform vec3 warp_axis = vec3(0.0, 0.0, -1.0);
 uniform vec3 perp1 = vec3(1.0, 0.0, 0.0);
 uniform vec3 perp2 = vec3(0.0, 1.0, 0.0);
+// Reskin uniforms (see set_style) — default to a no-op (white, 1x size) so
+// every existing Sub-Light call site is unaffected without changing a line.
+uniform vec3 tint : source_color = vec3(1.0, 1.0, 1.0);
+uniform float size_mult = 1.0;
 
 varying float v_fade;
 
@@ -201,13 +226,13 @@ void vertex() {
 	float far_fade = 1.0 - smoothstep(%.1f, %.1f, depth);
 	v_fade = near_fade * far_fade * warp_strength;
 
-	float size = mix(%.1f, %.1f, COLOR.a) * (%.1f / max(depth, %.1f));
-	POINT_SIZE = clamp(size, %.1f, %.1f * 3.0);
+	float size = mix(%.1f, %.1f, COLOR.a) * (%.1f / max(depth, %.1f)) * size_mult;
+	POINT_SIZE = clamp(size, %.1f, %.1f * 3.0 * size_mult);
 	POSITION = PROJECTION_MATRIX * vec4(view_pos, 1.0);
 }
 
 void fragment() {
-	ALBEDO = COLOR.rgb * v_fade;
+	ALBEDO = COLOR.rgb * v_fade * tint;
 }
 """ % [TUNNEL_LENGTH, MIN_DEPTH,
 		MIN_DEPTH, NEAR_FADE_START,

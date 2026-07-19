@@ -13,6 +13,14 @@ signal travel_started
 signal travel_completed
 
 var location_id: String = "Earth"
+# In-game calendar (2026-07-19) — starts at the game's real setting year
+# (see HUD._year_label) and advances on every arrival by TravelCalc.
+# years_for_distance_km(that trip's real distance) — "the date on Earth is
+# year + travel distance in LY," the user's own design ask. Deliberately
+# applies to every trip uniformly (see that function's own comment for why
+# an in-system hop is a no-op at display precision) rather than a special
+# interstellar-only code path.
+var current_year: float = 2037.0
 var is_traveling: bool = false
 var travel_target_id: String = ""
 var travel_duration: float = 0.0
@@ -81,6 +89,14 @@ func _is_interstellar(from_id: String, to_id: String) -> bool:
 	if from_entry == null or to_entry == null:
 		return false
 	return from_entry.star_system != to_entry.star_system
+
+
+# Public wrapper for whatever trip is CURRENTLY in progress — UI (Ship
+# StatusStrip's live EN ROUTE readout) needs this to pick sane units
+# (TravelCalc.format_speed_km_s/format_distance_km) without duplicating the
+# star_system comparison itself.
+func is_current_trip_interstellar() -> bool:
+	return _is_interstellar(location_id, travel_target_id)
 
 
 func start_travel(target_id: String) -> void:
@@ -200,6 +216,7 @@ func set_engine_tier(tier: int) -> void:
 # showing stale text until something else happens to refresh it.
 func reset_for_new_game() -> void:
 	location_id = "Earth"
+	current_year = 2037.0
 	is_traveling = false
 	travel_target_id = ""
 	travel_duration = 0.0
@@ -244,6 +261,26 @@ func travel_remaining() -> float:
 	return maxf(travel_duration - travel_elapsed, 0.0)
 
 
+# Live, continuously-interpolated calendar reading while a trip is active —
+# current_year itself only ever changes atomically on actual arrival (see
+# _process below), and it holds the DEPARTURE-time value for the entire
+# trip in between (nothing else touches it mid-flight), so that's exactly
+# the base this counts up FROM. Scaled by the same flight_progress fraction
+# (real distance covered so far, accounting for the departure hold) every
+# other live in-flight readout already reads — ShipStatusStrip's SPEED/
+# DISTANCE, Cockpit's own camera curve — so the calendar visibly ticks up in
+# sync with the ship's actual motion instead of sitting frozen and then
+# jumping the instant travel_completed fires. Equal to plain current_year
+# whenever not traveling (progress is moot, nothing to interpolate).
+func live_current_year() -> float:
+	if not is_traveling:
+		return current_year
+	var motion_elapsed := maxf(travel_elapsed - TravelCalc.DEPARTURE_HOLD_SECONDS, 0.0)
+	var progress := TravelCalc.flight_progress(
+			travel_distance_km, motion_elapsed, travel_accel_km_s2, travel_cruise_cap_km_s)
+	return current_year + TravelCalc.years_for_distance_km(travel_distance_km) * progress
+
+
 func _process(delta: float) -> void:
 	if not is_traveling:
 		return
@@ -252,5 +289,10 @@ func _process(delta: float) -> void:
 		location_id = travel_target_id
 		travel_target_id = ""
 		is_traveling = false
+		# See current_year's own comment — advances by this trip's real
+		# distance regardless of trip type; travel_distance_km is still the
+		# just-completed trip's value here, read before anything below could
+		# reset it for a next one.
+		current_year += TravelCalc.years_for_distance_km(travel_distance_km)
 		travel_completed.emit()
 		location_changed.emit()

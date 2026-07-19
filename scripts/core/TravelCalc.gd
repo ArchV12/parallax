@@ -233,6 +233,25 @@ static func compress_by_star_tier_reach(distance_ly: float, tier: int) -> float:
 const LY_TO_KM := 9.4607e12
 
 
+# In-game calendar drift (2026-07-19, user design ask): however fast the
+# ship's own Beyond Light Engine makes a trip FEEL, Earth's calendar still
+# advances by (at least) the real light-travel time of the distance covered
+# — a warp/wormhole drive gets the SHIP there fast without violating
+# causality for the wider universe, but news of the trip, and the trip
+# itself, still can't outrun light from Earth's own reference frame. A
+# deliberate 1 light-year = 1 year simplification (not true relativity/time
+# dilation, which would also depend on the ship's own velocity profile — see
+# PlayerState.current_year for where this actually gets applied) — "the date
+# on Earth is year + travel distance in LY," the user's own framing. Applies
+# uniformly to ANY trip's real distance_km, not just interstellar ones —
+# same formula, no special-casing needed — since an in-system hop's
+# equivalent light-travel time is astronomically tiny (Earth<->Mars is a few
+# light-MINUTES) and simply doesn't move the needle at whole-year display
+# precision, exactly as it shouldn't.
+static func years_for_distance_km(distance_km: float) -> float:
+	return distance_km / LY_TO_KM
+
+
 # Real 3D distance (light-years) between two star systems — Sol is the fixed
 # origin NearbyStars.Entry.position_ly() is built around, so "Sol" resolves
 # to Vector3.ZERO directly and any other system resolves via its own
@@ -501,6 +520,70 @@ static func format_distance(estimate_result: Dictionary) -> String:
 	if estimate_result["local"]:
 		return "DISTANCE: Local orbital transfer"
 	return "DISTANCE: %.2f AU" % (estimate_result["distance_au"] as float)
+
+
+# --- Live in-flight readouts (2026-07-19) ---
+# ShipStatusStrip's EN ROUTE line reads raw travel_distance_km/current_speed_
+# km_s directly (no KnownBodies lookup, mid-frame, every SPEED_REFRESH_
+# INTERVAL) rather than going through estimate()'s Dictionary shape — these
+# two are the general-purpose "pick a sane unit for this raw number" helpers
+# for that path, same spirit as format_duration degrading MM:SS into
+# hours/days/years as a trip gets longer, just for distance/speed instead of
+# time. Before these existed, an interstellar trip's REMAINING distance
+# showed as literally millions of "AU" and its SPEED as billions of KM/S —
+# technically correct, completely unreadable, and nowhere near what these
+# numbers are FOR (getting a felt sense of "how far/fast," not a precise
+# figure) — see the user's own "the units displayed are ridiculous" report.
+
+# Above LOCAL_DISTANCE_THRESHOLD_KM (same figure ShipStatusStrip's own
+# now-removed local threshold used), AU reads better than KM; above
+# INTERSTELLAR_DISTANCE_THRESHOLD_KM (~0.01 ly, ~1500 AU — safely past
+# Pluto's own ~40 AU, so no real interplanetary distance in this game ever
+# crosses it), light-years read better than AU. Ordinary Sol travel never
+# reaches the LY tier at all; only an interstellar trip's own remaining
+# distance does.
+const LOCAL_DISTANCE_THRESHOLD_KM := AU_KM * 0.05
+const INTERSTELLAR_DISTANCE_THRESHOLD_KM := LY_TO_KM * 0.01
+
+
+static func format_distance_km(distance_km: float) -> String:
+	if distance_km < LOCAL_DISTANCE_THRESHOLD_KM:
+		return "%.0f KM" % distance_km
+	if distance_km < INTERSTELLAR_DISTANCE_THRESHOLD_KM:
+		return "%.2f AU" % (distance_km / AU_KM)
+	return "%.3f LY" % (distance_km / LY_TO_KM)
+
+
+# 2026-07-19, SECOND attempt — a multiple-of-c reading (the first attempt)
+# was STILL unreadable ("8562689.47c"). That's not a unit problem, it's a
+# magnitude problem no unit can fix: compressing a real ~4+ light-year trip
+# into well under a minute of gameplay time means the SYNTHESIZED velocity
+# (solved backward from distance/gameplay-duration — see PlayerState.
+# resolve_travel_engine) is necessarily millions of times past c REGARDLESS
+# of tier, since even light itself would take years to cover the real
+# distance. There's no honest unit that makes that number small — km/s,
+# c, anything derived from the real distance/real elapsed time is doomed the
+# same way. So this stops trying to show a literal velocity for an
+# interstellar trip at all, and shows the SAME bounded 0..1 "how far into
+# this trip's own accel/decel curve are we" fraction the warp-point visual
+# effect already computes (Cockpit.gd's _process: speed / _transit_peak_
+# speed) — reads naturally as "how fast, relative to top speed for this
+# hop," always a sane 0-100% number no matter how far or how compressed the
+# trip is. `interstellar` isn't inferred from the raw speed number itself (a
+# trip early in its burn, still ramping up from a dead stop, can have a
+# genuinely low instantaneous speed) — the caller already knows which kind
+# of trip this is (PlayerState.is_current_trip_interstellar), a more honest
+# signal than guessing from magnitude alone. Ordinary Sub-Light speeds stay
+# in KM/S, unaffected — those numbers were never the problem (real Sub-Light
+# physics were deliberately tuned to stay under c, so even Tier 4's ~0.99c
+# ceiling reads as an ordinary handful of digits).
+static func format_speed_km_s(speed_km_s: float, interstellar: bool, peak_speed_km_s: float = 0.0) -> String:
+	if interstellar:
+		var pct := 0.0
+		if peak_speed_km_s > 0.001:
+			pct = clampf(speed_km_s / peak_speed_km_s, 0.0, 1.0) * 100.0
+		return "WARP %.0f%%" % pct
+	return "%.1f KM/S" % speed_km_s
 
 
 # Every normal-gameplay-pacing trip stays well under an hour, so this only

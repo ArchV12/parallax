@@ -203,6 +203,51 @@ const DEPARTURE_SKIP_AFTER := 0.5                   # trips older than this are 
 # hits a genuine 1.0 (see _process's _in_transit branch).
 const ARRIVAL_STOP_LEAD_SECONDS := 1.0
 
+# Dedicated final-approach window (2026-07-19) — see _transit_display_
+# position. A FIXED number of real seconds, the same on every trip
+# regardless of engine tier/distance/speed — the whole point is guaranteeing
+# every arrival gets a legible "watch it grow" approach, not something tied
+# to (and therefore squeezed by) how fast a given trip's physics happen to
+# be. Clamped to at most half of a genuinely short trip's own burn duration
+# (see that function) so a floored/near-instant hop still gets SOME approach
+# rather than overshooting its own total flight time.
+const ARRIVAL_APPROACH_SECONDS := 4.0
+
+# How many multiples of the destination's own display radius out the
+# dedicated approach phase begins — "roughly where the body starts reading
+# as a discernible object" rather than a physically exact number, same
+# tune-by-feel spirit as ORBIT_RADIUS_MULT/MOON_MIN_RADIUS above. Everything
+# closer than this is the approach phase's to cover; everything farther is
+# the ordinary accel/cruise/decel burn, which now never has to bring the
+# camera all the way in to a legible distance on its own.
+const ARRIVAL_APPROACH_RANGE_MULT := 22.0
+
+# Synthetic departure distance for an interstellar warp (2026-07-19) — see
+# _build_interstellar_transit's own comment on why _camera.position can't be
+# used as the departure point the way a same-system trip's real orbit
+# position can. Comfortably larger than any real star's own "becomes
+# visible" threshold (end_radius * ARRIVAL_APPROACH_RANGE_MULT) so the far
+# phase is a genuine, perceptible deep-space leg, and well past
+# REBASE_THRESHOLD so the floating-origin rebase mechanic exercises
+# normally during a long warp rather than being a moot no-op.
+const INTERSTELLAR_DEPARTURE_DISTANCE := 5000.0
+
+# Interstellar warp reskin (2026-07-19) — a Beyond Light warp reads as
+# visibly more intense than an ordinary Sub-Light burn: a cool blue-violet
+# tint on WarpPoints (loosely a real-Doppler-blueshift nod, not an actual
+# simulation of one) plus a faster scroll and bigger points, PLUS
+# WarpDistortion — which, unlike WarpPoints' reskin, is an interstellar-
+# EXCLUSIVE effect entirely (not "on for everything, boosted here"; see the
+# _process call site's own bug-history comment for why that distinction
+# matters) — WarpPoints.set_style handles its own half; WarpDistortion.
+# set_strength_mult only ever tunes how strong the effect looks on the
+# genuinely-interstellar trips where it's the ONLY thing that turns it on
+# at all.
+const INTERSTELLAR_WARP_TINT := Color(0.55, 0.65, 1.0)
+const INTERSTELLAR_WARP_SPEED_MULT := 1.6
+const INTERSTELLAR_WARP_SIZE_MULT := 1.4
+const INTERSTELLAR_DISTORTION_MULT := 1.5
+
 # Floating origin — Godot renders in single-precision floats, and this
 # scene's real-scale layout (PLANET_DIST_AU_TO_UNITS) puts Saturn ~500K
 # units from the origin (Neptune >1M). A float32's resolution step near
@@ -226,6 +271,7 @@ const REBASE_THRESHOLD := 2048.0
 var _sun: DirectionalLight3D
 var _camera: Camera3D
 var _warp_points: WarpPoints
+var _warp_distortion: WarpDistortion  # screen-space blur/aberration overlay, layered alongside _warp_points — see _build_environment
 var _arrival_scan_row: ArrivalScanRow  # top-of-screen parallel Survey scan bars (Docs/Arrival Scan System.md) — see _build_survey_ui
 var _mining_panel: MiningOperationsPanel  # deposit-list gateway, opened via ArrivalScanRow's inline Mine button — see _build_survey_ui
 var _mining_status_strip: MiningStatusStrip  # bottom-right "mining in progress" readout — see _build_survey_ui
@@ -291,8 +337,9 @@ func _ready() -> void:
 	# The system PlayerState is (or, mid-interstellar-trip, still WAS —
 	# location_id only updates on arrival) currently in — see _build_universe.
 	# A mid-trip interstellar re-entry builds this fresh then immediately
-	# tears it back down again in _build_transit's warp branch; simpler than
-	# threading a "skip it" special case through here for a scene this small.
+	# rebuilds it AGAIN for the real destination system in _build_transit's
+	# warp branch (_build_interstellar_transit); simpler than threading a
+	# "skip it" special case through here for a scene this small.
 	var start_entry := KnownBodies.get_entry(PlayerState.location_id)
 	_build_universe(start_entry.star_system if start_entry != null else "Sol")
 	_build_survey_ui()
@@ -406,7 +453,12 @@ func _process(delta: float) -> void:
 		# the time you re-enter mid-trip after visiting another view. This
 		# is what makes a mid-trip re-entry land in the geometrically
 		# correct spot instead of resetting to the start.
-		_camera.position = _transit_start_pos.lerp(_transit_end_pos, progress)
+		#
+		# NOT a raw lerp(start, end, progress) anymore (2026-07-19) — see
+		# _transit_display_position's own comment for why a fast trip (a
+		# high Sub-Light tier, or any interstellar warp) made the
+		# destination pop into view with no perceptible approach at all.
+		_camera.position = _transit_display_position(approach_elapsed)
 
 		# Sun direction slews across the whole flight using this SAME
 		# `progress` fraction — see the comment on _sun_lean_from_dir/
@@ -429,7 +481,26 @@ func _process(delta: float) -> void:
 			var speed := TravelCalc.current_speed_km_s(
 					PlayerState.travel_distance_km, PlayerState.travel_duration,
 					PlayerState.travel_elapsed, PlayerState.travel_accel_km_s2, PlayerState.travel_cruise_cap_km_s)
-			_warp_points.set_target_warp(speed / _transit_peak_speed)
+			var warp_fraction := speed / _transit_peak_speed
+			_warp_points.set_target_warp(warp_fraction)
+			# 2026-07-19 bug: this used to call set_intensity(warp_fraction)
+			# unconditionally, for EVERY trip — so WarpDistortion's chromatic
+			# aberration (an inherently purple-fringing effect against
+			# WarpPoints' white streaks, independent of WarpPoints' own tint
+			# reskin) showed up on plain Sol hops too, not just interstellar
+			# ones — reported as "the interstellar purple effect" appearing
+			# on an ordinary Earth->Luna trip and a same-system Proxima->
+			# planet trip alike. WarpDistortion was only ever MEANT to be an
+			# interstellar-exclusive effect (see INTERSTELLAR_DISTORTION_MULT's
+			# own comment) — forced to 0 (fully hidden, see WarpDistortion.
+			# set_intensity's own visibility guard) for anything else, same
+			# gating WarpPoints.set_style's tint/speed/size reskin already
+			# correctly had from the start.
+			if _warp_distortion != null:
+				if PlayerState.is_current_trip_interstellar():
+					_warp_distortion.set_intensity(warp_fraction)
+				else:
+					_warp_distortion.set_intensity(0.0)
 
 		if PlayerState.travel_elapsed >= hold_duration:
 			var to_target := _transit_target_anchor - _camera.position
@@ -553,6 +624,9 @@ func _build_environment() -> void:
 	_warp_points = WarpPoints.new()
 	_warp_points.follow = _camera
 	add_child(_warp_points)
+
+	_warp_distortion = WarpDistortion.new()
+	add_child(_warp_distortion)
 
 
 # Cockpit-only right-side "what can I do here" panel (Docs/Science and
@@ -737,9 +811,15 @@ func _build_universe(star_system_name: String) -> void:
 
 
 # Frees the previous star system's persistent bodies and builds a fresh
-# universe for the new one — called only from _build_arrival, the moment an
-# interstellar trip's destination star differs from whatever's currently
-# built (see that function). Sol's own planets are just as disposable as
+# universe for the new one. Called from _build_interstellar_transit, at the
+# moment an interstellar trip actually STARTS (so the destination is real
+# and visible for the whole flight — see that function's own comment on why
+# this used to be deferred to arrival and why that was the bug); _build_
+# arrival also carries its own defensive copy of the same "star_system !=
+# _current_star_system" check, for any future path that might reach it
+# without going through a transit first (e.g. a cold load already sitting at
+# a foreign system) — normally a no-op by the time arrival fires, since this
+# already ran at trip start. Sol's own planets are just as disposable as
 # Proxima's here — there's only ever one system's worth of persistent bodies
 # alive at a time, never both at once, so leaving Sol for Proxima frees Sol's
 # 9 planets exactly the same way arriving back home later frees Proxima's.
@@ -1034,27 +1114,28 @@ func _build_arrival(location_id: String) -> void:
 	_roll_angle = 0.0  # every fresh arrival is a blank slate for the player's A/D roll preference — see its own comment
 	if _warp_points != null:
 		_warp_points.set_target_warp(0.0)
+	if _warp_distortion != null:
+		_warp_distortion.set_intensity(0.0)
 	var entry := KnownBodies.get_entry(location_id)
 	if entry == null:
 		entry = KnownBodies.get_entry("Earth")
 		location_id = "Earth"
 
-	# Interstellar arrival (2026-07-18) — the universe currently built is
-	# either the DEPARTURE system's (a cold load straight into a foreign
-	# system, e.g. re-entering Cockpit mid-warp) or nothing at all (the
-	# normal warp-transit path already freed it — see _build_interstellar_
-	# transit). Either way it isn't the ARRIVAL system's, so rebuild before
-	# anything below tries to find _primary in it. Interstellar destinations
-	# are always the star itself (Stellar View's GO only ever targets a
-	# star name — further in-system travel is a separate, same-system trip
-	# handled entirely by the branch below), so this only ever fires once
-	# per interstellar hop, not on every ordinary in-system arrival.
+	# Interstellar arrival (2026-07-18, 2026-07-19) — defensive only in the
+	# normal flow now: _build_interstellar_transit already rebuilds the
+	# arrival system's universe the MOMENT the trip starts (so the
+	# destination is real and visibly approachable for the whole flight, not
+	# just conjured at the last instant — see that function's own history),
+	# so entry.star_system == _current_star_system is already true by the
+	# time arrival fires. This still catches any path that could reach
+	# _build_arrival for a foreign system without going through a transit
+	# first (e.g. a cold load already sitting at Proxima).
 	if entry.star_system != _current_star_system:
 		_rebuild_universe_for(entry.star_system)
-		# A brand-new star's lighting must SNAP instantly, not slew — the
-		# continuous in-flight sun blend (_process's _in_transit branch) was
-		# tracking the warp corridor's synthetic direction, not any real
-		# star, so there's nothing meaningful to have been slewing FROM.
+		# A brand-new star's lighting must SNAP instantly, not slew — same
+		# reasoning _build_interstellar_transit's own sun handling already
+		# applies in the normal case; this is the same safeguard for the
+		# rebuild happening here instead.
 		was_in_transit = false
 
 	_primary_display_radius = _primary_radius_for(entry)
@@ -1338,6 +1419,70 @@ func _build_secondaries(entry: KnownBodies.Entry) -> void:
 # sense as a one-time "leaving orbit" flourish though, so
 # DEPARTURE_SKIP_AFTER gates IT specifically to genuine trip starts.
 
+# 2026-07-19 bug fix: a raw lerp(_transit_start_pos, _transit_end_pos,
+# flight_progress(...)) — the ONLY thing driving camera position before this
+# — ties how much the destination visually grows to the SAME real-physics
+# curve that drives the trip's total DURATION. At a high Sub-Light tier (or
+# any interstellar warp, whose whole point is being fast) that curve
+# compresses into just a few real seconds, and the fraction of TOTAL travel
+# distance where the destination is even large enough on screen to read as
+# "approaching" is tiny — so that whole visible-growth window collapsed into
+# well under a second, reading as an instant pop instead of an approach, at
+# every tier fast enough to matter. User's diagnosis: the accel/cruise/decel
+# burn should happen entirely OUT of visual range, with a separate,
+# consistent approach phase actually closing the visible gap.
+#
+# So this is two genuinely different phases now, both still driven by
+# approach_elapsed (the same clock everything else in _process reads), not a
+# single formula:
+#   - FAR phase (0 to burn_duration - ARRIVAL_APPROACH_SECONDS): camera
+#     flies from _transit_start_pos to a "just barely visible" waypoint
+#     ARRIVAL_APPROACH_RANGE_MULT body-radii out from the destination — still
+#     using flight_progress's real accel/decel SHAPE (rescaled to land
+#     exactly on that waypoint at the phase boundary, not the true
+#     destination), so the HUD speed readout and the camera's motion still
+#     visibly agree with each other. The destination itself never becomes
+#     legible during this phase, by construction — that's the whole fix.
+#   - APPROACH phase (the final ARRIVAL_APPROACH_SECONDS, ALWAYS exactly
+#     that many real seconds regardless of tier/distance/speed): camera
+#     covers the remaining short, fixed-size gap from that waypoint to
+#     _transit_end_pos on a smoothstep ease, independent of the trip's own
+#     physics entirely — this is what GUARANTEES every arrival gets the same
+#     legible "watch it grow" window no matter how fast the engine is.
+# _transit_target_radius == 0.0 (defensive only — every real trip sets it
+# via _build_transit/_build_interstellar_transit) collapses the approach
+# waypoint onto _transit_end_pos itself, i.e. falls back to the single-phase
+# shape this replaced.
+func _transit_display_position(approach_elapsed: float) -> Vector3:
+	var total := _transit_burn_duration
+	var approach_window := minf(ARRIVAL_APPROACH_SECONDS, total * 0.5)
+	var far_duration := maxf(total - approach_window, 0.01)
+
+	var travel_vec := _transit_end_pos - _transit_start_pos
+	var travel_dist := travel_vec.length()
+	var dir_n := travel_vec / travel_dist if travel_dist > 0.01 else _camera_base_forward
+	# Never further back than the departure point itself — a short hop
+	# (Earth<->Luna, say) whose whole travel distance is already less than
+	# the "visible range" just makes the entire trip the approach phase,
+	# which is correct: there's no meaningfully-invisible far leg to hide.
+	var approach_dist := minf(_transit_target_radius * ARRIVAL_APPROACH_RANGE_MULT, travel_dist)
+	var visible_start_pos := _transit_end_pos - dir_n * approach_dist
+
+	if approach_elapsed <= far_duration:
+		var far_progress := TravelCalc.flight_progress(
+				PlayerState.travel_distance_km, approach_elapsed,
+				PlayerState.travel_accel_km_s2, PlayerState.travel_cruise_cap_km_s)
+		var far_progress_at_boundary := TravelCalc.flight_progress(
+				PlayerState.travel_distance_km, far_duration,
+				PlayerState.travel_accel_km_s2, PlayerState.travel_cruise_cap_km_s)
+		var far_t := far_progress / maxf(far_progress_at_boundary, 0.001)
+		return _transit_start_pos.lerp(visible_start_pos, clampf(far_t, 0.0, 1.0))
+
+	var approach_t := clampf((approach_elapsed - far_duration) / approach_window, 0.0, 1.0)
+	var eased := approach_t * approach_t * (3.0 - 2.0 * approach_t)  # smoothstep — decelerate smoothly into the stop, no jolt at either end
+	return visible_start_pos.lerp(_transit_end_pos, eased)
+
+
 func _build_transit() -> void:
 	_in_transit = true
 	_arrival_stop_played = false
@@ -1487,38 +1632,37 @@ func _build_transit() -> void:
 
 
 # Unlike a same-system trip, the destination body isn't already a real,
-# positioned node anywhere — Proxima's star doesn't exist in THIS scene's
-# local space until _build_arrival rebuilds the universe for it. But every
-# system's own star DOES always rebuild at the exact same fixed anchor point
-# (_camera_base_forward * SOL_DISTANCE — see _build_universe's star_pos),
-# regardless of which system it is, so that anchor is known in advance and
-# can be flown toward for real, exactly like a same-system trip flies toward
-# a real body's real position. Real interstellar space is also genuinely
-# empty over these distances — there's nothing to fly PAST — so the
-# departure universe is freed outright rather than kept around as scenery
-# (nothing in it matters again until _build_arrival rebuilds fresh for
-# whichever system the ship actually ends up in).
+# positioned node anywhere at the moment GO is pressed — Proxima's star has
+# to be built. But every system's own star always rebuilds at the exact same
+# fixed anchor point (_camera_base_forward * SOL_DISTANCE — see _build_
+# universe's star_pos), regardless of which system it is, so nothing stops
+# building it RIGHT NOW instead of waiting for arrival — see the real bug
+# fix below.
 #
-# 2026-07-19 bug fix: an earlier version flew a synthetic corridor in a
-# fixed world direction (_camera_base_forward) with no relation to the
-# star's actual anchor position — since the camera's position drifts away
-# from world-origin-relative anchors during ordinary orbiting (see
-# REBASE_THRESHOLD's own comment on why bodies aren't near the origin), the
-# ship arrived facing wherever that arbitrary corridor happened to end, not
-# facing the star, and only _begin_orbit_settle's post-arrival reorientation
-# visibly turned it to face correctly. Flying toward the REAL anchor point
-# (not an arbitrary direction) makes the ship arrive already facing it, same
-# as every same-system arrival already does.
+# 2026-07-19, TWO bugs fixed here in sequence, same underlying symptom
+# ("the star just popped onto the screen, no approach"):
+#   1. Orientation — an earlier version flew a synthetic corridor in a fixed
+#      world direction with no relation to the star's actual anchor
+#      position, so the ship arrived facing wherever that arbitrary
+#      corridor happened to end, not facing the star. Fixed by flying
+#      toward the REAL anchor point instead of an arbitrary direction.
+#   2. THE REAL POP BUG — fixing the camera's approach CURVE (see _transit_
+#      display_position) didn't help, because there was nothing to reveal:
+#      this function never actually spawned the destination star's mesh
+#      during the flight, only camera position/target math. The star
+#      literally didn't exist as a rendered object until _build_arrival ran
+#      at the very END of the trip — so no matter how carefully the
+#      approach was paced, the FIRST frame the star was visible at all was
+#      already point-blank. Fixed by building the arrival system's real
+#      universe (_rebuild_universe_for) RIGHT NOW, at transit start, not at
+#      arrival — same "the destination is the real object the whole time,
+#      growing into view because the camera is genuinely approaching it"
+#      philosophy every same-system transit already follows (see the class
+#      comment above _build_transit). This also means _build_arrival's own
+#      rebuild check naturally no-ops later — _current_star_system already
+#      matches the destination by the time arrival fires.
 func _build_interstellar_transit(target_entry: KnownBodies.Entry) -> void:
-	for body: Node3D in _universe_bodies.values():
-		body.queue_free()
-	_universe_bodies.clear()
-	_universe_positions.clear()
-	# _current_star_system is deliberately left untouched here — _build_
-	# arrival still needs to see it disagree with the ARRIVAL system's own
-	# star_system to know a rebuild is owed (see that function). _rebuild_
-	# universe_for freeing an already-empty _universe_bodies at that point
-	# is a harmless no-op.
+	_rebuild_universe_for(target_entry.star_system)
 
 	_transit_body = null
 	_hidden_from_body = null
@@ -1526,12 +1670,28 @@ func _build_interstellar_transit(target_entry: KnownBodies.Entry) -> void:
 	_secondary_is_universe_body.clear()
 	_secondaries_built_for = ""
 
-	var star_anchor := _camera_base_forward * SOL_DISTANCE
-	var travel_dir := star_anchor - _camera.position
-	var dir := travel_dir.normalized() if travel_dir.length() > 0.01 else _camera_base_forward
+	var star_anchor: Vector3 = _universe_positions.get(target_entry.body_name, _sol_position)
+	# 2026-07-19, THIRD bug in this same "star just pops into view" saga:
+	# using _camera.position as the departure point (as a same-system trip
+	# correctly does — there, it's a real body it just left orbit around)
+	# was wrong here. GO always routes through a FRESH Cockpit scene load
+	# (see the class comment above _build_transit), and for an interstellar
+	# departure _build_arrival never runs first to actually park the camera
+	# anywhere real — it's still sitting at _build_environment's untouched
+	# Vector3.ZERO default. Every star (Sol included) sits at the SAME fixed
+	# anchor (_camera_base_forward * SOL_DISTANCE, only 480 units out) — so
+	# the "departure point" was accidentally already well within the star's
+	# own visible range from frame one, with no real deep-space leg at all.
+	# Fixed with a deliberately far SYNTHETIC departure point instead,
+	# anchored off the real star position along a fixed (arbitrary but
+	# consistent) direction — there's nothing else in the scene to be
+	# spatially consistent with during a warp anyway (see the freed-universe
+	# reasoning above), so which direction doesn't matter, only that it's
+	# genuinely far enough to guarantee an actual "can't see it yet" leg.
+	var dir := _camera_base_forward
 	var end_radius := _primary_radius_for(target_entry)
 
-	_transit_start_pos = _camera.position
+	_transit_start_pos = star_anchor - dir * INTERSTELLAR_DEPARTURE_DISTANCE
 	_transit_target_anchor = star_anchor
 	_transit_target_radius = end_radius
 	# Entry point just outside the star's own orbit shell, on the side
@@ -1541,14 +1701,20 @@ func _build_interstellar_transit(target_entry: KnownBodies.Entry) -> void:
 	_camera.position = _transit_start_pos
 	if _warp_points != null:
 		_warp_points.set_axis(dir)
+		_warp_points.set_style(INTERSTELLAR_WARP_TINT, INTERSTELLAR_WARP_SPEED_MULT, INTERSTELLAR_WARP_SIZE_MULT)
+	if _warp_distortion != null:
+		_warp_distortion.set_strength_mult(INTERSTELLAR_DISTORTION_MULT)
 
-	# Sun direction is irrelevant with no bodies left to light — held fixed
-	# for the duration rather than slewing toward anything real; _build_
-	# arrival snaps it correctly the instant the new system's universe is
-	# built (see that function's own comment on forcing was_in_transit
-	# false for an interstellar arrival specifically).
-	_sun_lean_from_dir = _sun.global_basis.z if _sun != null else dir
-	_sun_lean_to_pos = star_anchor
+	# _rebuild_universe_for (via _build_universe) already snapped the sun
+	# correctly for the new system, and its planets (real, persistent
+	# _universe_bodies now, same as Sol's) are genuinely visible/lit for the
+	# whole flight — capture the direction that snap resulted in and use it
+	# as BOTH ends of the blend _process's _in_transit branch still runs
+	# every frame, so that blend is a deliberate no-op instead of re-slewing
+	# away from an already-correct direction back toward itself.
+	var sun_dir_now := _sun.global_basis.z if _sun != null else dir
+	_sun_lean_from_dir = sun_dir_now
+	_sun_lean_to_pos = _sol_position + sun_dir_now
 
 
 # Rotates the camera from an arbitrary off-heading orientation onto its

@@ -424,6 +424,23 @@ func equipment_slot_ids() -> Array[String]:
 	return EQUIPMENT_SLOT_IDS
 
 
+# Debug/cheat tooling (2026-07-19, HUD's F3) — instantly grants the TOP tier
+# of every Ship Equipment slot at once, bypassing craft_technology's
+# Knowledge/Materials gate entirely (same spirit as free_upgrades below, a
+# one-shot "max everything" instead of "let the player craft freely from
+# here"). Top tier is read directly off each slot's own real instrument
+# chain length (instruments.size() - 1) rather than a hardcoded "4" — safe
+# for Beyond Light Engines' own 6-entry chain (None + 5 real drives) without
+# any special-casing. grant_tier's own "no-ops backward" floor makes this
+# safe to call repeatedly or after some tiers are already owned.
+func max_all_equipment() -> void:
+	for slot_id: String in equipment_slot_ids():
+		var activity: ActivityDef = _activities.get(slot_id)
+		if activity == null:
+			continue
+		grant_tier(slot_id, activity.instruments.size() - 1)
+
+
 # The TechnologyDef that would advance this activity from its currently
 # owned tier to the next, or null if it's not unlocked yet or already at the
 # top of its known chain ("Future Developments: Unknown," Phase 4).
@@ -477,11 +494,18 @@ func geological_data_for(body_id: String) -> GeologicalSurveyData:
 # keep their real files, everything else (Phobos, Ganymede, Enceladus,
 # Charon, ...) rolls procedurally the first time it's asked for. Still null
 # for anything genuinely unrecognized (a typo, an id KnownBodies has never
-# heard of) — same honesty as before this existed.
+# heard of) — same honesty as before this existed. 2026-07-19: the same
+# "generate what doesn't need bespoke authorship" idea now also covers any
+# Star/Terrestrial Planet/Dwarf Planet/Gas Giant/Ice Giant OUTSIDE Sol (see
+# _ensure_planet_data/PlanetResourceGenerator) — every Sol planet/Sol itself
+# is still hand-authored, this only ever fires for a body like Proxima
+# Centauri or its planets, which had NO procedural fallback at all until now
+# and silently returned null.
 func resource_data_for(body_id: String) -> ResourceSurveyData:
 	if not _resource_data.has(body_id):
 		_ensure_asteroid_data(body_id)
 		_ensure_moon_data(body_id)
+		_ensure_planet_data(body_id)
 	return _resource_data.get(body_id)
 
 
@@ -526,6 +550,23 @@ func _ensure_moon_data(body_id: String) -> void:
 	if entry == null or entry.body_type != "Moon":
 		return
 	_resource_data[body_id] = MoonResourceGenerator.generate(body_id)
+
+
+# Companion to _ensure_asteroid_data/_ensure_moon_data above, same
+# no-op-if-already-cached shape — covers everything else a real KnownBodies
+# entry can be (Star, Terrestrial Planet, Dwarf Planet, Gas Giant, Ice
+# Giant; see PlanetResourceGenerator.COVERED_BODY_TYPES) that isn't already
+# hand-authored, a Moon, or an asteroid. Every Sol body of these types
+# already has a RESOURCE_DATA_PATHS entry (so _resource_data.has(body_id)
+# is already true by the time this runs for any of them) — this only ever
+# actually fires for a non-Sol body like Proxima Centauri or its planets.
+func _ensure_planet_data(body_id: String) -> void:
+	if _resource_data.has(body_id):
+		return
+	var entry := KnownBodies.get_entry(body_id)
+	if entry == null or not PlanetResourceGenerator.COVERED_BODY_TYPES.has(entry.body_type):
+		return
+	_resource_data[body_id] = PlanetResourceGenerator.generate(body_id)
 
 
 # Registered by SystemView the instant it actually spawns an asteroid — see
