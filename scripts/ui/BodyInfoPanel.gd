@@ -122,6 +122,27 @@ func show_for(entry: KnownBodies.Entry) -> void:
 	_panel.open_animated()
 
 
+# A targeted body Nav Scan hasn't found yet (2026-07-19, see NavScan.gd) —
+# distinct from BOTH show_for (real data, already revealed) and start_scan
+# (the old per-target animated reveal, retired for this purpose). No data
+# rows, no timer, no animation: just enough to explain why LOCK/GO still
+# work on something the player can't identify yet. A real Nav Scan run from
+# wherever the player currently is — not this panel — is what actually
+# reveals it.
+func present_unidentified() -> void:
+	_title_label.text = "UNIDENTIFIED"
+	if _scan_tween != null:
+		_scan_tween.kill()
+		_scan_tween = null
+	_scanning_label.visible = false
+	_scanning_bar.visible = false
+	_clear_rows()
+	_add_row("STATUS", "Not yet detected")
+	_add_row("NOTE", "Run a Nav Scan in range to identify")
+	if not _panel.visible:
+		_panel.open_animated()
+
+
 # Fresh scan (or a rescan) — shows "SCANNING..." + a filling progress bar in
 # place of the data rows, then swaps to the real rows once it completes.
 # Doesn't replay the panel's own open/pop-in animation if it's already open

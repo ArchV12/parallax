@@ -66,6 +66,17 @@ const BUILDING_PATHS := {
 		"res://Data/Buildings/Atmospheric/building_climate_dynamics_institute.tres",
 		"res://Data/Buildings/Atmospheric/building_planetary_atmospherics_complex.tres",
 	],
+	# Transfer Station (2026-07-19) — deliberately NOT a Knowledge-generating
+	# category like the five above (multiplier 0.0 on its one and only tier):
+	# it's a logistics/economy gate, not a research building. Reuses this
+	# same Structure/tier bookkeeping anyway (construction cost gating,
+	# credits/materials spending, "already built here" tracking) rather than
+	# a whole parallel system, since all of that is identical regardless of
+	# what the structure actually DOES once built — see has_transfer_station
+	# below for the one thing that's actually different about it.
+	"transfer_station": [
+		"res://Data/Buildings/TransferStation/building_transfer_station.tres",
+	],
 }
 
 # category_id -> the Science Activity id that must have surveyed a body at
@@ -104,6 +115,32 @@ func _init() -> void:
 
 func reset_for_new_game() -> void:
 	_structures.clear()
+	# Earth starts with a Transfer Station already built (2026-07-19 design
+	# call) — seeded directly via _seed_free_structure rather than
+	# construct(), which would actually CHARGE a fresh game's starting
+	# Credits/Iron for something meant to just already be standing there.
+	_seed_free_structure("transfer_station", "Earth", 0)
+
+
+# Grants a structure without spending anything — construct()'s own cost
+# gates (Economy.balance, Deposits materials) are deliberately bypassed
+# here, unlike every player-initiated construction. Only ever meant for
+# session-start defaults (see reset_for_new_game above), not exposed
+# anywhere a player action could reach it.
+func _seed_free_structure(category_id: String, body_id: String, tier: int) -> void:
+	var s := Structure.new()
+	s.category_id = category_id
+	s.body_id = body_id
+	s.tier = tier
+	_structures[_key(category_id, body_id)] = s
+
+
+# Whether SellCargoPanel should be reachable at body_id at all (2026-07-19)
+# — the one thing Transfer Station actually DOES, unlike the five
+# Knowledge-generating categories: gates cargo sales rather than producing
+# anything passively (its multiplier is 0.0, see its own BuildingDef).
+func has_transfer_station(body_id: String) -> bool:
+	return tier_at("transfer_station", body_id) >= 0
 
 
 # Only categories with real .tres data — every buildable category has one now
@@ -138,7 +175,11 @@ func next_building_def(category_id: String, body_id: String) -> BuildingDef:
 # "anomalies" is bespoke — no single activity governs it (any of 4 surveys
 # can independently reveal one, see Research.ANOMALY_SOURCE_ACTIVITIES), so
 # it can't be expressed as a single SURVEY_PREREQUISITE_BY_CATEGORY lookup.
+# "transfer_station" is bespoke too, the opposite direction — always
+# buildable, no survey of any kind required (2026-07-19 design call).
 func has_required_survey(category_id: String, body_id: String) -> bool:
+	if category_id == "transfer_station":
+		return true
 	if category_id == "anomalies":
 		return Research.has_detected_anomaly(body_id)
 	var activity_id: String = SURVEY_PREREQUISITE_BY_CATEGORY.get(category_id, "")

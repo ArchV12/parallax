@@ -169,6 +169,14 @@ func _on_new_game() -> void:
 	Operations.reset_for_new_game()
 	Deposits.reset_for_new_game()
 	Economy.reset_for_new_game()
+	# 2026-07-19 fix: this was missing entirely — Buildings' own _structures
+	# is session-scoped in-memory state same as everything else on this
+	# list (see that autoload's own class comment), but nothing was ever
+	# clearing it on New Game, so a previous session's constructed
+	# buildings silently carried into the "new" one within the same running
+	# process. Also now the one place Earth's default Transfer Station gets
+	# (re)seeded — see Buildings.reset_for_new_game.
+	Buildings.reset_for_new_game()
 	HUD.reset_for_new_game()
 	get_tree().change_scene_to_file("res://scenes/boot_sequence.tscn")
 

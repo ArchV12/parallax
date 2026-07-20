@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="BuildingDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/science/BuildingDef.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "transfer_station"
+display_name = "Transfer Station"
+category_id = "transfer_station"
+tier = 0
+multiplier = 0.0
+credits_cost = 3000
+materials_requirements = Dictionary[String, int]({"Iron": 5000})
+knowledge_requirements = Dictionary[String, int]({})
+description = "Cargo-transfer infrastructure. Required at a location before mined materials can be sold there."

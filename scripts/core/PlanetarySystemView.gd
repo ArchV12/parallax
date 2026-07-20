@@ -92,6 +92,7 @@ var _panning := false
 var _looking := false  # RMB held — orbits the focused body, or free-fly mouselook when unfocused (see _unhandled_input, matching SystemView.gd)
 var _left_press_pos := Vector2.ZERO
 var _focused_body: Node3D = null
+var _focused_revealed: bool = true  # see _select — false for an un-scanned Nav Scan blip
 var _pan_target := Vector3.ZERO  # where the pivot eases to while unfocused — see _process's pivot-follow lerp
 # Camera's actual current local-Z offset from the pivot — eases toward
 # _distance (orbiting a focused body) or 0.0 (free-fly, rotate in place) each
@@ -110,8 +111,12 @@ var _callout_line_progress := 0.0
 var _line_tween: Tween
 var _sweep_elapsed := 0.0
 var _body_panel: BodyInfoPanel
-var _scan_prompt: ScanPrompt
 var _lock_button: LockButton
+var _nav_scan_button: UIButton
+var _nav_scan_label: Label
+var _nav_scan_active: bool = false
+var _nav_scan_elapsed: float = 0.0
+var _nav_scan_duration: float = 0.0
 var _callout_go_btn: UIButton
 var _return_scene: String = "res://scenes/system_view.tscn"  # where Esc with nothing focused goes back to — see _ready/HUD.pending_return_scene. No dedicated back button anymore (2026-07-18) — ViewSwitcher's always-on tab row covers that now.
 
@@ -127,6 +132,7 @@ func _ready() -> void:
 	_build_system()
 	_build_callout()
 	_build_body_panel()
+	_build_nav_scan_ui()
 	AmbientManager.play_map_ambient()
 	HUD.set_view("%s System" % _planet_name, "planetary")
 	# Re-clicking the PLANETARY tab while already here recenters instead of
@@ -147,6 +153,8 @@ func _process(delta: float) -> void:
 		var radius: float = orbit["radius"]
 		var body: Node3D = orbit["body"]
 		body.position = Vector3(cos(angle) * radius, 0.0, sin(angle) * radius)
+
+	_process_nav_scan(delta)
 
 	# Free-fly movement — unfocused only. Ported verbatim from SystemView.gd
 	# (see FREE_FLY_SPEED_MULT's own comment there for the full reasoning).
@@ -256,7 +264,30 @@ func _update_camera() -> void:
 
 func _build_system() -> void:
 	var planet_entry := KnownBodies.get_entry(_planet_name)
-	var planet := CanonicalBodyGenerator.generate(planet_entry.to_params(PLANET_RADIUS))
+	# This view only ever opens for a planet the player already legitimately
+	# knows about (a scanned planet's BodyInfoPanel button, or the planet
+	# they're CURRENTLY orbiting via ViewSwitcher's PLANETARY tab — see this
+	# file's header comment) — same "you're already here, no scan needed"
+	# reasoning SystemView.gd's own star gets. 2026-07-19: PlayerState's
+	# arrival handler now marks wherever you land as scanned too, but that
+	# only takes effect on the NEXT arrival — this covers a session already
+	# sitting at a planet from before that fix, and is the right permanent
+	# home for "this view's own central body never needs a scan gate"
+	# regardless. Harmless no-op if already scanned.
+	Discoveries.mark_scanned(_planet_name)
+	# 2026-07-19 bug: this used to always render via CanonicalBodyGenerator
+	# (real texture, flat-color fallback) regardless of entry.use_canonical_
+	# art — exactly the same class of bug SystemView.gd's own _build_body
+	# dispatcher was already built to fix for its planets (see the
+	# stellar-view-second-system memory), just never applied HERE for this
+	# view's own central body. Never surfaced before because every planet
+	# ever opened in this view was a real Sol planet (use_canonical_art =
+	# true) until Proxima's own planets became reachable — they have no
+	# real texture, so this rendered as CanonicalBodyGenerator's flat-color
+	# fallback instead of the procedural terrain Cockpit already shows for
+	# the same body. _build_planet_body below mirrors SystemView.gd's own
+	# dispatcher exactly.
+	var planet := _build_planet_body(planet_entry, PLANET_RADIUS)
 	add_child(planet)
 	_bodies.append(planet)
 	# Fixed at the origin, radius/speed 0 — folded into _orbits anyway so
@@ -283,9 +314,17 @@ func _build_system() -> void:
 		add_child(_build_orbit_ring(display_r))
 
 		var body_r := BODY_MIN_RADIUS + BODY_SIZE_SCALE * entry.radius_ratio
-		var body := _build_moon_body(entry, body_r)
+		# Nav Scan fog-of-war (2026-07-19, Proxima c's own invented moons —
+		# same gate SystemView.gd's planet loop and its own asteroid spawner
+		# both already use). Every Sol moon stays permanently pre-revealed
+		# (Discoveries' own Sol exception), matching how this view has always
+		# behaved for them — this branch only ever actually withholds
+		# anything for a non-Sol planet's moons.
+		var revealed := entry.star_system == "Sol" or Discoveries.is_scanned(entry.body_name)
+		var body: Node3D = _build_moon_body(entry, body_r) if revealed else _build_blip(body_r)
 		var start_angle := randf_range(0.0, TAU)  # rerolled each load
 		body.position = Vector3(cos(start_angle) * display_r, 0.0, sin(start_angle) * display_r)
+		body.name = entry.body_name  # true id even while unrevealed — LOCK/GO/selection all key off this, only the DISPLAYED label is withheld
 		add_child(body)
 		_bodies.append(body)
 
@@ -295,7 +334,64 @@ func _build_system() -> void:
 			"body_radius": body_r,
 			"angle": start_angle,
 			"speed": ORBIT_SPEED / maxf(entry.orbital_period_days, 0.1),
+			"entry": entry,       # kept so a later Nav Scan reveal can rebuild the real body in place
+			"revealed": revealed,
 		})
+
+
+# The central planet's own renderer (2026-07-19) — mirrors SystemView.gd's
+# _build_body dispatcher exactly (real texture vs. the matching procedural
+# generator by body_type), NOT _build_moon_body below, which is tuned
+# specifically for moons (crater fields) and would be the wrong look for a
+# full planet. The "Star" case can't actually occur here (this view only
+# ever centers on a planet), included anyway for parity/safety rather than
+# assuming that invariant holds forever.
+func _build_planet_body(entry: KnownBodies.Entry, display_radius: float) -> Node3D:
+	if entry.use_canonical_art:
+		return CanonicalBodyGenerator.generate(entry.to_params(display_radius))
+
+	var body: Node3D
+	match entry.body_type:
+		"Star":
+			var params := StarParams.new()
+			params.seed_value = entry.body_name.hash()
+			params.radius = display_radius
+			params.temperature = entry.surface_temp_k
+			params.turbulence = entry.star_turbulence
+			params.spot_activity = entry.star_spot_activity
+			params.corona = entry.atmosphere
+			params.corona_falloff = entry.atmo_falloff
+			body = StarGenerator.generate(params)
+		"Gas Giant", "Ice Giant":
+			var rng := RandomNumberGenerator.new()
+			rng.seed = entry.body_name.hash()
+			var params := GasGiantParams.new()
+			params.seed_value = entry.body_name.hash()
+			params.radius = display_radius
+			params.band_scale = rng.randf_range(1.0, 1.4)
+			params.turbulence = entry.gas_turbulence
+			params.storminess = entry.gas_storminess
+			params.band_contrast = entry.gas_band_contrast
+			params.atmosphere = entry.atmosphere
+			params.atmo_falloff = entry.atmo_falloff
+			params.ice = entry.body_type == "Ice Giant"
+			body = GasGiantGenerator.generate(params)
+		_:  # Terrestrial Planet, Dwarf Planet, or anything else — a real terrain surface is the sensible default
+			var rng := RandomNumberGenerator.new()
+			rng.seed = entry.body_name.hash()
+			var params := PlanetParams.new()
+			params.seed_value = entry.body_name.hash()
+			params.radius = display_radius
+			params.continent_scale = rng.randf_range(0.8, 1.4)
+			params.terrain_height = rng.randf_range(0.04, 0.08)
+			params.roughness = rng.randf_range(0.4, 0.6)
+			params.ocean_level = entry.ocean_level
+			params.atmosphere = entry.atmosphere
+			params.atmo_falloff = entry.atmo_falloff
+			params.detail = 5
+			body = PlanetGenerator.generate(params)
+	body.name = entry.body_name
+	return body
 
 
 func _build_moon_body(entry: KnownBodies.Entry, display_radius: float) -> Node3D:
@@ -324,6 +420,46 @@ func _build_moon_body(entry: KnownBodies.Entry, display_radius: float) -> Node3D
 	var body := MoonGenerator.generate(params)
 	body.name = entry.body_name
 	return body
+
+
+# A not-yet-revealed moon (2026-07-19, see NavScan.gd's run_for_moons) — a
+# small dim marker at the moon's real position rather than the real
+# generated body. Ported verbatim from SystemView.gd's own _build_blip
+# (same visual language for "unidentified" everywhere in the game) — deliberately
+# generic-looking so it can't leak what the moon is before an actual scan
+# does. Uses the same body_radius the real body would for click-select/
+# camera-focus sizing, so targeting/locking a blip feels identical to
+# targeting a real body.
+func _build_blip(display_radius: float) -> Node3D:
+	var blip := MeshInstance3D.new()
+	var mesh := SphereMesh.new()
+	mesh.radius = display_radius * 0.4
+	mesh.height = mesh.radius * 2.0
+	blip.mesh = mesh
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(0.5, 0.55, 0.6, 0.8)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.emission_enabled = true
+	mat.emission = UITheme.accent
+	mat.emission_energy_multiplier = 0.6
+	blip.material_override = mat
+
+	# "?" glyph in the middle — a billboarded Label3D always facing the
+	# camera regardless of orbit angle, same technique/tuning as SystemView.
+	# gd's own copy.
+	var glyph := Label3D.new()
+	glyph.text = "?"
+	glyph.font_size = 48
+	glyph.pixel_size = (mesh.radius * 1.6) / glyph.font_size
+	glyph.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	glyph.no_depth_test = true
+	glyph.modulate = Color(0.9, 0.95, 1.0)
+	glyph.outline_size = 8
+	glyph.outline_modulate = Color(0.1, 0.1, 0.15, 0.9)
+	blip.add_child(glyph)
+
+	return blip
 
 
 func _build_orbit_ring(radius: float) -> MeshInstance3D:
@@ -374,6 +510,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		if _focused_body != null:
 			_clear_focus()
 		else:
+			# 2026-07-19 bug: _return_scene is just a bare scene path — it
+			# carries no star-system context at all, so System View's own
+			# _ready() (pending_star_system_name if set, else "Sol") always
+			# fell back to Sol on the way back out, even when this view was
+			# a NON-Sol planet's (e.g. Proxima Centauri b). Set it explicitly
+			# from this planet's own real entry, same as HUD.go_to_system_
+			# view itself already does when navigating there directly.
+			var entry := KnownBodies.get_entry(_planet_name)
+			HUD.pending_star_system_name = entry.star_system if entry != null else "Sol"
 			HUD.go_to(_return_scene)
 		return
 
@@ -459,7 +604,14 @@ func _select(body: Node3D, body_radius: float) -> void:
 
 	_focused_body = body
 	_target_distance = maxf(body_radius * FOCUS_DISTANCE_MULT, MIN_DISTANCE)
-	_callout_label.text = body.name.to_upper()
+	# Nav Scan blips (2026-07-19) share this same click-select path but
+	# aren't revealed yet — withhold the real name from the callout label
+	# itself, not just BodyInfoPanel's data. _orbit_for_body defaults
+	# "revealed" to true for anything without that key (the central planet,
+	# which never gets the key at all — see _build_system) — same idiom
+	# SystemView.gd's own _select uses.
+	_focused_revealed = bool(_orbit_for_body(body).get("revealed", true))
+	_callout_label.text = body.name.to_upper() if _focused_revealed else "UNIDENTIFIED"
 
 	if _line_tween != null:
 		_line_tween.kill()
@@ -468,7 +620,6 @@ func _select(body: Node3D, body_radius: float) -> void:
 	_sweep_elapsed = 0.0
 	_callout_label.visible = false
 	_body_panel.hide_panel()
-	_scan_prompt.reset()
 	_lock_button.reset()
 	_callout_go_btn.visible = false
 
@@ -494,9 +645,18 @@ func _clear_focus() -> void:
 	_callout_line_progress = 0.0
 	_callout_label.visible = false
 	_body_panel.hide_panel()
-	_scan_prompt.reset()
 	_lock_button.reset()
 	_callout_go_btn.visible = false
+
+
+# Looks up the live orbit dict for a body currently in _orbits — used by
+# _select to read its "revealed"/"entry" fields (see _build_system). O(n)
+# over a handful of moons/the central planet; fine at this scale.
+func _orbit_for_body(body: Node3D) -> Dictionary:
+	for orbit: Dictionary in _orbits:
+		if orbit["body"] == body:
+			return orbit
+	return {}
 
 
 # The "I flew off into empty space and got lost" recovery — unlike Esc/
@@ -534,10 +694,6 @@ func _build_callout() -> void:
 	_callout_label.visible = false
 	_overlay_layer.add_child(_callout_label)
 
-	_scan_prompt = ScanPrompt.new()
-	_scan_prompt.pressed_for.connect(_on_scan_requested)
-	_overlay_layer.add_child(_scan_prompt)
-
 	_lock_button = LockButton.new()
 	_overlay_layer.add_child(_lock_button)
 
@@ -557,10 +713,17 @@ func _build_callout() -> void:
 
 
 # --- Body info panel ---
+# Gated behind Discoveries.is_scanned (2026-07-19, see NavScan.gd) — a
+# moon is an unknown property until a Nav Scan reveals it. The old
+# per-target animated SCAN/RESCAN flow (ScanPrompt + BodyInfoPanel.
+# start_scan) is retired here, same as SystemView.gd already did for
+# planets: nothing can be targeted before Nav Scan has already revealed
+# it, so that button could never fire anymore. An unrevealed target
+# instead shows BodyInfoPanel.present_unidentified() — see
+# _type_callout_label below.
 
 func _build_body_panel() -> void:
 	_body_panel = BodyInfoPanel.new()
-	_body_panel.scan_finished.connect(_on_scan_finished)
 	_overlay_layer.add_child(_body_panel)
 
 
@@ -571,18 +734,236 @@ func _on_callout_go_pressed() -> void:
 		HUD.go_to("res://scenes/cockpit.tscn")
 
 
-func _on_scan_requested(id: String) -> void:
-	if _focused_body == null or _focused_body.name != id:
+# --- Nav Scan ---
+# Standing system-wide action (2026-07-19, mirrors SystemView.gd's own —
+# see NavScan.gd for the full design rationale), scoped to just this
+# planet's own moons via NavScan.run_for_moons(_planet_name) rather than a
+# whole star system. Reveals whatever's within the owned Navigation
+# Scanner tier's radius of the player's REAL current position within this
+# planetary system — NOT this scene's free-fly camera position, so
+# free-camming around can't reveal anything for free. Hidden entirely for
+# a Sol planet (nothing to scan) and once nothing here is left unrevealed.
+# Local to this scene on purpose (a plain script timer, not an
+# Operations-style autoload background process) — leaving this view
+# mid-scan simply cancels it, same as BodyInfoPanel's old scan tween dying
+# with the panel; no cross-scene state to reconcile.
+
+const NAV_SCAN_TOP_MARGIN := 92.0
+# Right-anchored (2026-07-19, was left-anchored) — same corner
+# ArrivalScanRow's RUN SCANS button occupies in Cockpit. The two are never
+# on screen together (RUN SCANS is Cockpit-only, RUN NAV SCAN is System/
+# Planetary-view-only), so sharing the spot reads as "the one contextual
+# action button" living in a consistent place rather than two separate
+# button positions to remember.
+const NAV_SCAN_RIGHT_MARGIN := 24.0
+# Matches ArrivalScanRow's RUN SCANS button exactly (CARD_WIDTH/its own
+# custom_minimum_size) — same accent-styled CTA look, same footprint, since
+# the two now share the same screen corner across different views.
+const NAV_SCAN_WIDTH := 260.0
+const NAV_SCAN_HEIGHT := 40.0
+
+
+func _build_nav_scan_ui() -> void:
+	_nav_scan_button = UIButton.new()
+	_nav_scan_button.text = "RUN NAV SCAN"
+	_nav_scan_button.accent = true
+	_nav_scan_button.custom_minimum_size = Vector2(NAV_SCAN_WIDTH, NAV_SCAN_HEIGHT)
+	_nav_scan_button.anchor_left = 1.0
+	_nav_scan_button.anchor_right = 1.0
+	_nav_scan_button.offset_left = -NAV_SCAN_RIGHT_MARGIN - NAV_SCAN_WIDTH
+	_nav_scan_button.offset_right = -NAV_SCAN_RIGHT_MARGIN
+	_nav_scan_button.offset_top = NAV_SCAN_TOP_MARGIN
+	_nav_scan_button.offset_bottom = NAV_SCAN_TOP_MARGIN + NAV_SCAN_HEIGHT
+	_nav_scan_button.pressed.connect(_on_nav_scan_pressed)
+	_overlay_layer.add_child(_nav_scan_button)
+
+	_nav_scan_label = Label.new()
+	_nav_scan_label.add_theme_font_size_override("font_size", 12)
+	_nav_scan_label.add_theme_color_override("font_color", UITheme.accent)
+	UITheme.style_label_shadow(_nav_scan_label)
+	_nav_scan_label.anchor_left = 1.0
+	_nav_scan_label.anchor_right = 1.0
+	_nav_scan_label.offset_left = -NAV_SCAN_RIGHT_MARGIN - NAV_SCAN_WIDTH
+	_nav_scan_label.offset_right = -NAV_SCAN_RIGHT_MARGIN
+	_nav_scan_label.offset_top = NAV_SCAN_TOP_MARGIN + NAV_SCAN_HEIGHT + 4.0
+	_nav_scan_label.offset_bottom = NAV_SCAN_TOP_MARGIN + NAV_SCAN_HEIGHT + 24.0
+	_nav_scan_label.visible = false
+	_overlay_layer.add_child(_nav_scan_label)
+
+	_update_nav_scan_button_visibility()
+
+
+func _on_nav_scan_pressed() -> void:
+	var planet_entry := KnownBodies.get_entry(_planet_name)
+	if _nav_scan_active or (planet_entry != null and planet_entry.star_system == "Sol"):
 		return
-	var entry := KnownBodies.get_entry(id)
-	if entry != null:
-		_body_panel.start_scan(entry)
+	_nav_scan_active = true
+	_nav_scan_elapsed = 0.0
+	_nav_scan_duration = NavScan.scan_duration_sec()
+	_nav_scan_button.disabled = true
+	_nav_scan_label.visible = true
+	_nav_scan_label.text = "SCANNING..."
+	AudioManager.play("scanner")
 
 
-func _on_scan_finished(id: String) -> void:
-	if _focused_body != null and _focused_body.name == id:
-		_scan_prompt.mark_scanned()
+func _process_nav_scan(delta: float) -> void:
+	if not _nav_scan_active:
+		return
+	_nav_scan_elapsed += delta
+	if _nav_scan_elapsed >= _nav_scan_duration:
+		_resolve_nav_scan()
 
+
+func _resolve_nav_scan() -> void:
+	_nav_scan_active = false
+	_nav_scan_button.disabled = false
+	_nav_scan_label.visible = false
+	AudioManager.stop("scanner")
+	# Fan-out ping delay (see SystemView.gd's own copy) uses parent_distance_
+	# km here instead of AU — the same "how far from wherever the scan was
+	# fired" idea, just in this view's own (planet-relative, not star-
+	# relative) distance space. Origin resolution mirrors NavScan.run_for_
+	# moons' own — 0.0 at the planet itself, or the current moon's own
+	# parent_distance_km if docked at one.
+	var origin_km := 0.0
+	if PlayerState.location_id != _planet_name:
+		var loc_entry := KnownBodies.get_entry(PlayerState.location_id)
+		if loc_entry != null and loc_entry.parent == _planet_name:
+			origin_km = loc_entry.parent_distance_km
+	var revealed_names := NavScan.run_for_moons(_planet_name)
+
+	var newly_revealed: Array[Dictionary] = []  # {"body": Node3D, "body_radius": float, "dist_km": float}
+	for orbit: Dictionary in _orbits:
+		var entry: KnownBodies.Entry = orbit.get("entry")
+		if entry != null and entry.body_name in revealed_names:
+			var body_r: float = orbit["body_radius"]
+			var dist_km := absf(entry.parent_distance_km - origin_km)
+			_upgrade_orbit_to_revealed(orbit)
+			newly_revealed.append({"body": orbit["body"], "body_radius": body_r, "dist_km": dist_km})
+
+	if not newly_revealed.is_empty():
+		var max_dist_km := 0.0
+		for reveal: Dictionary in newly_revealed:
+			max_dist_km = maxf(max_dist_km, reveal["dist_km"] as float)
+		for reveal: Dictionary in newly_revealed:
+			var delay := 0.0
+			if max_dist_km > 0.0:
+				delay = ((reveal["dist_km"] as float) / max_dist_km) * PING_FAN_OUT_DURATION
+			_spawn_reveal_ping(reveal["body"] as Node3D, reveal["body_radius"] as float, delay)
+
+	_update_nav_scan_button_visibility()
+
+
+# Swaps a blip node for the real generated moon body, in place — same
+# position, same _orbits entry, so the live orbital animation in _process
+# doesn't skip a beat. If the blip was the currently-focused/targeted
+# body, re-runs a real _select() on it rather than hand-patching callout/
+# panel state in place — see SystemView.gd's own copy of this function for
+# the full "why not just patch the label" reasoning (a stale in-flight
+# typewriter coroutine racing the manual update).
+func _upgrade_orbit_to_revealed(orbit: Dictionary) -> void:
+	var entry: KnownBodies.Entry = orbit["entry"]
+	var old_body: Node3D = orbit["body"]
+	var body_r: float = orbit["body_radius"]
+	var old_pos := old_body.position
+	var was_focused := _focused_body == old_body
+
+	# Remove+free the blip SYNCHRONOUSLY before adding its replacement —
+	# see SystemView.gd's own copy of this function for why (a name
+	# collision at add_child otherwise, since queue_free() alone doesn't
+	# actually free old_body until end of frame).
+	_bodies.erase(old_body)
+	remove_child(old_body)
+	old_body.queue_free()
+
+	var new_body := _build_moon_body(entry, body_r)
+	new_body.name = entry.body_name
+	new_body.position = old_pos
+	add_child(new_body)
+	_bodies.append(new_body)
+
+	orbit["body"] = new_body
+	orbit["revealed"] = true
+
+	if was_focused:
+		_select(new_body, body_r)
+
+
+# See SystemView.gd's own _spawn_reveal_ping for the full design comment —
+# ported verbatim (smaller/thinner pulsing ring, nearest-first fan-out via
+# the delay param, "ping" sfx on actual start).
+const PING_PULSE_COUNT := 3
+const PING_TOTAL_DURATION := 2.0
+const PING_END_RADIUS_MULT := 3.5
+const PING_RING_WIDTH := 0.02
+const PING_PEAK_ALPHA := 0.85
+const PING_FAN_OUT_DURATION := 2.0
+
+
+func _spawn_reveal_ping(parent_body: Node3D, body_radius: float, delay: float = 0.0) -> void:
+	if delay > 0.0:
+		await get_tree().create_timer(delay).timeout
+		if not is_instance_valid(parent_body) or not is_instance_valid(self):
+			return
+
+	AudioManager.play("ping")
+
+	const SEGMENTS := 64
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in SEGMENTS:
+		var a0 := (float(i) / SEGMENTS) * TAU
+		var a1 := (float(i + 1) / SEGMENTS) * TAU
+		var in0 := Vector3(cos(a0), 0.0, sin(a0)) * (1.0 - PING_RING_WIDTH)
+		var out0 := Vector3(cos(a0), 0.0, sin(a0)) * (1.0 + PING_RING_WIDTH)
+		var in1 := Vector3(cos(a1), 0.0, sin(a1)) * (1.0 - PING_RING_WIDTH)
+		var out1 := Vector3(cos(a1), 0.0, sin(a1)) * (1.0 + PING_RING_WIDTH)
+		st.add_vertex(in0)
+		st.add_vertex(out0)
+		st.add_vertex(out1)
+		st.add_vertex(in0)
+		st.add_vertex(out1)
+		st.add_vertex(in1)
+
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(UITheme.accent.r, UITheme.accent.g, UITheme.accent.b, PING_PEAK_ALPHA)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.emission_enabled = true
+	mat.emission = UITheme.accent
+	mat.emission_energy_multiplier = 1.5
+
+	var ring := MeshInstance3D.new()
+	ring.mesh = st.commit()
+	ring.material_override = mat
+	ring.position = Vector3.ZERO
+	ring.scale = Vector3.ONE * body_radius
+	parent_body.add_child(ring)
+
+	var pulse_duration := PING_TOTAL_DURATION / PING_PULSE_COUNT
+	var tween := create_tween()
+	tween.set_loops(PING_PULSE_COUNT)
+	tween.tween_property(ring, "scale", Vector3.ONE * body_radius * PING_END_RADIUS_MULT, pulse_duration) \
+			.from(Vector3.ONE * body_radius).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tween.parallel().tween_property(mat, "albedo_color:a", 0.0, pulse_duration).from(PING_PEAK_ALPHA)
+	tween.finished.connect(ring.queue_free)
+
+
+func _update_nav_scan_button_visibility() -> void:
+	if _nav_scan_button == null:
+		return
+	var planet_entry := KnownBodies.get_entry(_planet_name)
+	if planet_entry != null and planet_entry.star_system == "Sol":
+		_nav_scan_button.visible = false
+		return
+	var anything_unrevealed := false
+	for orbit: Dictionary in _orbits:
+		var entry: KnownBodies.Entry = orbit.get("entry")
+		if entry != null and not bool(orbit.get("revealed", true)):
+			anything_unrevealed = true
+			break
+	_nav_scan_button.visible = anything_unrevealed
 
 
 var _callout_visible := false
@@ -607,10 +988,12 @@ func _update_callout() -> void:
 		_callout_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 		_callout_label.position = Vector2(
 				_callout_line_end.x + CALLOUT_LABEL_GAP, _callout_line_end.y - _callout_label.size.y * 0.5)
-		_scan_prompt.position = Vector2(
-				_callout_label.position.x, _callout_label.position.y + _callout_label.size.y + 6.0)
+		# LOCK now sits directly under the name — the old ScanPrompt button
+		# used to occupy this slot; Nav Scan is a standing system-wide action
+		# (see _build_nav_scan_ui), not a per-target control, so it doesn't
+		# need a row here at all.
 		_lock_button.position = Vector2(
-				_callout_label.position.x, _scan_prompt.position.y + _scan_prompt.size.y + 4.0)
+				_callout_label.position.x, _callout_label.position.y + _callout_label.size.y + 6.0)
 		_callout_go_btn.position = Vector2(
 				_callout_label.position.x, _lock_button.position.y + _lock_button.size.y + 4.0)
 
@@ -618,7 +1001,6 @@ func _update_callout() -> void:
 			_callout_stage = CalloutStage.REVEALING_LINE
 			_reveal_line()
 
-	_scan_prompt.visible = _callout_visible
 	_lock_button.visible = _callout_visible
 
 	# GO only for a focused body that's ALSO the current locked destination —
@@ -668,12 +1050,18 @@ func _type_callout_label(for_body: Node3D) -> void:
 		await get_tree().create_timer(char_time).timeout
 	if _focused_body == for_body:
 		_callout_stage = CalloutStage.DONE
-		_scan_prompt.present(for_body.name)
 		_lock_button.present(for_body.name)
+		# Data panel: real data once Nav Scan has revealed this body (the
+		# central planet is always pre-revealed, see _build_system's own
+		# Discoveries.mark_scanned call), a minimal "not yet detected" state
+		# otherwise (see NavScan.gd / BodyInfoPanel.present_unidentified) —
+		# no per-target animation either way, that step no longer exists here.
 		if Discoveries.is_scanned(for_body.name):
 			var entry := KnownBodies.get_entry(for_body.name)
 			if entry != null:
 				_body_panel.show_for(entry)
+		else:
+			_body_panel.present_unidentified()
 
 
 func _draw_callout() -> void:
@@ -689,15 +1077,13 @@ func _draw_callout() -> void:
 		var end_point := _callout_elbow.lerp(_callout_line_end, horiz_t)
 		_callout_overlay.draw_line(_callout_elbow, end_point, color, 1.5)
 
-	# One unified backdrop behind the name AND the scan/lock controls below
-	# it, not separately-boxed floating elements — reads as a single panel.
-	# Drawn under all three (this overlay is added to the tree before
-	# _callout_label/_scan_prompt/_lock_button, so it paints first).
+	# One unified backdrop behind the name AND the lock control below it, not
+	# separately-boxed floating elements — reads as a single panel. Drawn
+	# under both (this overlay is added to the tree before
+	# _callout_label/_lock_button, so it paints first).
 	if _callout_label.visible:
 		var pad := Vector2(8.0, 7.0)
 		var bg_rect := Rect2(_callout_label.position - pad, _callout_label.size + pad * 2.0)
-		if _scan_prompt.visible:
-			bg_rect = bg_rect.merge(Rect2(_scan_prompt.position - pad, _scan_prompt.size + pad * 2.0))
 		if _lock_button.visible:
 			bg_rect = bg_rect.merge(Rect2(_lock_button.position - pad, _lock_button.size + pad * 2.0))
 		if _callout_go_btn.visible:

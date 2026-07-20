@@ -15,6 +15,19 @@ extends Control
 # forced-common schema); only the presentation chrome is shared here.
 
 const PANEL_WIDTH := 420.0
+# 2026-07-19 fix — a long Resource Survey report (many detected materials,
+# each 2-3 lines) could grow taller than the viewport with nothing to
+# scroll it. Caps the BODY specifically, not the whole panel — title/
+# anomaly banner/Knowledge line/target line/DISMISS all stay fully visible
+# outside the scrolled area, only the variable-length material/section list
+# in the middle gets capped+scrolled.
+const BODY_MAX_HEIGHT := 400.0
+# Godot's default ScrollContainer scrollbar overlays content instead of
+# reserving space for it — this much right margin on the scrolled content
+# keeps the scrollbar thumb clear of the right-aligned Abundance/Extraction
+# values. Same fix SellCargoPanel already established for this exact bug
+# (see parallax-godot-technical-lessons memory).
+const SCROLLBAR_GUTTER := 16
 # Centering container's bottom anchor — less than 1.0 so the effective
 # center point sits above true screen-center, clear of the bottom console
 # (ConsolePanel.HEIGHT_CENTER, ~150px of a 1080px viewport). Grew a real
@@ -96,9 +109,20 @@ func _ready() -> void:
 	_target_label.add_theme_color_override("font_color", UITheme.dim)
 	vbox.add_child(_target_label)
 
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(0, BODY_MAX_HEIGHT)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vbox.add_child(scroll)
+
+	var scroll_margin := MarginContainer.new()
+	scroll_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll_margin.add_theme_constant_override("margin_right", SCROLLBAR_GUTTER)
+	scroll.add_child(scroll_margin)
+
 	_body_box = VBoxContainer.new()
 	_body_box.add_theme_constant_override("separation", 10)
-	vbox.add_child(_body_box)
+	_body_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll_margin.add_child(_body_box)
 
 	var dismiss := UIButton.new()
 	dismiss.text = "DISMISS"

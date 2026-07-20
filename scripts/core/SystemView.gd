@@ -107,6 +107,23 @@ const TROJAN_COUNT_MIN := 4  # per cluster (L4 and L5 each roll their own count)
 const TROJAN_COUNT_MAX := 8
 const TROJAN_INCLINATION_MAX_DEG := 20.0
 
+# Proxima Centauri's own debris field (2026-07-19 request) — INVENTED, not
+# real astronomy: unlike Sol's own Main Belt, no asteroid belt around
+# Proxima Centauri has actually been observed. Same "curate what's known
+# AND needed, invent the rest" rule as any other invented content, flagged
+# explicitly here since Proxima b/c's own real-data curation right above
+# might otherwise imply the same rigor applies to this. One modest, single
+# population only — Sol's 4-population taxonomy doesn't transfer: Proxima
+# has no Jupiter-scale planet for a Trojan cluster to anchor to, no second
+# inner world for an NEA-style jitter population, and "Centaur" is
+# Sol-specific naming. Placed between Proxima b (0.0485 AU) and c (1.5 AU)
+# so it sits visually in the gap between the two known planets.
+const PROXIMA_DEBRIS_AU_MIN := 0.7
+const PROXIMA_DEBRIS_AU_MAX := 1.1
+const PROXIMA_DEBRIS_COUNT_MIN := 10
+const PROXIMA_DEBRIS_COUNT_MAX := 18
+const PROXIMA_DEBRIS_INCLINATION_MAX_DEG := 15.0
+
 # Orbit/zoom/pan camera rig — same interaction model as Cosmic Forge's
 # viewer, just tuned for this scene's much larger scale (orbits span up to
 # ~41 units, vs. Cosmic Forge's single-object close-ups).
@@ -222,6 +239,7 @@ var _panning := false
 var _looking := false  # RMB held — orbits the focused body, or free-fly mouselook when unfocused (see _unhandled_input)
 var _left_press_pos := Vector2.ZERO
 var _focused_body: Node3D = null
+var _focused_revealed: bool = true  # see _select — false for an un-scanned Nav Scan blip
 var _pan_target := Vector3.ZERO  # where the pivot eases to while unfocused — see _process's pivot-follow lerp
 # Camera's actual current local-Z offset from the pivot — eases toward
 # _distance (orbiting a focused body) or 0.0 (free-fly, rotate in place) each
@@ -238,8 +256,12 @@ var _callout_line_progress := 0.0
 var _line_tween: Tween
 var _sweep_elapsed := 0.0
 var _body_panel: BodyInfoPanel
-var _scan_prompt: ScanPrompt
 var _lock_button: LockButton
+var _nav_scan_button: UIButton
+var _nav_scan_label: Label
+var _nav_scan_active: bool = false
+var _nav_scan_elapsed: float = 0.0
+var _nav_scan_duration: float = 0.0
 var _callout_go_btn: UIButton
 var _locations_panel: LocationsPanel
 
@@ -265,6 +287,7 @@ func _ready() -> void:
 	_build_callout()
 	_build_location_marker()
 	_build_body_panel()
+	_build_nav_scan_ui()
 	# Asteroids (the Main Belt/NEA/Centaur/Trojan populations) and the Known
 	# Locations sidebar are both Sol-specific content/infrastructure — the
 	# former is real solar-system flavor with no equivalent designed yet for
@@ -281,6 +304,15 @@ func _ready() -> void:
 	if _star_system_name == "Sol":
 		_build_asteroids()
 		_build_locations_panel()
+	elif _star_system_name == "Proxima Centauri":
+		_build_proxima_debris_field()
+	# Re-checked here, after whichever asteroid population above may have
+	# just added its own unrevealed blips to _orbits — _build_nav_scan_ui()
+	# already ran its own visibility check above, but only planets existed
+	# in _orbits at that point, so an asteroid-only-unrevealed system (every
+	# planet already scanned, asteroids never touched) would otherwise leave
+	# the button wrongly hidden until some other event happened to refresh it.
+	_update_nav_scan_button_visibility()
 	AmbientManager.play_map_ambient()
 	# "Solar System" stays the exact existing label/wording for Sol — only a
 	# genuinely different system gets the generic "<Star> System" form.
@@ -336,6 +368,8 @@ func _process(delta: float) -> void:
 		if atmo != null:
 			(atmo.material_override as ShaderMaterial).set_shader_parameter(
 					"sun_dir", (-body.position).normalized())
+
+	_process_nav_scan(delta)
 
 	# Free-fly movement — unfocused only (see FREE_FLY_SPEED_MULT's class
 	# comment). Forward/back/strafe move along the CAMERA's current facing
@@ -512,24 +546,26 @@ func _build_system() -> void:
 	add_child(star_light)
 
 	for entry: KnownBodies.Entry in KnownBodies.planets_of(_star_system_name):
-		# Navigation Scanner fog-of-war (2026-07-18) — Sol is permanently
-		# fully known by design (see the ship-equipment design memory's "Sol
-		# system exception"), so this only ever filters a non-Sol system.
-		# An undetected body simply doesn't get built at all this pass —
-		# no placeholder blip yet, that's a possible future refinement.
-		if _star_system_name != "Sol" and entry.min_nav_tier > Research.owned_tier("navigation_scanner"):
-			continue
 		var display_r := BASE_GAP + LOG_SCALE * log(entry.au_distance + 1.0)
 		add_child(_build_orbit_ring(display_r))
 
 		var body_r := BODY_MIN_RADIUS + BODY_SIZE_SCALE * sqrt(entry.radius_ratio)
-		var body := _build_body(entry, body_r)
+		# Nav Scan fog-of-war (2026-07-19, replaces the old static
+		# min_nav_tier gate) — Sol stays permanently fully known by design
+		# (see the ship-equipment design memory's "Sol system exception").
+		# An undetected non-Sol body still gets a real orbit ring + a
+		# lightweight blip standing in for it (see _build_blip) rather than
+		# being skipped outright — it needs to be targetable/lockable for
+		# travel even before NavScan reveals what it actually is.
+		var revealed := _star_system_name == "Sol" or Discoveries.is_scanned(entry.body_name)
+		var body := _build_body(entry, body_r) if revealed else _build_blip(body_r)
 		var start_angle := randf_range(0.0, TAU)  # rerolled each load
 		# Position (and sun_dir below) set immediately, not just registered
 		# for _process to place next frame — otherwise every planet flashes
 		# at the origin (the star's own position), wrongly lit, for one
 		# frame before its orbit angle first applies.
 		body.position = Vector3(cos(start_angle) * display_r, 0.0, sin(start_angle) * display_r)
+		body.name = entry.body_name  # true id even while unrevealed — LOCK/GO/selection all key off this, only the DISPLAYED label is withheld
 		add_child(body)
 		_bodies.append(body)
 
@@ -545,6 +581,8 @@ func _build_system() -> void:
 			"angle": start_angle,
 			"speed": minf(ORBIT_SPEED / pow(entry.au_distance, 1.5), MAX_ORBIT_SPEED),
 			"atmo": atmo,
+			"entry": entry,       # kept so a later Nav Scan reveal can rebuild the real body in place
+			"revealed": revealed,
 		})
 
 
@@ -609,6 +647,48 @@ func _build_body(entry: KnownBodies.Entry, display_radius: float) -> Node3D:
 	return body
 
 
+# A not-yet-revealed body (2026-07-19, see NavScan.gd) — a small dim
+# marker at the body's real position rather than the real generated planet.
+# Deliberately generic-looking (no hint of type/size/color) so it can't
+# leak what the body is before an actual scan does. Uses the same
+# body_radius the real body would for click-select/camera-focus sizing, so
+# targeting/locking a blip feels identical to targeting a real body.
+func _build_blip(display_radius: float) -> Node3D:
+	var blip := MeshInstance3D.new()
+	var mesh := SphereMesh.new()
+	mesh.radius = display_radius * 0.4
+	mesh.height = mesh.radius * 2.0
+	blip.mesh = mesh
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(0.5, 0.55, 0.6, 0.8)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.emission_enabled = true
+	mat.emission = UITheme.accent
+	mat.emission_energy_multiplier = 0.6
+	blip.material_override = mat
+
+	# "?" glyph in the middle (2026-07-19 request) — a billboarded Label3D
+	# rather than a texture baked onto the sphere, so it always faces the
+	# camera and reads correctly regardless of orbit angle instead of
+	# needing real UV unwrapping on a placeholder mesh. no_depth_test keeps
+	# it drawing on top of the (semi-transparent) sphere it sits inside,
+	# rather than getting lost in alpha-blend ordering with the sphere's own
+	# front-facing triangles.
+	var glyph := Label3D.new()
+	glyph.text = "?"
+	glyph.font_size = 48
+	glyph.pixel_size = (mesh.radius * 1.6) / glyph.font_size
+	glyph.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	glyph.no_depth_test = true
+	glyph.modulate = Color(0.9, 0.95, 1.0)
+	glyph.outline_size = 8
+	glyph.outline_modulate = Color(0.1, 0.1, 0.15, 0.9)
+	blip.add_child(glyph)
+
+	return blip
+
+
 # Existence + count for a population, purely a function of its own seed
 # label — free/derived, never persisted (see the "existence + count" tier in
 # the universe-generation-architecture memory). Sol is the only system today,
@@ -644,6 +724,20 @@ func _build_asteroids() -> void:
 				CENTAUR_AU_MIN, CENTAUR_AU_MAX, CENTAUR_INCLINATION_MAX_DEG)
 
 	_spawn_trojans()
+
+
+# Proxima's own asteroid content (2026-07-19) — deliberately a SEPARATE
+# function rather than a branch inside _build_asteroids above: that
+# function's whole shape (Main Belt/NEA/Centaur/Trojans, "Earth"/"Jupiter"
+# by hardcoded name) is real Sol taxonomy that doesn't transfer — see
+# PROXIMA_DEBRIS_* consts' own comment. A future third system would need
+# its own equivalent judgment call about what's plausible for IT, not a
+# blind reuse of either function.
+func _build_proxima_debris_field() -> void:
+	var count := _seeded_count("Proxima Centauri/Debris", PROXIMA_DEBRIS_COUNT_MIN, PROXIMA_DEBRIS_COUNT_MAX)
+	for i in count:
+		_spawn_dummy_asteroid("PCX-%d" % (i + 1),
+				PROXIMA_DEBRIS_AU_MIN, PROXIMA_DEBRIS_AU_MAX, PROXIMA_DEBRIS_INCLINATION_MAX_DEG)
 
 
 # Real Trojans aren't on their own AU-band orbit at all — they share
@@ -751,15 +845,24 @@ func _real_orbit_position_au(orbit: Dictionary, radius_au: float) -> Vector3:
 	return flat
 
 
-# Shared by every asteroid spawner below — builds the visual + designation,
-# leaving position/orbit-dict entirely to the caller since Trojans place
-# themselves very differently (see _spawn_trojan) from an AU-band population
-# (see _spawn_dummy_asteroid). Returns the built radius alongside the body
-# since AsteroidParams itself isn't otherwise visible to the caller.
-func _build_asteroid_body(rng: RandomNumberGenerator, seed_hash: int) -> Dictionary:
+# Shared by every asteroid spawner below — builds the visual only, leaving
+# position/orbit-dict entirely to the caller since Trojans place themselves
+# very differently (see _spawn_trojan) from an AU-band population (see
+# _spawn_dummy_asteroid).
+#
+# 2026-07-19 — display_radius/asteroid_name are now caller-supplied instead
+# of rolled/generated in here, so a Nav Scan blip (see _spawn_dummy_
+# asteroid) can be upgraded to its real body LATER, reusing the exact same
+# radius the blip was already sized at and the exact same name Discoveries/
+# Research were already keyed on — re-rolling either here would let the
+# revealed body silently mismatch the blip that represented it. Every
+# EXISTING (Sol) caller still rolls radius at the identical point in its own
+# rng sequence it always did, so this is a pure relocation, not a behavior
+# change — no existing asteroid's shape/size differs from before.
+func _build_asteroid_body(rng: RandomNumberGenerator, seed_hash: int, display_radius: float, asteroid_name: String) -> Node3D:
 	var params := AsteroidParams.new()
 	params.seed_value = seed_hash
-	params.radius = rng.randf_range(ASTEROID_RADIUS_MIN, ASTEROID_RADIUS_MAX)
+	params.radius = display_radius
 	# Ranges tightened 2026-07-13 after Cosmic Forge experimentation settled
 	# on new caps (irregularity 0.6, crater density/size 0.25, depth 0.1) —
 	# see CosmicForge.gd's ASTEROID_KNOBS, which these mirror.
@@ -771,8 +874,8 @@ func _build_asteroid_body(rng: RandomNumberGenerator, seed_hash: int) -> Diction
 	params.detail = 3  # capped flat — even the low end of the old 3-5 random range (2026-07-13) was still a noticeable load hitch across a whole belt population at this scale
 
 	var body := AsteroidGenerator.generate(params)
-	body.name = AsteroidDesignation.generate(seed_hash)
-	return {"body": body, "radius": params.radius}
+	body.name = asteroid_name
+	return body
 
 
 # `seed_id` is internal only — it seeds the shape/designation below AND now
@@ -791,13 +894,41 @@ func _spawn_dummy_asteroid(seed_id: String, au_min: float, au_max: float, inclin
 	var au := rng.randf_range(au_min, au_max)
 	var inclination := deg_to_rad(rng.randf_range(-inclination_max_deg, inclination_max_deg))
 	var asc_node := rng.randf_range(0.0, TAU)
-	var built := _build_asteroid_body(rng, seed_hash)
-	var body: Node3D = built["body"]
-	# Registers the EXACT au this asteroid is actually placed at below —
-	# see Research.gd's _asteroid_au_distance comment for why Cockpit/
-	# TravelCalc read this back instead of independently re-rolling their
-	# own guess at the same number.
-	Research.register_asteroid_orbit(body.name, au)
+	var asteroid_name := AsteroidDesignation.generate(seed_hash)
+	# Radius rolled here (was inside _build_asteroid_body) — same point in
+	# the rng sequence as before, so Sol's existing asteroids are visually
+	# unchanged, but now known BEFORE deciding blip-vs-real below, so a blip
+	# can be sized correctly without paying for the real mesh it isn't
+	# showing yet.
+	var body_radius := rng.randf_range(ASTEROID_RADIUS_MIN, ASTEROID_RADIUS_MAX)
+
+	# Registers the EXACT au (and star system) this asteroid is actually
+	# placed at below — see Research.gd's _asteroid_au_distance comment for
+	# why Cockpit/TravelCalc/NavScan read this back instead of independently
+	# re-rolling their own guess at the same number.
+	Research.register_asteroid_orbit(asteroid_name, au, _star_system_name)
+
+	# Nav Scan fog-of-war (2026-07-19, Proxima Centauri's own debris field —
+	# same gate the planet loop in _build_system uses). Sol's asteroids stay
+	# permanently pre-revealed (Discoveries' own Sol exception), matching
+	# how this population has always behaved — this branch only ever
+	# actually withholds anything for a non-Sol system.
+	#
+	# Unlike a planet, an unrevealed asteroid gets NO blip at all (2026-07-19
+	# follow-up) — a bare Node3D with no mesh, genuinely invisible rather
+	# than a dim "?" marker. A dozen-plus rocks all showing "something's
+	# here, unidentified" at once reads as clutter, not mystery, in a way a
+	# single unrevealed planet doesn't; they simply don't exist to the
+	# player until a scan actually finds them. "selectable" (read by
+	# _try_select below) tracks this separately from "revealed" since a
+	# planet stays selectable as a blip even before reveal but an
+	# invisible asteroid placeholder must not be.
+	var entry := KnownBodies.get_entry(asteroid_name)
+	var revealed := _star_system_name == "Sol" or Discoveries.is_scanned(asteroid_name)
+	var body: Node3D = (
+			_build_asteroid_body(rng, seed_hash, body_radius, asteroid_name) if revealed
+			else Node3D.new())
+	body.name = asteroid_name
 
 	# Phase along the orbit is the one thing that still rerolls each load —
 	# same "no real ephemeris yet" simplification the planets above already
@@ -814,12 +945,16 @@ func _spawn_dummy_asteroid(seed_id: String, au_min: float, au_max: float, inclin
 	_orbits.append({
 		"body": body,
 		"radius": display_r,
-		"body_radius": built["radius"],
+		"body_radius": body_radius,
 		"angle": start_angle,
 		"speed": ORBIT_SPEED / pow(au, 1.5),
 		"inclination": inclination,
 		"asc_node": asc_node,
 		"atmo": null,
+		"entry": entry,
+		"revealed": revealed,
+		"selectable": revealed,  # see the comment above — false only for a still-invisible asteroid placeholder
+		"seed_hash": seed_hash,  # only actually read if this stays unrevealed — see _upgrade_orbit_to_revealed's Asteroid branch
 	})
 
 
@@ -836,11 +971,17 @@ func _spawn_trojan(seed_id: String, jupiter_angle: float, jupiter_radius: float,
 			+ rng.randf_range(-TROJAN_CLUSTER_SPREAD_DEG, TROJAN_CLUSTER_SPREAD_DEG))
 	var inclination := deg_to_rad(rng.randf_range(-TROJAN_INCLINATION_MAX_DEG, TROJAN_INCLINATION_MAX_DEG))
 	var asc_node := rng.randf_range(0.0, TAU)
-	var built := _build_asteroid_body(rng, seed_hash)
-	var body: Node3D = built["body"]
+	var asteroid_name := AsteroidDesignation.generate(seed_hash)
+	# Same relocation as _spawn_dummy_asteroid's own radius roll — identical
+	# point in the rng sequence, so existing Trojans are visually unchanged.
+	var body_radius := rng.randf_range(ASTEROID_RADIUS_MIN, ASTEROID_RADIUS_MAX)
+	var body := _build_asteroid_body(rng, seed_hash, body_radius, asteroid_name)
 	# Co-orbital with Jupiter — registers Jupiter's own real AU distance,
-	# same reasoning as _spawn_dummy_asteroid's own registration.
-	Research.register_asteroid_orbit(body.name, jupiter_au)
+	# same reasoning as _spawn_dummy_asteroid's own registration. No blip
+	# gating here (unlike that function) — _spawn_trojans is only ever
+	# called from _build_asteroids, which is Sol-only, so this never
+	# actually runs for a system where anything could be unrevealed.
+	Research.register_asteroid_orbit(body.name, jupiter_au, _star_system_name)
 
 	var angle := jupiter_angle + offset
 	var flat_pos := Vector3(cos(angle) * jupiter_radius, 0.0, sin(angle) * jupiter_radius)
@@ -851,7 +992,7 @@ func _spawn_trojan(seed_id: String, jupiter_angle: float, jupiter_radius: float,
 	_orbits.append({
 		"body": body,
 		"radius": jupiter_radius,
-		"body_radius": built["radius"],
+		"body_radius": body_radius,
 		"angle": angle,
 		"speed": jupiter_speed,
 		"inclination": inclination,
@@ -914,6 +1055,23 @@ func _unhandled_input(event: InputEvent) -> void:
 		if _focused_body != null:
 			_clear_focus()
 		else:
+			# 2026-07-19 bug: _return_scene is just a bare scene path, no
+			# context about WHICH planet to show if it happens to be
+			# planetary_system_view.tscn (reachable now that the SOLAR
+			# SYSTEM tab can be pressed FROM a Planetary View — see
+			# ViewSwitcher._on_tab_pressed). Without this, PlanetarySystemView
+			# ._ready() found pending_planet_name empty and silently defaulted
+			# to Earth — a player at Proxima Centauri c got bounced to
+			# Earth's own Planetary View, then Sol's System view on the next
+			# Esc, having never actually left Proxima. Same ground-truth
+			# resolution ViewSwitcher._current_planet_for_view() already uses
+			# for its own PLANETARY tab (parent planet if currently at a
+			# moon, else the body itself) — not a stashed/passed-through
+			# value, so it's correct regardless of how this view was
+			# actually entered.
+			var loc_entry := KnownBodies.get_entry(PlayerState.location_id)
+			if loc_entry != null:
+				HUD.pending_planet_name = loc_entry.parent if loc_entry.parent != "" else loc_entry.body_name
 			HUD.go_to(_return_scene)
 		return
 
@@ -996,6 +1154,10 @@ func _try_select(screen_pos: Vector2) -> void:
 	var hit_orbit: Dictionary = {}
 	var hit_t := INF
 	for orbit: Dictionary in _orbits:
+		# Skip a still-invisible asteroid placeholder (see _spawn_dummy_
+		# asteroid's own comment) — nothing to click on nothing.
+		if not bool(orbit.get("selectable", true)):
+			continue
 		var body: Node3D = orbit["body"]
 		var radius: float = (orbit["body_radius"] as float) * SELECT_RADIUS_PAD
 		var t := _ray_sphere_hit(ray_origin, ray_dir, body.position, radius)
@@ -1030,10 +1192,17 @@ func _select(body: Node3D, body_radius: float) -> void:
 	# new target from wherever they currently are.
 	_focused_body = body
 	_target_distance = maxf(body_radius * FOCUS_DISTANCE_MULT, MIN_DISTANCE)
+	# Nav Scan blips (2026-07-19) share this same click-select path but
+	# aren't revealed yet — withhold the real name from the callout label
+	# itself, not just BodyInfoPanel's data, or the label would leak
+	# identity a scan hasn't earned. _orbit_for_body defaults "revealed" to
+	# true for anything without that key (the star, and Sol's own bodies
+	# entirely, which never get the key at all) — see _build_system.
+	_focused_revealed = bool(_orbit_for_body(body).get("revealed", true))
 	# The generator names its root node after the body (see
 	# CanonicalBodyGenerator), so the node's own name is already the display
 	# name — no separate lookup needed.
-	_callout_label.text = body.name.to_upper()
+	_callout_label.text = body.name.to_upper() if _focused_revealed else "UNIDENTIFIED"
 
 	# Restart the reveal fresh for the new target, killing whatever reveal
 	# was mid-flight for the previous one (switching targets mid-reveal is
@@ -1044,10 +1213,9 @@ func _select(body: Node3D, body_radius: float) -> void:
 	_callout_line_progress = 0.0
 	_sweep_elapsed = 0.0
 	_callout_label.visible = false
-	# Old target's readout/scan prompt would otherwise still be showing while
-	# the camera sweeps to the new one.
+	# Old target's readout would otherwise still be showing while the camera
+	# sweeps to the new one.
 	_body_panel.hide_panel()
-	_scan_prompt.reset()
 	_lock_button.reset()
 	_callout_go_btn.visible = false
 
@@ -1084,9 +1252,18 @@ func _clear_focus() -> void:
 	_callout_line_progress = 0.0
 	_callout_label.visible = false
 	_body_panel.hide_panel()
-	_scan_prompt.reset()
 	_lock_button.reset()
 	_callout_go_btn.visible = false
+
+
+# Looks up the live orbit dict for a body currently in _orbits — used by
+# _select to read its "revealed"/"entry" fields (see _build_system). O(n)
+# over a handful of planets/the star; fine at this scale, no index needed.
+func _orbit_for_body(body: Node3D) -> Dictionary:
+	for orbit: Dictionary in _orbits:
+		if orbit["body"] == body:
+			return orbit
+	return {}
 
 
 # The "I flew off into empty space and got lost" recovery — unlike Esc/
@@ -1134,10 +1311,6 @@ func _build_callout() -> void:
 	_callout_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_callout_label.visible = false
 	_overlay_layer.add_child(_callout_label)
-
-	_scan_prompt = ScanPrompt.new()
-	_scan_prompt.pressed_for.connect(_on_scan_requested)
-	_overlay_layer.add_child(_scan_prompt)
 
 	_lock_button = LockButton.new()
 	_overlay_layer.add_child(_lock_button)
@@ -1277,16 +1450,16 @@ func _draw_location_marker() -> void:
 
 
 # --- Body info panel ---
-# Gated behind ScanPrompt now, not automatic — planets are unknown
-# properties until scanned (see the scanning design conversation in
-# parallax-core-design-decisions memory). Pressing SCAN/RESCAN runs the
-# panel's own scanning animation; BodyInfoPanel.scan_finished then flips the
-# button to RESCAN. Already-scanned bodies skip straight to the data (see
-# _select() below), no animation needed.
+# Gated behind Discoveries.is_scanned now (2026-07-19, see NavScan.gd) —
+# planets are unknown properties until a Nav Scan reveals them. The old
+# per-target animated SCAN/RESCAN flow (ScanPrompt + BodyInfoPanel.
+# start_scan) is retired here: nothing can be targeted before Nav Scan has
+# already revealed it, so that button could never fire anymore. An
+# unrevealed target instead shows BodyInfoPanel.present_unidentified() —
+# see _start_name_typing below.
 
 func _build_body_panel() -> void:
 	_body_panel = BodyInfoPanel.new()
-	_body_panel.scan_finished.connect(_on_scan_finished)
 	_overlay_layer.add_child(_body_panel)
 
 
@@ -1297,21 +1470,305 @@ func _on_callout_go_pressed() -> void:
 		HUD.go_to("res://scenes/cockpit.tscn")
 
 
-func _on_scan_requested(id: String) -> void:
-	if _focused_body == null or _focused_body.name != id:
-		return  # focus moved on before this fired — stale, ignore
-	var entry := KnownBodies.get_entry(id)
-	if entry != null:
-		_body_panel.start_scan(entry)
+# --- Nav Scan ---
+# Standing system-wide action (2026-07-19, replaces the old per-target
+# ScanPrompt entirely — see NavScan.gd for the full design rationale).
+# Reveals whatever's within the owned Navigation Scanner tier's radius of
+# the player's REAL current position — NavScan.player_origin_au/
+# player_star_system read PlayerState.location_id, deliberately NOT this
+# scene's free-fly camera position, so free-camming around can't reveal
+# anything for free. Hidden entirely for Sol (nothing to scan) and once
+# nothing here is left unrevealed. Local to this scene on purpose (a plain
+# script timer, not an Operations-style autoload background process) —
+# leaving System View mid-scan simply cancels it, same as BodyInfoPanel's
+# old scan tween dying with the panel; no cross-scene state to reconcile.
+
+const NAV_SCAN_TOP_MARGIN := 92.0
+# Right-anchored (2026-07-19, was left-anchored) — same corner
+# ArrivalScanRow's RUN SCANS button occupies in Cockpit. The two are never
+# on screen together (RUN SCANS is Cockpit-only, RUN NAV SCAN is System/
+# Planetary-view-only), so sharing the spot reads as "the one contextual
+# action button" living in a consistent place rather than two separate
+# button positions to remember.
+const NAV_SCAN_RIGHT_MARGIN := 24.0
+# Matches ArrivalScanRow's RUN SCANS button exactly (CARD_WIDTH/its own
+# custom_minimum_size) — same accent-styled CTA look, same footprint, since
+# the two now share the same screen corner across different views.
+const NAV_SCAN_WIDTH := 260.0
+const NAV_SCAN_HEIGHT := 40.0
 
 
-func _on_scan_finished(id: String) -> void:
-	if _focused_body != null and _focused_body.name == id:
-		_scan_prompt.mark_scanned()
-	# _locations_panel isn't built at all for a non-Sol preview (see _ready)
-	# — nothing to refresh there.
-	if _locations_panel != null:
+func _build_nav_scan_ui() -> void:
+	_nav_scan_button = UIButton.new()
+	_nav_scan_button.text = "RUN NAV SCAN"
+	_nav_scan_button.accent = true
+	_nav_scan_button.custom_minimum_size = Vector2(NAV_SCAN_WIDTH, NAV_SCAN_HEIGHT)
+	_nav_scan_button.anchor_left = 1.0
+	_nav_scan_button.anchor_right = 1.0
+	_nav_scan_button.offset_left = -NAV_SCAN_RIGHT_MARGIN - NAV_SCAN_WIDTH
+	_nav_scan_button.offset_right = -NAV_SCAN_RIGHT_MARGIN
+	_nav_scan_button.offset_top = NAV_SCAN_TOP_MARGIN
+	_nav_scan_button.offset_bottom = NAV_SCAN_TOP_MARGIN + NAV_SCAN_HEIGHT
+	_nav_scan_button.pressed.connect(_on_nav_scan_pressed)
+	_overlay_layer.add_child(_nav_scan_button)
+
+	_nav_scan_label = Label.new()
+	_nav_scan_label.add_theme_font_size_override("font_size", 12)
+	_nav_scan_label.add_theme_color_override("font_color", UITheme.accent)
+	UITheme.style_label_shadow(_nav_scan_label)
+	_nav_scan_label.anchor_left = 1.0
+	_nav_scan_label.anchor_right = 1.0
+	_nav_scan_label.offset_left = -NAV_SCAN_RIGHT_MARGIN - NAV_SCAN_WIDTH
+	_nav_scan_label.offset_right = -NAV_SCAN_RIGHT_MARGIN
+	_nav_scan_label.offset_top = NAV_SCAN_TOP_MARGIN + NAV_SCAN_HEIGHT + 4.0
+	_nav_scan_label.offset_bottom = NAV_SCAN_TOP_MARGIN + NAV_SCAN_HEIGHT + 24.0
+	_nav_scan_label.visible = false
+	_overlay_layer.add_child(_nav_scan_label)
+
+	_update_nav_scan_button_visibility()
+
+
+func _on_nav_scan_pressed() -> void:
+	if _nav_scan_active or _star_system_name == "Sol":
+		return
+	_nav_scan_active = true
+	_nav_scan_elapsed = 0.0
+	_nav_scan_duration = NavScan.scan_duration_sec()
+	_nav_scan_button.disabled = true
+	_nav_scan_label.visible = true
+	_nav_scan_label.text = "SCANNING..."
+	AudioManager.play("scanner")
+
+
+func _process_nav_scan(delta: float) -> void:
+	if not _nav_scan_active:
+		return
+	_nav_scan_elapsed += delta
+	if _nav_scan_elapsed >= _nav_scan_duration:
+		_resolve_nav_scan()
+
+
+func _resolve_nav_scan() -> void:
+	_nav_scan_active = false
+	_nav_scan_button.disabled = false
+	_nav_scan_label.visible = false
+	AudioManager.stop("scanner")
+	# Read BEFORE NavScan.run() flips anything to revealed — origin_au is
+	# the same radial distance NavScan itself used to decide what's in
+	# range, reused here as the "how far" measure for the ping fan-out
+	# below (2026-07-19 request), rather than inventing a second distance
+	# concept for the same scan.
+	var origin_au := NavScan.player_origin_au()
+	var revealed_names := NavScan.run()
+
+	# Upgrade every newly-revealed body immediately (so it's correct right
+	# away regardless of the ping), but stagger the PING itself so nearer
+	# objects visibly ping before farther ones — a wall of simultaneous
+	# rings read as one blob, especially for an asteroid cluster, rather
+	# than a wave rippling outward from wherever the player is standing.
+	var newly_revealed: Array[Dictionary] = []  # {"body": Node3D, "body_radius": float, "dist_au": float}
+	for orbit: Dictionary in _orbits:
+		var entry: KnownBodies.Entry = orbit.get("entry")
+		if entry != null and entry.body_name in revealed_names:
+			var body_r: float = orbit["body_radius"]
+			var dist_au := absf(entry.au_distance - origin_au)
+			_upgrade_orbit_to_revealed(orbit)
+			newly_revealed.append({"body": orbit["body"], "body_radius": body_r, "dist_au": dist_au})
+
+	if not newly_revealed.is_empty():
+		var max_dist_au := 0.0
+		for reveal: Dictionary in newly_revealed:
+			max_dist_au = maxf(max_dist_au, reveal["dist_au"] as float)
+		for reveal: Dictionary in newly_revealed:
+			# max_dist_au == 0 only when every single reveal sits at the
+			# exact same distance (or there's just one) — no fan-out to
+			# spread across, everything pings at once (delay 0).
+			var delay := 0.0
+			if max_dist_au > 0.0:
+				delay = ((reveal["dist_au"] as float) / max_dist_au) * PING_FAN_OUT_DURATION
+			_spawn_reveal_ping(reveal["body"] as Node3D, reveal["body_radius"] as float, delay)
+
+	if not revealed_names.is_empty() and _locations_panel != null:
 		_locations_panel.refresh()
+	_update_nav_scan_button_visibility()
+
+
+# Swaps a blip node for the real generated body, in place — same position,
+# same _orbits entry, so the live orbital animation in _process doesn't
+# skip a beat. If the blip was the currently-focused/targeted body, the
+# callout label and data panel refresh too, live, right in front of the
+# player — watching System View while a scan resolves should show blips
+# actually becoming real bodies, not just be correct next time you look.
+func _upgrade_orbit_to_revealed(orbit: Dictionary) -> void:
+	var entry: KnownBodies.Entry = orbit["entry"]
+	var old_body: Node3D = orbit["body"]
+	var body_r: float = orbit["body_radius"]
+	var old_pos := old_body.position
+	var was_focused := _focused_body == old_body
+
+	# Remove+free the blip SYNCHRONOUSLY before adding its replacement.
+	# queue_free() alone doesn't actually free old_body until end of frame,
+	# and both nodes want the exact same name (entry.body_name, set on the
+	# blip back in _build_system) — add_child(new_body) below would
+	# otherwise momentarily collide with a still-present sibling of the
+	# same name. 2026-07-19 bug this fixes: the callout showed a raw
+	# "@Node3D@N" auto-generated name and BodyInfoPanel disagreed (still
+	# showed UNIDENTIFIED) after a Nav Scan revealed a focused body —
+	# Godot silently renamed new_body out from under the collision instead
+	# of erroring, so it never surfaced as a crash.
+	_bodies.erase(old_body)
+	remove_child(old_body)
+	old_body.queue_free()
+
+	# Asteroids need their own dedicated builder (real shape/crater params,
+	# not a planet's terrain/gas-band generator) — reseeded fresh off the
+	# same seed_hash the blip was originally spawned with, so the eventual
+	# shape is deterministic and stable per identity even though this runs
+	# well after (and completely separately from) the rng stream that
+	# originally rolled this asteroid's orbit (see _spawn_dummy_asteroid).
+	var new_body: Node3D
+	if entry.body_type == "Asteroid":
+		var rng := RandomNumberGenerator.new()
+		rng.seed = int(orbit["seed_hash"])
+		new_body = _build_asteroid_body(rng, int(orbit["seed_hash"]), body_r, entry.body_name)
+	else:
+		new_body = _build_body(entry, body_r)
+	new_body.name = entry.body_name
+	new_body.position = old_pos
+	add_child(new_body)
+	_bodies.append(new_body)
+
+	var atmo := new_body.get_node_or_null("Atmosphere") as MeshInstance3D
+	if atmo != null:
+		(atmo.material_override as ShaderMaterial).set_shader_parameter(
+				"sun_dir", (-new_body.position).normalized())
+
+	orbit["body"] = new_body
+	orbit["atmo"] = atmo
+	orbit["revealed"] = true
+	orbit["selectable"] = true  # an asteroid placeholder was invisible/unclickable until now — see _spawn_dummy_asteroid
+
+	# If this blip was the player's current target, re-run a real _select()
+	# on the new body rather than hand-patching callout/panel state in
+	# place. _select() properly kills any in-flight reveal animation; the
+	# blip's own typewriter coroutine (_type_callout_label) could still be
+	# mid-await here (e.g. player clicked the blip, then a scan resolved it
+	# before "UNIDENTIFIED" finished typing) holding a stale `for_body`
+	# reference to the now-freed blip — patching fields by hand risked
+	# racing that coroutine instead of cleanly superseding it.
+	if was_focused:
+		_select(new_body, body_r)
+
+
+# A "ping" ring expanding outward from a body's own position/radius the
+# instant Nav Scan reveals it (2026-07-19 request) — makes a multi-body
+# reveal (a handful of asteroids resolving out of the same scan, say)
+# visually legible as "these specific things just appeared," not a silent
+# pop you'd only notice by re-scanning the whole view. One ring mesh built
+# once at local radius 1.0 (same flat-torus construction _build_orbit_ring
+# already uses), then grown via the body's own SCALE and faded via Tween —
+# cheaper and simpler than remeshing every frame, same "animate the
+# transform, not the geometry" idiom as everything else that moves here.
+#
+# 2026-07-19 fix: parented directly to the revealed body itself, at LOCAL
+# position zero, rather than spawned once at a snapshotted world position.
+# A body kept orbiting for the whole ~2s pulse duration after that
+# snapshot — close-in/fast-orbiting planets visibly drifted out from under
+# their own ping before it finished. As a child, its global position just
+# rides along with the body's every frame for free, same as the body's own
+# Atmosphere mesh already does — no per-frame tracking code needed.
+#
+# Pulses PING_PULSE_COUNT times over PING_TOTAL_DURATION seconds (2026-07-19
+# follow-up — a single expand-and-fade read as too big/heavy) rather than
+# one continuous grow: set_loops() replays the same tween steps, and each
+# tweener's .from(...) forces scale/alpha back to their starting values at
+# the top of every loop — without .from(), a loop would just continue from
+# wherever the previous one left off (already fully grown/transparent) and
+# every pulse after the first would be invisible.
+const PING_PULSE_COUNT := 3
+const PING_TOTAL_DURATION := 2.0
+const PING_END_RADIUS_MULT := 3.5  # relative to the revealed body's own display radius
+const PING_RING_WIDTH := 0.02      # in the same local units the ring is built at (radius 1.0), before body_radius scaling
+const PING_PEAK_ALPHA := 0.85
+# How long the whole batch takes to finish starting, nearest to furthest
+# (2026-07-19 request) — the NEAREST newly-revealed body pings immediately
+# (delay 0), the FURTHEST one waits this long before its own ping begins;
+# everything else in between is linearly interpolated by _resolve_nav_scan.
+# Each individual ping still runs its own full PING_TOTAL_DURATION once it
+# starts — this only staggers the START times, so the total wall-clock time
+# to see everything finish is PING_FAN_OUT_DURATION + PING_TOTAL_DURATION,
+# not a replacement for it.
+const PING_FAN_OUT_DURATION := 2.0
+
+
+# delay defers the ping's start (see PING_FAN_OUT_DURATION above) without
+# blocking the caller — this becomes a coroutine the instant `delay > 0.0`,
+# fired and forgotten by _resolve_nav_scan rather than awaited.
+func _spawn_reveal_ping(parent_body: Node3D, body_radius: float, delay: float = 0.0) -> void:
+	if delay > 0.0:
+		await get_tree().create_timer(delay).timeout
+		# The body (or this whole view) could be gone by the time a longer
+		# delay elapses — e.g. the player left System View mid-fan-out.
+		if not is_instance_valid(parent_body) or not is_instance_valid(self):
+			return
+
+	AudioManager.play("ping")  # Assets/sfx/ping.ogg — fires per-ping, at its own (possibly delayed) start, not once per batch
+
+	const SEGMENTS := 64
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in SEGMENTS:
+		var a0 := (float(i) / SEGMENTS) * TAU
+		var a1 := (float(i + 1) / SEGMENTS) * TAU
+		var in0 := Vector3(cos(a0), 0.0, sin(a0)) * (1.0 - PING_RING_WIDTH)
+		var out0 := Vector3(cos(a0), 0.0, sin(a0)) * (1.0 + PING_RING_WIDTH)
+		var in1 := Vector3(cos(a1), 0.0, sin(a1)) * (1.0 - PING_RING_WIDTH)
+		var out1 := Vector3(cos(a1), 0.0, sin(a1)) * (1.0 + PING_RING_WIDTH)
+		st.add_vertex(in0)
+		st.add_vertex(out0)
+		st.add_vertex(out1)
+		st.add_vertex(in0)
+		st.add_vertex(out1)
+		st.add_vertex(in1)
+
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(UITheme.accent.r, UITheme.accent.g, UITheme.accent.b, PING_PEAK_ALPHA)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.emission_enabled = true
+	mat.emission = UITheme.accent
+	mat.emission_energy_multiplier = 1.5
+
+	var ring := MeshInstance3D.new()
+	ring.mesh = st.commit()
+	ring.material_override = mat
+	ring.position = Vector3.ZERO
+	ring.scale = Vector3.ONE * body_radius
+	parent_body.add_child(ring)
+
+	var pulse_duration := PING_TOTAL_DURATION / PING_PULSE_COUNT
+	var tween := create_tween()
+	tween.set_loops(PING_PULSE_COUNT)
+	tween.tween_property(ring, "scale", Vector3.ONE * body_radius * PING_END_RADIUS_MULT, pulse_duration) \
+			.from(Vector3.ONE * body_radius).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tween.parallel().tween_property(mat, "albedo_color:a", 0.0, pulse_duration).from(PING_PEAK_ALPHA)
+	tween.finished.connect(ring.queue_free)
+
+
+func _update_nav_scan_button_visibility() -> void:
+	if _nav_scan_button == null:
+		return
+	if _star_system_name == "Sol":
+		_nav_scan_button.visible = false
+		return
+	var anything_unrevealed := false
+	for orbit: Dictionary in _orbits:
+		var entry: KnownBodies.Entry = orbit.get("entry")
+		if entry != null and not bool(orbit.get("revealed", true)):
+			anything_unrevealed = true
+			break
+	_nav_scan_button.visible = anything_unrevealed
 
 
 # --- Known Locations panel ---
@@ -1372,10 +1829,12 @@ func _update_callout() -> void:
 		_callout_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 		_callout_label.position = Vector2(
 				_callout_line_end.x + CALLOUT_LABEL_GAP, _callout_line_end.y - _callout_label.size.y * 0.5)
-		_scan_prompt.position = Vector2(
-				_callout_label.position.x, _callout_label.position.y + _callout_label.size.y + 6.0)
+		# LOCK now sits directly under the name — the old ScanPrompt button
+		# used to occupy this slot; Nav Scan is a standing system-wide action
+		# (see _build_nav_scan_ui), not a per-target control, so it doesn't
+		# need a row here at all.
 		_lock_button.position = Vector2(
-				_callout_label.position.x, _scan_prompt.position.y + _scan_prompt.size.y + 4.0)
+				_callout_label.position.x, _callout_label.position.y + _callout_label.size.y + 6.0)
 		_callout_go_btn.position = Vector2(
 				_callout_label.position.x, _lock_button.position.y + _lock_button.size.y + 4.0)
 
@@ -1384,9 +1843,8 @@ func _update_callout() -> void:
 			_reveal_line()
 
 	# Tracks the same camera-relative visibility as the label/line — the
-	# SCAN/LOCK controls shouldn't float on screen once you've panned the
-	# focused body behind the camera.
-	_scan_prompt.visible = _callout_visible
+	# LOCK control shouldn't float on screen once you've panned the focused
+	# body behind the camera.
 	_lock_button.visible = _callout_visible
 
 	# GO only for a focused body that's ALSO the current locked destination —
@@ -1453,12 +1911,6 @@ func _type_callout_label(for_body: Node3D) -> void:
 		await get_tree().create_timer(char_time).timeout
 	if _focused_body == for_body:
 		_callout_stage = CalloutStage.DONE
-		# SCAN/RESCAN prompt appears once the name has actually finished
-		# typing — reads as "target lock acquired," not an instant data pop
-		# the moment you click. Already-scanned bodies skip straight to
-		# showing the cached data (no animation needed); a fresh scan only
-		# starts once SCAN is actually pressed (_on_scan_requested).
-		_scan_prompt.present(for_body.name)
 		# LOCK isn't gated behind scanning at all — you can commit to a
 		# destination you've never scanned. It IS gated behind having a real
 		# KnownBodies entry, though — Cockpit's whole transit-build sequence
@@ -1490,10 +1942,16 @@ func _type_callout_label(for_body: Node3D) -> void:
 		# exactly as safe as locking Mars from Earth always was.
 		if KnownBodies.get_entry(for_body.name) != null:
 			_lock_button.present(for_body.name)
+		# Data panel: real data once Nav Scan has revealed this body, a
+		# minimal "not yet detected" state otherwise (see NavScan.gd /
+		# BodyInfoPanel.present_unidentified) — no per-target animation
+		# either way, that step no longer exists here.
 		if Discoveries.is_scanned(for_body.name):
 			var entry := KnownBodies.get_entry(for_body.name)
 			if entry != null:
 				_body_panel.show_for(entry)
+		else:
+			_body_panel.present_unidentified()
 
 
 func _draw_callout() -> void:
@@ -1511,15 +1969,13 @@ func _draw_callout() -> void:
 		var end_point := _callout_elbow.lerp(_callout_line_end, horiz_t)
 		_callout_overlay.draw_line(_callout_elbow, end_point, color, 1.5)
 
-	# One unified backdrop behind the name AND the scan/lock controls below
-	# it, not separately-boxed floating elements — reads as a single panel.
-	# Drawn under all three (this overlay is added to the tree before
-	# _callout_label/_scan_prompt/_lock_button, so it paints first).
+	# One unified backdrop behind the name AND the lock control below it, not
+	# separately-boxed floating elements — reads as a single panel. Drawn
+	# under both (this overlay is added to the tree before
+	# _callout_label/_lock_button, so it paints first).
 	if _callout_label.visible:
 		var pad := Vector2(8.0, 7.0)
 		var bg_rect := Rect2(_callout_label.position - pad, _callout_label.size + pad * 2.0)
-		if _scan_prompt.visible:
-			bg_rect = bg_rect.merge(Rect2(_scan_prompt.position - pad, _scan_prompt.size + pad * 2.0))
 		if _lock_button.visible:
 			bg_rect = bg_rect.merge(Rect2(_lock_button.position - pad, _lock_button.size + pad * 2.0))
 		if _callout_go_btn.visible:

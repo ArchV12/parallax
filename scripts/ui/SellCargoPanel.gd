@@ -90,12 +90,18 @@ func _ready() -> void:
 	_add_close_button(outer_vbox)
 
 
-# Cockpit._unhandled_input's Q handler — one key both opens and closes.
+# Cockpit._unhandled_input's Q handler AND CommandMenu's SELL chip both
+# route through this one function — gating Transfer Station access here
+# (2026-07-19) covers both entry points with a single check rather than
+# duplicating it. Same "click no-ops, plays an error sfx" precedent
+# CommandMenu's own Cockpit-context gate already uses for a denied press.
 func toggle() -> void:
 	if visible:
 		close()
-	else:
+	elif Buildings.has_transfer_station(PlayerState.location_id):
 		open()
+	else:
+		AudioManager.ui_deny()
 
 
 func open() -> void:

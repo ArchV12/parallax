@@ -89,16 +89,24 @@ func _build_row(category_id: String, body_id: String) -> Control:
 	name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	box.add_child(name_label)
 
-	var total_label := Label.new()
-	total_label.add_theme_font_size_override("font_size", 11)
-	total_label.add_theme_color_override("font_color", UITheme.dim)
-	UITheme.style_label_shadow(total_label)
-	total_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	box.add_child(total_label)
+	# Transfer Station (2026-07-19) has no knowledge rate at all (multiplier
+	# 0.0 — it's a logistics gate, not a research building), so "0.000 .../
+	# sec, Produced: 0" would just read as broken rather than informative.
+	# Skipping the rate label entirely also means _process's own update
+	# loop naturally leaves this row alone (it's gated on the SAME
+	# "structure_total_label" meta this only sets for the categories that
+	# actually have a rate to report).
+	if category_id != "transfer_station":
+		var total_label := Label.new()
+		total_label.add_theme_font_size_override("font_size", 11)
+		total_label.add_theme_color_override("font_color", UITheme.dim)
+		UITheme.style_label_shadow(total_label)
+		total_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		box.add_child(total_label)
+		box.set_meta("structure_total_label", total_label)
 
 	box.set_meta("structure_category_id", category_id)
 	box.set_meta("structure_body_id", body_id)
-	box.set_meta("structure_total_label", total_label)
 	return box
 
 

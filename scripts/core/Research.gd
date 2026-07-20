@@ -228,6 +228,15 @@ var _asteroid_radius_km: Dictionary = {}
 # to prevent. An asteroid with no entry here has simply never been spawned/
 # seen yet, and is correctly treated as not a real, travelable body still.
 var _asteroid_au_distance: Dictionary = {}
+# body_id -> star system name, registered alongside au_distance above
+# (2026-07-19, first non-Sol asteroids — Proxima Centauri's own debris
+# field, see SystemView._build_proxima_debris_field). KnownBodies.
+# _synthesize_asteroid_entry reads this to set the synthesized Entry's own
+# star_system correctly — without it, EVERY asteroid Entry silently
+# defaulted to Entry's class default ("Sol"), which would have made a
+# Proxima asteroid register as pre-scanned via Discoveries' Sol exception
+# even though the player had never actually detected it.
+var _asteroid_star_system: Dictionary = {}
 
 # activity_id -> owned instrument tier index. -1 means the activity hasn't
 # been unlocked at all yet (no instrument owned); 0 is the first, free tier.
@@ -571,17 +580,39 @@ func _ensure_planet_data(body_id: String) -> void:
 
 # Registered by SystemView the instant it actually spawns an asteroid — see
 # _asteroid_au_distance's own comment on why this is a registry, not
-# something re-derived from the id like radius_km is.
-func register_asteroid_orbit(body_id: String, au_distance: float) -> void:
+# something re-derived from the id like radius_km is. star_system_name
+# defaults to "Sol" so every pre-existing call site (Sol's own Main Belt/
+# NEA/Centaur/Trojan spawners) needs zero changes.
+func register_asteroid_orbit(body_id: String, au_distance: float, star_system_name: String = "Sol") -> void:
 	_asteroid_au_distance[body_id] = au_distance
+	_asteroid_star_system[body_id] = star_system_name
 
 
-# Real AU distance from Sol for a REGISTERED asteroid (see
+# Real AU distance from its own star for a REGISTERED asteroid (see
 # register_asteroid_orbit), or 0.0 if this id has never actually been
 # spawned/seen yet — KnownBodies.get_entry treats 0.0 as "not a real body,"
 # same as null everywhere else in this game.
 func asteroid_au_distance_for(body_id: String) -> float:
 	return _asteroid_au_distance.get(body_id, 0.0)
+
+
+func asteroid_star_system_for(body_id: String) -> String:
+	return _asteroid_star_system.get(body_id, "Sol")
+
+
+# Every currently-registered asteroid id belonging to the given star system
+# (2026-07-19, so NavScan.gd can include asteroids as reveal candidates the
+# same way it already does KnownBodies.planets_of() for planets) — only
+# ever non-empty for a system whose SystemView has actually run its own
+# asteroid-spawning pass this session (asteroids aren't pre-enumerated
+# anywhere, same "existence + count is free but lazy" shape as everything
+# else asteroid-related).
+func asteroid_ids_for_star_system(star_system_name: String) -> Array[String]:
+	var result: Array[String] = []
+	for body_id: String in _asteroid_star_system:
+		if _asteroid_star_system[body_id] == star_system_name:
+			result.append(body_id)
+	return result
 
 
 # Adds Knowledge and checks every activity's next TechnologyDef against the

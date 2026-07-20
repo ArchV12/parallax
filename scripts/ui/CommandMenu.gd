@@ -119,6 +119,24 @@ func set_cockpit_context(active: bool) -> void:
 	_cockpit_context = active
 
 
+# Whether entry should currently read/behave as denied — dimmed, and a
+# press no-ops with an error cue instead of firing. Folds SELL's own
+# Transfer Station requirement (2026-07-19) into the SAME check the
+# existing Cockpit-only gate already uses, rather than growing a second
+# parallel "is this chip allowed" concept — both read as the identical
+# "visibly present but currently can't" treatment to the player. Re-run
+# fresh every _expand() (see _add_chip/_on_chip_pressed below), so it
+# always reflects the player's CURRENT location, not whatever it was when
+# the menu was first built.
+func _entry_denied(entry: Dictionary) -> bool:
+	var gated: bool = entry.get("gated", false)
+	if gated and not _cockpit_context:
+		return true
+	if entry["id"] == "sell" and not Buildings.has_transfer_station(PlayerState.location_id):
+		return true
+	return false
+
+
 func _root_pos() -> Vector2:
 	return Vector2(size.x * 0.5, size.y - ROOT_MARGIN_BOTTOM)
 
@@ -232,7 +250,7 @@ func _add_branch(points: PackedVector2Array, start_delay: float) -> void:
 
 
 func _add_chip(entry: Dictionary, point: Vector2, start_delay: float) -> void:
-	var gated: bool = entry.get("gated", false)
+	var denied := _entry_denied(entry)
 
 	var chip := UIButton.new()
 	chip.text = entry["label"]
@@ -263,13 +281,12 @@ func _add_chip(entry: Dictionary, point: Vector2, start_delay: float) -> void:
 	# group of two tweeners here didn't reliably delay the group the same way.
 	var tw := create_tween()
 	tw.set_parallel(true)
-	tw.tween_property(chip, "modulate:a", (GATED_DIM_ALPHA if (gated and not _cockpit_context) else 1.0), CHIP_FADE_TIME).set_delay(start_delay)
+	tw.tween_property(chip, "modulate:a", (GATED_DIM_ALPHA if denied else 1.0), CHIP_FADE_TIME).set_delay(start_delay)
 	tw.tween_property(chip, "scale", Vector2.ONE, CHIP_FADE_TIME).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT).set_delay(start_delay)
 
 
 func _on_chip_pressed(entry: Dictionary) -> void:
-	var gated: bool = entry.get("gated", false)
-	if gated and not _cockpit_context:
+	if _entry_denied(entry):
 		AudioManager.ui_deny()
 		return
 	AudioManager.ui_confirm()

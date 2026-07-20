@@ -1,13 +1,27 @@
 extends Node
 
-# Session-scoped store of "what has the player scanned" — id -> tier.
-# Deliberately generic (not planet-specific): any scannable thing (a body's
-# data panel today; moons, surface features, signals, ... later) shares this
-# one primitive rather than each inventing its own local "have I scanned
-# this already" flag. In-memory only for now since there's no save system
-# yet (see PauseMenu's still-stub Save button) — swapping this to read/write
-# an actual save file later is a backend change behind the same interface,
-# not a redesign.
+# Session-scoped store of "what has the player navigationally revealed" —
+# id -> tier. Deliberately generic (not planet-specific): any scannable
+# thing (a body's data panel; moons, surface features, signals, ... later)
+# shares this one primitive rather than each inventing its own local "have
+# I found this already" flag. In-memory only for now since there's no save
+# system yet (see PauseMenu's still-stub Save button) — swapping this to
+# read/write an actual save file later is a backend change behind the same
+# interface, not a redesign.
+#
+# 2026-07-19 — this flag now means TWO things at once, on purpose, not two
+# separate flags: "does this body exist as far as the player knows" (does
+# it render as a real body vs. an unidentified blip) AND "is its
+# BodyInfoPanel data available" (no separate animated per-target SCAN step
+# anymore — see NavScan.gd). The two used to be different mechanisms
+# (SystemView's old min_nav_tier gate for existence, this dict + ScanPrompt/
+# BodyInfoPanel's own scan animation for data) but collapsed into one once
+# Nav Scan existed: if a scan found the body at all, it already has enough
+# of a read on it to show the data panel too. mark_scanned() is now called
+# by NavScan.resolve() instead of BodyInfoPanel._finish_scan() — same dict,
+# different writer. PlanetarySystemView.gd's own moon-scan flow still uses
+# the OLD per-target animation (untouched this pass — no non-Sol system has
+# any moons yet to exercise it either way).
 #
 # Tiers exist so "how much detail a scan reveals" can grow later (tied to
 # scanner tech level, per the scanning design conversation in
@@ -26,16 +40,27 @@ func is_scanned(id: String) -> bool:
 	return scan_tier(id) != Tier.NONE
 
 
-# Every body KnownBodies.get_entry() recognizes (every curated planet/moon,
-# and any asteroid already spawned/registered this session) is a Sol-system
-# body. Docs/Ship Equipment.md's "Sol system exception": the game starts in
-# 2037, so humanity already has complete navigational/data knowledge of its
-# own solar system — this isn't a placeholder, it's a permanent fact about
-# Sol specifically. So any such body starts pre-scanned by default, same as
-# Earth/Luna used to be hardcoded here, just generalized to the whole
-# catalog instead of two names. A future non-Sol system's bodies won't
-# resolve via KnownBodies (a Sol-only catalog) and correctly fall through to
-# NONE here, unscanned, without this needing to change later.
+# Every Sol-system body (every curated planet/moon, and any asteroid already
+# spawned/registered this session) starts pre-scanned by default — Docs/Ship
+# Equipment.md's "Sol system exception": the game starts in 2037, so
+# humanity already has complete navigational/data knowledge of its own solar
+# system. This isn't a placeholder, it's a permanent fact about Sol
+# specifically — same reasoning NavScan.gd's radius check already applies
+# (Sol bodies never need a scan to reveal at all, so the check never runs
+# for them in practice).
+#
+# 2026-07-19 fix: this used to just check "does KnownBodies.get_entry(id)
+# resolve at all" — true when written (KnownBodies really was Sol-only
+# then), but broke the instant Proxima Centauri's bodies joined the SAME
+# catalog. A foreign body now resolving through get_entry() too meant it
+# ALSO came out pre-scanned the moment Navigation Scanner let it render —
+# no SCAN button, no scanning animation, data just there immediately, same
+# as Earth. That's backwards: Sol is the one deliberate exception, not the
+# default every other system inherits by accident of sharing a lookup
+# function. Now explicitly keyed on entry.star_system == "Sol" — a foreign
+# body (Proxima b, or any future non-Sol system) genuinely starts
+# unscanned, giving arrival there a real "SCAN this" moment instead of
+# skipping straight to data.
 #
 # NOTE: this is deliberately independent of Scanner Array/Research survey
 # state — a body being navigationally known (it exists, you can see its
@@ -45,7 +70,8 @@ func is_scanned(id: String) -> bool:
 func scan_tier(id: String) -> Tier:
 	if _scans.has(id):
 		return _scans[id]
-	if KnownBodies.get_entry(id) != null:
+	var entry := KnownBodies.get_entry(id)
+	if entry != null and entry.star_system == "Sol":
 		return Tier.SCANNED
 	return Tier.NONE
 

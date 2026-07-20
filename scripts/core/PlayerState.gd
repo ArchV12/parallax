@@ -289,6 +289,18 @@ func _process(delta: float) -> void:
 		location_id = travel_target_id
 		travel_target_id = ""
 		is_traveling = false
+		# Arrival is the zero-distance case of Nav Scan's own radius rule
+		# (2026-07-19 design call, see NavScan.gd) — wherever you actually
+		# are is always revealed, no scan required for the one body you're
+		# standing on. Harmless no-op for anything already revealed (Sol,
+		# or a body a previous Nav Scan already found). Without this, a
+		# planet reached by LOCKing an unrevealed blip and GOing straight
+		# there (skipping Nav Scan entirely) would stay marked unrevealed
+		# even after you'd physically arrived — the bug a player hit via
+		# ViewSwitcher's PLANETARY tab, which resolves to "whatever planet
+		# you're currently orbiting" and expects that planet to already be
+		# known.
+		Discoveries.mark_scanned(location_id)
 		# See current_year's own comment — advances by this trip's real
 		# distance regardless of trip type; travel_distance_km is still the
 		# just-completed trip's value here, read before anything below could

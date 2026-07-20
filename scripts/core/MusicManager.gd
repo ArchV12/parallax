@@ -81,6 +81,10 @@ func play_mars() -> void:
 	_play_from("Mars")
 
 
+func play_stellar_era() -> void:
+	_play_from("Stellar Era")
+
+
 func play_boot() -> void:
 	# Plays once, not looped — the track is timed to end right as the intro's
 	# final "You are its commander" beat lands in silence.

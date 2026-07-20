@@ -225,12 +225,51 @@ const ARRIVAL_APPROACH_RANGE_MULT := 22.0
 # Synthetic departure distance for an interstellar warp (2026-07-19) — see
 # _build_interstellar_transit's own comment on why _camera.position can't be
 # used as the departure point the way a same-system trip's real orbit
-# position can. Comfortably larger than any real star's own "becomes
-# visible" threshold (end_radius * ARRIVAL_APPROACH_RANGE_MULT) so the far
-# phase is a genuine, perceptible deep-space leg, and well past
+# position can. Meant to be comfortably larger than any real star's own
+# "becomes visible" threshold (end_radius * ARRIVAL_APPROACH_RANGE_MULT) so
+# the far phase is a genuine, perceptible deep-space leg, and well past
 # REBASE_THRESHOLD so the floating-origin rebase mechanic exercises
 # normally during a long warp rather than being a moot no-op.
-const INTERSTELLAR_DEPARTURE_DISTANCE := 5000.0
+#
+# 2026-07-19 bug: this flat constant alone quietly broke that stated
+# invariant for Sol specifically — _primary_radius_for gives Sol real-km-
+# scale display radius (~244 units, vs. every other star's stylized
+# ~1.5-8), so Sol's own visible threshold (244 * 22 ≈ 5368) is actually
+# BIGGER than this flat 5000, meaning a trip ending at Sol started the warp
+# already inside its own "becomes visible" range — reported as "Sol is way
+# too close at the very start of travel" when traveling FROM a non-Sol
+# system back TO Sol. INTERSTELLAR_DEPARTURE_RANGE_MULT below now scales
+# the departure distance off the actual target's own radius (same idiom
+# ARRIVAL_APPROACH_RANGE_MULT already uses for the opposite/arrival end),
+# with this flat value kept only as a floor — for every existing stylized
+# star (Proxima included) end_radius * the new mult stays well under this
+# floor, so their departure distance, and the "far leg" look already tuned
+# by eye for them, is completely unchanged; only a real-scale star like Sol
+# now gets pushed proportionally farther out.
+#
+# 2026-07-19 follow-up #1: an initial 50x still left Sol reading as a
+# clearly visible disk (~7% of screen height at 60 FOV — genuinely still
+# "close," not the barely-there point every stylized-star departure
+# already reads as). Retuned against how big Sol looks from Earth's own
+# orbit (1 AU, ~52,543 units) instead of guessing again — roughly
+# radius * 215, so 220.
+#
+# 2026-07-19 follow-up #2: the user's next report was that EVERY star,
+# stylized ones included, still read as too visible right at departure —
+# not just Sol specifically. That's the flat floor's own job, not the
+# radius multiplier's (every stylized star's own radius * 220 stays far
+# below the 5000 floor, so the floor alone was governing their look, and
+# apparently wasn't far enough either). Both bumped together, ~4x each,
+# capped so Sol's own distance (real_radius_km * 800 ≈ 195,600 units)
+# still lands safely under the camera's own far clip plane (_camera.far,
+# 300,000, set in _build_camera) with real margin — pushing further would
+# start clipping Sol out of view entirely rather than just making it
+# small, which is a worse failure than "still a bit visible." If it's
+# STILL too visible after this, the next lever has to be _camera.far
+# itself (raising the clip plane) before either constant here can go any
+# higher.
+const INTERSTELLAR_DEPARTURE_DISTANCE := 20000.0
+const INTERSTELLAR_DEPARTURE_RANGE_MULT := 800.0
 
 # Interstellar warp reskin (2026-07-19) — a Beyond Light warp reads as
 # visibly more intense than an ordinary Sub-Light burn: a cool blue-violet
@@ -768,11 +807,15 @@ func _build_universe(star_system_name: String) -> void:
 	_universe_bodies[star_entry.body_name] = star_body
 
 	for entry: KnownBodies.Entry in KnownBodies.planets_of(star_system_name):
-		# Navigation Scanner fog-of-war (2026-07-18) — same gate SystemView.
-		# gd's own _build_system uses; Sol stays permanently fully known by
-		# design (see the ship-equipment design memory's "Sol system
-		# exception"), so this only ever filters a non-Sol system.
-		if star_system_name != "Sol" and entry.min_nav_tier > Research.owned_tier("navigation_scanner"):
+		# Nav Scan fog-of-war (2026-07-19, see NavScan.gd — replaces the old
+		# static min_nav_tier gate SystemView.gd used to share with this same
+		# spot). Sol stays permanently fully known by design (see the
+		# ship-equipment design memory's "Sol system exception"), so this
+		# only ever filters a non-Sol system. Unlike SystemView.gd's own map,
+		# Cockpit's "universe" backdrop just skips an unrevealed body outright
+		# rather than rendering a blip for it — this is the real-flight view,
+		# not the discovery/targeting map; System View owns blips/targeting.
+		if star_system_name != "Sol" and not Discoveries.is_scanned(entry.body_name):
 			continue
 		var dir := _seeded_direction(entry.body_name, PLANET_CONE_DEG)
 		var dist := entry.au_distance * PLANET_DIST_AU_TO_UNITS
@@ -1091,16 +1134,23 @@ func _generate_asteroid_body(entry: KnownBodies.Entry, radius: float) -> Node3D:
 
 # Per-location score — Luna gets its own track only at Luna itself, Mars
 # gets its track anywhere in the Mars system (Mars itself OR either of its
-# moons, entry.parent == "Mars"), and everywhere else still falls back to
-# Earth Orbit (a placeholder for every other destination — see the rest of
-# this file's "artistic compromise, not complete" comments; more
-# per-location tracks will replace this fallback over time). Called from
+# moons, entry.parent == "Mars"), and everywhere else in SOL still falls
+# back to Earth Orbit (a placeholder for every other Sol destination — see
+# the rest of this file's "artistic compromise, not complete" comments;
+# more per-location tracks will replace this fallback over time). Any
+# non-Sol arrival (2026-07-19, Stellar Era.ogg) gets its own single track
+# instead, checked FIRST and unconditionally — Luna/Mars/the Earth Orbit
+# fallback are all real Sol-specific location checks that would otherwise
+# just silently miss for a foreign body and fall through to Earth Orbit
+# playing at Proxima Centauri, which is exactly the wrong mood. Called from
 # _process right as arrival_stop plays (the real "arriving here" moment) AND
 # from _build_arrival (the cold-load path with no transit) — MusicManager's
 # own _play_from no-ops if the right track is already playing, so calling
 # this twice for the same arrival is harmless.
 func _play_location_music(location_id: String, entry: KnownBodies.Entry) -> void:
-	if location_id == "Luna":
+	if entry.star_system != "Sol":
+		MusicManager.play_stellar_era()
+	elif location_id == "Luna":
 		MusicManager.play_the_moon()
 	elif location_id == "Mars" or entry.parent == "Mars":
 		MusicManager.play_mars()
@@ -1690,8 +1740,13 @@ func _build_interstellar_transit(target_entry: KnownBodies.Entry) -> void:
 	# genuinely far enough to guarantee an actual "can't see it yet" leg.
 	var dir := _camera_base_forward
 	var end_radius := _primary_radius_for(target_entry)
+	# See INTERSTELLAR_DEPARTURE_DISTANCE's own comment — scales with the
+	# TARGET's real display radius (Sol's is real-km-scale, ~30-160x bigger
+	# than every stylized star) rather than assuming one flat distance is
+	# "far enough" for any star it might need to depart toward.
+	var departure_dist := maxf(INTERSTELLAR_DEPARTURE_DISTANCE, end_radius * INTERSTELLAR_DEPARTURE_RANGE_MULT)
 
-	_transit_start_pos = star_anchor - dir * INTERSTELLAR_DEPARTURE_DISTANCE
+	_transit_start_pos = star_anchor - dir * departure_dist
 	_transit_target_anchor = star_anchor
 	_transit_target_radius = end_radius
 	# Entry point just outside the star's own orbit shell, on the side

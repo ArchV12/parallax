@@ -129,16 +129,6 @@ class Entry:
 	# orbital period, atmosphere, ...) are real either way — this flag is
 	# purely about which renderer draws the body, not what's true about it.
 	var use_canonical_art: bool = true
-	# Navigation Scanner gating (2026-07-18) — the ship-wide equipment tier
-	# (Research.owned_tier("navigation_scanner")) needed to even know this
-	# body exists, i.e. for it to render/list at all in a non-Sol SystemView.
-	# Default 0 means "detected from the start" — every Sol body stays this
-	# way regardless (Sol's full navigational knowledge is a permanent
-	# narrative fact, not a placeholder — see the ship-equipment design
-	# memory's "Sol system exception"), so this field is simply never read
-	# for _star_system_name == "Sol". Only a non-Sol system's own bodies use
-	# it meaningfully; SystemView.gd is what actually filters on it.
-	var min_nav_tier: int = 0
 
 	# Builds a ready-to-generate CanonicalBodyParams at the given display
 	# radius — every caller lives at a different scale (Cosmic Forge's dev
@@ -227,8 +217,15 @@ static func _synthesize_asteroid_entry(body_name: String) -> Entry:
 
 	var e := Entry.new()
 	e.body_name = body_name
-	e.parent = ""  # orbits Sol directly, same as a planet — see Cockpit._asteroid_anchor_pos
+	e.parent = ""  # orbits its star directly, same as a planet — see Cockpit._asteroid_anchor_pos
 	e.au_distance = au_distance
+	# 2026-07-19 (Proxima Centauri's own debris field, first non-Sol
+	# asteroids) — Entry's own class default is "Sol", which silently
+	# mislabeled every asteroid before this as belonging to Sol regardless
+	# of where it actually spawned. Research.register_asteroid_orbit now
+	# records which star system each asteroid was registered under,
+	# alongside its au_distance, for exactly this read.
+	e.star_system = Research.asteroid_star_system_for(body_name)
 	e.body_type = "Asteroid"
 	e.real_radius_km = radius_km
 	e.radius_ratio = radius_km / 6371.0  # Earth-relative, same reference every other entry uses
@@ -668,7 +665,6 @@ static func _ensure_built() -> void:
 	proxima_b.terrain_ruggedness = 0.65  # speculative — likely tidally locked, real geological stress
 	proxima_b.star_system = "Proxima Centauri"
 	proxima_b.use_canonical_art = false
-	proxima_b.min_nav_tier = 0  # real, confirmed exoplanet — detectable with the starting scanner
 	_catalog[proxima_b.body_name] = proxima_b
 
 	var proxima_c := Entry.new()
@@ -685,14 +681,42 @@ static func _ensure_built() -> void:
 	proxima_c.orbital_period_days = 1900.0  # real ~5.2 years
 	proxima_c.has_atmosphere = true
 	proxima_c.has_solid_surface = false
-	proxima_c.moon_count = 0
+	proxima_c.moon_count = 2
 	proxima_c.gas_turbulence = 0.3
 	proxima_c.gas_storminess = 0.25
 	proxima_c.gas_band_contrast = 0.1
 	proxima_c.star_system = "Proxima Centauri"
 	proxima_c.use_canonical_art = false
 	# Real astronomy: c is a genuine but LESS CERTAIN candidate than b (still
-	# unconfirmed by direct detection) — gating it behind Tier 1 mirrors that
-	# real-world uncertainty as a gameplay fact, not an arbitrary choice.
-	proxima_c.min_nav_tier = 1
+	# unconfirmed by direct detection) — that real-world uncertainty is left
+	# as flavor (BodyInfoPanel copy), not a gameplay gate. Nav Scanner reveal
+	# is pure radius-from-position now (see NavScan.gd); no per-body
+	# detection-difficulty override (2026-07-19 design call).
 	_catalog[proxima_c.body_name] = proxima_c
+
+	# Invented (2026-07-19 design call) — real astronomy has neither
+	# confirmed NOR ruled out moons around Proxima c; current exomoon-
+	# detection technology simply can't resolve anything this small at this
+	# distance, a genuinely different situation from b/c's own PLANET-level
+	# data (those are real detections/a real candidate). Same "curate what's
+	# known AND needed, invent the rest" rule the debris field already used
+	# for this system, extended to Proxima c's own moons specifically —
+	# deliberately NOT given to Proxima b, whose real orbit (0.0485 AU,
+	# tidally locked) puts it close enough to its star that real
+	# astrophysics makes a large retained moon there genuinely unlikely
+	# (tidal forces this close tend to either crash a moon into the planet
+	# or strip it away entirely); c's real ~1.5 AU orbit has no such
+	# problem, and real ice giants (Uranus, Neptune) are exactly the kind of
+	# body this scale of moon system is modeled on. Provisional Roman-
+	# numeral designations (a real convention for a moon awaiting a proper
+	# name — historically how Io was known as "Jupiter I" before informal
+	# names became standard) rather than invented proper names, so these
+	# read as "genuinely undiscovered" rather than "already catalogued,"
+	# matching what they actually are in-universe.
+	var proxima_c_i := _make_moon("Proxima c I", "Proxima Centauri c", 310.0, 3.8, 118000.0)
+	proxima_c_i.star_system = "Proxima Centauri"
+	_catalog[proxima_c_i.body_name] = proxima_c_i
+
+	var proxima_c_ii := _make_moon("Proxima c II", "Proxima Centauri c", 620.0, 11.6, 305000.0)
+	proxima_c_ii.star_system = "Proxima Centauri"
+	_catalog[proxima_c_ii.body_name] = proxima_c_ii
