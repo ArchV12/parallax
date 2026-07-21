@@ -230,7 +230,7 @@ var _asteroid_radius_km: Dictionary = {}
 var _asteroid_au_distance: Dictionary = {}
 # body_id -> star system name, registered alongside au_distance above
 # (2026-07-19, first non-Sol asteroids — Proxima Centauri's own debris
-# field, see SystemView._build_proxima_debris_field). KnownBodies.
+# field, see SystemView._build_debris_field). KnownBodies.
 # _synthesize_asteroid_entry reads this to set the synthesized Entry's own
 # star_system correctly — without it, EVERY asteroid Entry silently
 # defaulted to Entry's class default ("Sol"), which would have made a
@@ -482,11 +482,21 @@ func knowledge(category_id: String) -> int:
 # time it's actually asked for, then persist for the rest of the session"
 # shape resource_data_for/_ensure_asteroid_data already use, just for the
 # Geological rather than Resource report (see AsteroidGeologicalGenerator).
-# Still null for anything else (a real moon with no authored survey, a
-# typo, ...) — same honesty as before this existed.
+# 2026-07-20: the same idea now also covers any Star/Terrestrial Planet/
+# Dwarf Planet/Gas Giant/Ice Giant/Moon that isn't hand-authored (see
+# PlanetGeologicalGenerator) — every Sol body of these types already has a
+# GEOLOGICAL_DATA_PATHS entry, so this only ever actually fires for a
+# procedurally-generated body (Proxima Centauri's own, or any of the 7
+# newly-generated nearby-star systems'). Still null for anything else (a
+# typo, an id KnownBodies has never heard of) — same honesty as before.
 func geological_data_for(body_id: String) -> GeologicalSurveyData:
-	if not _geological_data.has(body_id) and AsteroidResourceGenerator.looks_like_asteroid_id(body_id):
-		_geological_data[body_id] = AsteroidGeologicalGenerator.generate(body_id)
+	if not _geological_data.has(body_id):
+		if AsteroidResourceGenerator.looks_like_asteroid_id(body_id):
+			_geological_data[body_id] = AsteroidGeologicalGenerator.generate(body_id)
+		else:
+			var entry := KnownBodies.get_entry(body_id)
+			if entry != null and PlanetGeologicalGenerator.COVERED_BODY_TYPES.has(entry.body_type):
+				_geological_data[body_id] = PlanetGeologicalGenerator.generate(body_id)
 	return _geological_data.get(body_id)
 
 

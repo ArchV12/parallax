@@ -793,9 +793,30 @@ func _build_nav_scan_ui() -> void:
 	_update_nav_scan_button_visibility()
 
 
+# Whether the player is physically at this planet (or one of its own
+# moons) right now — same "docked at the planet vs. one of its moons"
+# resolution _resolve_nav_scan's own origin_km computation below already
+# uses. Nav Scan for moons must be gated on this: this view is reachable
+# REMOTELY (BodyInfoPanel's PLANETARY SYSTEM button works for any already-
+# scanned planet, not just the one the player is standing on/at), so
+# without this check a player could discover a planet's unrevealed moons
+# from anywhere in the system just by clicking through — the same "you
+# must actually be here to scan" rule System view's own Nav Scan already
+# enforces via NavScan.player_origin_au(), just not previously applied
+# here (2026-07-20 fix). Once a moon IS revealed, viewing/locking/GO-ing to
+# it from anywhere is still fine and deliberately unrestricted — a real
+# mission to Titan doesn't route through Saturn first either; only the
+# SCAN (finding moons that aren't already known) needs presence.
+func _player_present_at_planet() -> bool:
+	if PlayerState.location_id == _planet_name:
+		return true
+	var loc_entry := KnownBodies.get_entry(PlayerState.location_id)
+	return loc_entry != null and loc_entry.parent == _planet_name
+
+
 func _on_nav_scan_pressed() -> void:
 	var planet_entry := KnownBodies.get_entry(_planet_name)
-	if _nav_scan_active or (planet_entry != null and planet_entry.star_system == "Sol"):
+	if _nav_scan_active or (planet_entry != null and planet_entry.star_system == "Sol") or not _player_present_at_planet():
 		return
 	_nav_scan_active = true
 	_nav_scan_elapsed = 0.0
@@ -955,6 +976,9 @@ func _update_nav_scan_button_visibility() -> void:
 		return
 	var planet_entry := KnownBodies.get_entry(_planet_name)
 	if planet_entry != null and planet_entry.star_system == "Sol":
+		_nav_scan_button.visible = false
+		return
+	if not _player_present_at_planet():
 		_nav_scan_button.visible = false
 		return
 	var anything_unrevealed := false

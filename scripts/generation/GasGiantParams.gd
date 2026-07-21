@@ -10,7 +10,8 @@ var seed_value: int = 0  # named to avoid shadowing the built-in seed() function
 var radius: float = 1.6
 var band_scale: float = 1.2     # latitude band frequency — higher = more, thinner bands
 var turbulence: float = 0.4     # swirl distortion strength
-var storminess: float = 0.35    # contrast/blotchiness of storm features
+var storminess: float = 0.35    # how many/how strong the storm vortices are
+var storm_scale: float = 1.5    # storm feature size — higher = larger, fewer ovals
 var band_contrast: float = 1.0  # 0 = flat/featureless (Uranus, Neptune), 1 = full bands (Jupiter, Saturn)
 var atmosphere: float = 0.15    # optional extra limb glow shell; the shader's own limb darkening carries the "gas planet" look, so 0 is fine
 var atmo_falloff: float = 1.2

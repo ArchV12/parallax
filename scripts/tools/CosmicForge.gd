@@ -68,8 +68,10 @@ const ROCKY_KNOBS: Array = [
 	["continent_scale", ["Continent Scale", 0.4, 3.0,  1.0,  false]],
 	["terrain_height",  ["Terrain Height",  0.01, 0.15, 0.06, false]],
 	["roughness",       ["Roughness",       0.3, 0.7,  0.5,  false]],
+	["surface_detail",  ["Surface Detail",  0.0, 1.0,  0.5,  false]],
 	["ocean_level",     ["Ocean Level",     0.0, 1.0,  0.35, false]],
 	["atmosphere",      ["Atmosphere",      0.0, 1.0,  0.35, false]],
+	["clouds",          ["Clouds",          0.0, 1.0,  0.5,  false]],
 	["atmo_falloff",    ["Atmo Falloff",    0.5, 3.0,  1.5,  false]],
 	["detail",          ["Mesh Detail",     3.0, 6.0,  5.0,  true]],
 ]
@@ -81,8 +83,10 @@ const WATER_WORLD_KNOBS: Array = [
 	["continent_scale", ["Continent Scale", 0.4, 3.0,  0.7,  false]],
 	["terrain_height",  ["Terrain Height",  0.01, 0.15, 0.05, false]],
 	["roughness",       ["Roughness",       0.3, 0.7,  0.5,  false]],
+	["surface_detail",  ["Surface Detail",  0.0, 1.0,  0.5,  false]],
 	["ocean_level",     ["Ocean Level",     0.6, 1.0,  0.85, false]],
 	["atmosphere",      ["Atmosphere",      0.0, 1.0,  0.45, false]],
+	["clouds",          ["Clouds",          0.0, 1.0,  0.6,  false]],
 	["atmo_falloff",    ["Atmo Falloff",    0.5, 3.0,  1.5,  false]],
 	["detail",          ["Mesh Detail",     3.0, 6.0,  5.0,  true]],
 ]
@@ -93,6 +97,7 @@ const GAS_GIANT_KNOBS: Array = [
 	["band_scale",     ["Band Scale",     0.5, 3.0, 1.2,  false]],
 	["turbulence",     ["Turbulence",     0.0, 1.0, 0.4,  false]],
 	["storminess",     ["Storminess",     0.0, 1.0, 0.35, false]],
+	["storm_scale",    ["Storm Scale",    0.5, 3.0, 1.5,  false]],
 	["band_contrast",  ["Band Contrast",  0.0, 1.0, 1.0,  false]],
 	["atmosphere",     ["Atmosphere",     0.0, 1.0, 0.15, false]],
 	["atmo_falloff",   ["Atmo Falloff",   0.5, 3.0, 1.2,  false]],
@@ -109,6 +114,7 @@ const ICE_GIANT_KNOBS: Array = [
 	["band_scale",     ["Band Scale",     0.5, 3.0, 1.2,  false]],
 	["turbulence",     ["Turbulence",     0.0, 1.0, 0.2,  false]],
 	["storminess",     ["Storminess",     0.0, 1.0, 0.1,  false]],
+	["storm_scale",    ["Storm Scale",    0.5, 3.0, 1.5,  false]],
 	["band_contrast",  ["Band Contrast",  0.0, 1.0, 0.12, false]],
 	["atmosphere",     ["Atmosphere",     0.0, 1.0, 0.15, false]],
 	["atmo_falloff",   ["Atmo Falloff",   0.5, 3.0, 1.2,  false]],
@@ -419,6 +425,7 @@ func _regenerate() -> void:
 			params.band_scale = _sliders["band_scale"].value
 			params.turbulence = _sliders["turbulence"].value
 			params.storminess = _sliders["storminess"].value
+			params.storm_scale = _sliders["storm_scale"].value
 			params.band_contrast = _sliders["band_contrast"].value
 			params.atmosphere = _sliders["atmosphere"].value
 			params.atmo_falloff = _sliders["atmo_falloff"].value
@@ -499,8 +506,10 @@ func _regenerate() -> void:
 			params.continent_scale = _sliders["continent_scale"].value
 			params.terrain_height = _sliders["terrain_height"].value
 			params.roughness = _sliders["roughness"].value
+			params.surface_detail = _sliders["surface_detail"].value
 			params.ocean_level = _sliders["ocean_level"].value
 			params.atmosphere = _sliders["atmosphere"].value
+			params.cloud_amount = _sliders["clouds"].value
 			params.atmo_falloff = _sliders["atmo_falloff"].value
 			params.detail = int(_sliders["detail"].value)
 			_body = PlanetGenerator.generate(params)

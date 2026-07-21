@@ -6,14 +6,20 @@ extends RefCounted
 # and the game's system generator will drive it later.
 #
 # Output is a Node3D containing:
-#   - "Terrain": icosphere displaced by seeded FBM noise, vertex-colored by
-#     height band (seabed → beach → lowland → highland → mountain → snow)
+#   - "Terrain": icosphere displaced by seeded FBM noise; the mesh carries only
+#     macro relief + a per-vertex base height (in UV.x), and planet_surface
+#     .gdshader does the height-band coloring and detail-normal bump per pixel
 #   - "Ocean" (if ocean_level > 0): translucent sphere at sea level
+#   - "Clouds" (if cloud_amount > 0 and there's an atmosphere): translucent
+#     shell driven by planet_clouds.gdshader
+#   - "Atmosphere" (if atmosphere > 0): limb-glow shell
 
 # FBM output rarely reaches ±1; treat this as the practical height range.
 const NOISE_MAX := 0.75
 
 const ATMO_SHADER := preload("res://shaders/atmosphere.gdshader")
+const SURFACE_SHADER := preload("res://shaders/planet_surface.gdshader")
+const CLOUD_SHADER := preload("res://shaders/planet_clouds.gdshader")
 
 static func generate(params: PlanetParams) -> Node3D:
 	# Zero relief would make the terrain and ocean spheres coincident and
@@ -24,6 +30,10 @@ static func generate(params: PlanetParams) -> Node3D:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = params.seed_value
 	var palette := _make_palette(rng)
+	# Per-planet noise offset so every seed's surface detail (and clouds) differs
+	# rather than all sharing one pattern. Pulled after the palette so palette
+	# rolls stay identical to before this field existed.
+	var detail_seed := rng.randf() * 100.0
 
 	var noise := FastNoiseLite.new()
 	noise.seed = params.seed_value
@@ -37,9 +47,14 @@ static func generate(params: PlanetParams) -> Node3D:
 
 	var root := Node3D.new()
 	root.name = "Planet"
-	root.add_child(_build_terrain(params, noise, sea, palette))
+	root.add_child(_build_terrain(params, noise, sea, palette, detail_seed))
 	if params.ocean_level > 0.01:
 		root.add_child(_build_ocean(params, sea, palette))
+	# Clouds need air to float in — an airless rock stays clear regardless of
+	# the cloud_amount knob. Built after the ocean, before the atmosphere shell,
+	# so the transparent layers stack surface → ocean → clouds → atmo glow.
+	if params.cloud_amount > 0.01 and params.atmosphere > 0.02:
+		root.add_child(_build_clouds(params, detail_seed))
 	if params.atmosphere > 0.01:
 		root.add_child(_build_atmosphere(params, palette))
 	return root
@@ -48,28 +63,76 @@ static func generate(params: PlanetParams) -> Node3D:
 # --- Terrain ---
 
 static func _build_terrain(params: PlanetParams, noise: FastNoiseLite,
-		sea: float, palette: Dictionary) -> MeshInstance3D:
+		sea: float, palette: Dictionary, detail_seed: float) -> MeshInstance3D:
 	var sphere := Icosphere.build(params.detail)
 	var verts: PackedVector3Array = sphere[0]
 	var indices: PackedInt32Array = sphere[1]
 
+	# The mesh carries macro relief (radial displacement) and the raw base
+	# height in UV.x — full float precision, no other use for the icosphere's
+	# UVs — for the shader to band per pixel.
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for unit in verts:
 		var h := noise.get_noise_3dv(unit)
-		st.set_color(_height_color(h, sea, unit, palette))
+		st.set_uv(Vector2(h, 0.0))
 		st.add_vertex(unit * params.radius * (1.0 + h * params.terrain_height))
 	for idx in indices:
 		st.add_index(idx)
 	st.generate_normals()
 
-	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 0.95
+	# surface_detail (0..1) scales both the band-edge jitter and the normal
+	# bump; 0 reproduces the old flat, purely macro look.
+	var mat := ShaderMaterial.new()
+	mat.shader = SURFACE_SHADER
+	mat.set_shader_parameter("shallow_color", palette["shallow"])
+	mat.set_shader_parameter("deep_color", palette["deep"])
+	mat.set_shader_parameter("beach_color", palette["beach"])
+	mat.set_shader_parameter("lowland_color", palette["lowland"])
+	mat.set_shader_parameter("highland_color", palette["highland"])
+	mat.set_shader_parameter("mountain_color", palette["mountain"])
+	mat.set_shader_parameter("snow_color", palette["snow"])
+	mat.set_shader_parameter("sea", sea)
+	mat.set_shader_parameter("noise_max", NOISE_MAX)
+	mat.set_shader_parameter("has_caps", palette["has_caps"])
+	mat.set_shader_parameter("cap_start", palette["cap_start"])
+	mat.set_shader_parameter("detail_freq", 9.0)
+	mat.set_shader_parameter("detail_strength", params.surface_detail * 0.05)
+	mat.set_shader_parameter("albedo_variation", params.surface_detail * 0.6)
+	mat.set_shader_parameter("bump_strength", params.surface_detail * 1.0)
+	mat.set_shader_parameter("seed_offset", detail_seed)
 
 	var mi := MeshInstance3D.new()
 	mi.name = "Terrain"
 	mi.mesh = st.commit()
+	mi.material_override = mat
+	return mi
+
+
+static func _build_clouds(params: PlanetParams, detail_seed: float) -> MeshInstance3D:
+	# Shell sits just above the tallest possible terrain and well inside the
+	# atmosphere shell (which starts at +0.04..0.14 radius, see
+	# _build_atmosphere), so clouds render beneath the limb glow.
+	var surface_r: float = params.radius * (1.0 + params.terrain_height * NOISE_MAX)
+	var r: float = surface_r + params.radius * 0.02
+	var mesh := SphereMesh.new()
+	mesh.radius = r
+	mesh.height = r * 2.0
+	mesh.radial_segments = 64
+	mesh.rings = 32
+
+	var mat := ShaderMaterial.new()
+	mat.shader = CLOUD_SHADER
+	mat.set_shader_parameter("coverage", params.cloud_amount)
+	mat.set_shader_parameter("cloud_freq", 3.0)
+	mat.set_shader_parameter("drift_speed", 0.01)
+	# Offset from the surface's own seed so cloud masses don't line up with the
+	# terrain detail underneath them.
+	mat.set_shader_parameter("seed_offset", detail_seed + 50.0)
+
+	var mi := MeshInstance3D.new()
+	mi.name = "Clouds"
+	mi.mesh = mesh
 	mi.material_override = mat
 	return mi
 
@@ -142,30 +205,8 @@ static func _build_atmosphere(params: PlanetParams, palette: Dictionary) -> Mesh
 
 
 # --- Height → color ---
-
-static func _height_color(h: float, sea: float, unit: Vector3, palette: Dictionary) -> Color:
-	var col: Color
-	if h < sea:
-		# Underwater terrain — visible through the translucent ocean.
-		var depth := clampf((sea - h) / (sea + NOISE_MAX + 0.001), 0.0, 1.0)
-		col = (palette["shallow"] as Color).lerp(palette["deep"] as Color, sqrt(depth))
-	elif h < sea + 0.03:
-		col = palette["beach"]
-	else:
-		var t := clampf((h - sea) / maxf(NOISE_MAX - sea, 0.001), 0.0, 1.0)
-		col = (palette["lowland"] as Color).lerp(palette["highland"] as Color, smoothstep(0.0, 0.75, t))
-		if t > 0.6:
-			col = col.lerp(palette["mountain"] as Color, smoothstep(0.6, 1.0, t))
-
-	# Polar caps: latitude pushed poleward by altitude so snow creeps down
-	# mountains before it reaches lowlands.
-	if palette["has_caps"]:
-		var lat: float = absf(unit.y) + maxf(h - sea, 0.0) * 0.35
-		var cap_start: float = palette["cap_start"]
-		if lat > cap_start and h >= sea:
-			col = col.lerp(palette["snow"] as Color, smoothstep(cap_start, cap_start + 0.12, lat))
-	return col
-
+# The height → band-color ramp now lives in planet_surface.gdshader (evaluated
+# per pixel); _make_palette below just supplies its color inputs.
 
 # Seed-derived color scheme. Mostly earthlike ranges with a chance of going
 # fully alien — variety is the point while we hone the generator.

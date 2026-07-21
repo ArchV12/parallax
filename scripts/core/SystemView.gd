@@ -107,22 +107,25 @@ const TROJAN_COUNT_MIN := 4  # per cluster (L4 and L5 each roll their own count)
 const TROJAN_COUNT_MAX := 8
 const TROJAN_INCLINATION_MAX_DEG := 20.0
 
-# Proxima Centauri's own debris field (2026-07-19 request) — INVENTED, not
-# real astronomy: unlike Sol's own Main Belt, no asteroid belt around
-# Proxima Centauri has actually been observed. Same "curate what's known
-# AND needed, invent the rest" rule as any other invented content, flagged
-# explicitly here since Proxima b/c's own real-data curation right above
-# might otherwise imply the same rigor applies to this. One modest, single
-# population only — Sol's 4-population taxonomy doesn't transfer: Proxima
-# has no Jupiter-scale planet for a Trojan cluster to anchor to, no second
-# inner world for an NEA-style jitter population, and "Centaur" is
-# Sol-specific naming. Placed between Proxima b (0.0485 AU) and c (1.5 AU)
-# so it sits visually in the gap between the two known planets.
-const PROXIMA_DEBRIS_AU_MIN := 0.7
-const PROXIMA_DEBRIS_AU_MAX := 1.1
-const PROXIMA_DEBRIS_COUNT_MIN := 10
-const PROXIMA_DEBRIS_COUNT_MAX := 18
-const PROXIMA_DEBRIS_INCLINATION_MAX_DEG := 15.0
+# Non-Sol systems' own debris field (2026-07-19 request, Proxima Centauri
+# first; generalized 2026-07-20 to every procedurally-generated system too)
+# — INVENTED, not real astronomy for any of them: unlike Sol's own Main
+# Belt, no asteroid belt around any other star has actually been observed
+# (or, for the 7 procedural systems, exists to observe in the first place).
+# Same "curate what's known AND needed, invent the rest" rule as any other
+# invented content. One modest, single population only — Sol's 4-population
+# taxonomy doesn't transfer: no other system here has a Jupiter-scale planet
+# for a Trojan cluster to anchor to, no second inner world for an NEA-style
+# jitter population, and "Centaur" is Sol-specific naming. AU band is a flat
+# range rather than placed relative to any one system's own planets (unlike
+# the original Proxima-only version, which sat specifically between b and
+# c) — with 7 more systems each rolling their own planet count/spacing,
+# there's no single "the gap between two known planets" to target generically.
+const DEBRIS_AU_MIN := 0.6
+const DEBRIS_AU_MAX := 1.4
+const DEBRIS_COUNT_MIN := 10
+const DEBRIS_COUNT_MAX := 18
+const DEBRIS_INCLINATION_MAX_DEG := 15.0
 
 # Orbit/zoom/pan camera rig — same interaction model as Cosmic Forge's
 # viewer, just tuned for this scene's much larger scale (orbits span up to
@@ -304,8 +307,8 @@ func _ready() -> void:
 	if _star_system_name == "Sol":
 		_build_asteroids()
 		_build_locations_panel()
-	elif _star_system_name == "Proxima Centauri":
-		_build_proxima_debris_field()
+	else:
+		_build_debris_field(_star_system_name)
 	# Re-checked here, after whichever asteroid population above may have
 	# just added its own unrevealed blips to _orbits — _build_nav_scan_ui()
 	# already ran its own visibility check above, but only planets existed
@@ -726,18 +729,19 @@ func _build_asteroids() -> void:
 	_spawn_trojans()
 
 
-# Proxima's own asteroid content (2026-07-19) — deliberately a SEPARATE
-# function rather than a branch inside _build_asteroids above: that
-# function's whole shape (Main Belt/NEA/Centaur/Trojans, "Earth"/"Jupiter"
-# by hardcoded name) is real Sol taxonomy that doesn't transfer — see
-# PROXIMA_DEBRIS_* consts' own comment. A future third system would need
-# its own equivalent judgment call about what's plausible for IT, not a
-# blind reuse of either function.
-func _build_proxima_debris_field() -> void:
-	var count := _seeded_count("Proxima Centauri/Debris", PROXIMA_DEBRIS_COUNT_MIN, PROXIMA_DEBRIS_COUNT_MAX)
+# Every non-Sol system's own debris field (2026-07-19, Proxima Centauri
+# first; generalized 2026-07-20 for the 7 procedurally-generated systems —
+# see DEBRIS_* consts' own comment) — deliberately a SEPARATE function
+# rather than a branch inside _build_asteroids above: that function's whole
+# shape (Main Belt/NEA/Centaur/Trojans, "Earth"/"Jupiter" by hardcoded name)
+# is real Sol taxonomy that doesn't transfer anywhere else. Seed label is
+# parameterized per star so each system rolls its own independent,
+# deterministic population/orbits rather than all 8 sharing one roll.
+func _build_debris_field(star_system_name: String) -> void:
+	var count := _seeded_count("%s/Debris" % star_system_name, DEBRIS_COUNT_MIN, DEBRIS_COUNT_MAX)
 	for i in count:
-		_spawn_dummy_asteroid("PCX-%d" % (i + 1),
-				PROXIMA_DEBRIS_AU_MIN, PROXIMA_DEBRIS_AU_MAX, PROXIMA_DEBRIS_INCLINATION_MAX_DEG)
+		_spawn_dummy_asteroid("DEBRIS-%s-%d" % [star_system_name, i + 1],
+				DEBRIS_AU_MIN, DEBRIS_AU_MAX, DEBRIS_INCLINATION_MAX_DEG)
 
 
 # Real Trojans aren't on their own AU-band orbit at all — they share

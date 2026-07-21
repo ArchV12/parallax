@@ -720,3 +720,241 @@ static func _ensure_built() -> void:
 	var proxima_c_ii := _make_moon("Proxima c II", "Proxima Centauri c", 620.0, 11.6, 305000.0)
 	proxima_c_ii.star_system = "Proxima Centauri"
 	_catalog[proxima_c_ii.body_name] = proxima_c_ii
+
+	_build_procedural_star_systems()
+
+
+# --- Procedural nearby-star systems (2026-07-20) ---
+# NearbyStars.gd carries 8 real stars (name/distance/spectral type/real sky
+# position, see that file) but until now only Proxima Centauri had matching
+# KnownBodies content — the other 7 resolved get_entry() to null, so
+# StellarView's LOCK button never appeared for them (that's the actual gate —
+# see StellarView.gd's own get_entry-gated LOCK/GO logic) and they were dead
+# ends on the star board. This section gives each of those 7 a real star +
+# planets + moons, generated instead of hand-typed, in the exact same Entry
+# shape Proxima's own hand block above uses — same fields, same conventions
+# (use_canonical_art=false, star_system self-referential on the star,
+# _make_moon for satellites) — just seeded off each star's own real name
+# instead of picked by hand.
+#
+# Bounded scope (2026-07-20 design call): this fills in the SAME fixed
+# 8-star catalog NearbyStars.gd already defines, not an unbounded/endless
+# galaxy — that would additionally need its own star-field generator and a
+# StellarView rework to browse an unbounded list, a separately bigger
+# project left for later.
+#
+# Deterministic per star name, not per session — there's no save system yet
+# (see Discoveries.gd's own "in-memory only" comment), so "same seed ->
+# same system every time" is how every other procedural population in this
+# game already fakes persistence (asteroids' seeded belt/debris labels,
+# this file's own terrain_ruggedness salting above). Runs once, eagerly,
+# from _ensure_built() above — unlike asteroids' get_entry-time lazy
+# synthesis (_synthesize_asteroid_entry above), these entries MUST be
+# cached into _catalog since planets_of()/moons_of() enumerate it wholesale;
+# asteroids are deliberately excluded from that enumeration for the
+# opposite reason (see _synthesize_asteroid_entry's own comment).
+
+# Approximate main-sequence class -> Kelvin band, real astronomy's rough
+# classification (not sub-type/luminosity-class-accurate) — just enough to
+# place a real star's color/StarGenerator.temperature plausibly from
+# NearbyStars' own real spectral_type strings ("G2V", "M5.5Ve", "A1V", ...).
+const SPECTRAL_CLASS_KELVIN_RANGE := {
+	"O": Vector2(30000.0, 52000.0),
+	"B": Vector2(10000.0, 30000.0),
+	"A": Vector2(7500.0, 10000.0),
+	"F": Vector2(6000.0, 7500.0),
+	"G": Vector2(5300.0, 6000.0),
+	"K": Vector2(3900.0, 5300.0),
+	"M": Vector2(2300.0, 3900.0),
+}
+# Same per-class shape, in solar radii — real O/B stars run several solar
+# radii, G/K near 1, M dwarfs a fraction (Proxima's own real ~0.154 solar
+# radii, hand-set above as radius_ratio 16.8, sits right in this band's low
+# end once converted).
+const SPECTRAL_CLASS_SOLAR_RADIUS_RANGE := {
+	"O": Vector2(6.5, 15.0),
+	"B": Vector2(3.0, 6.5),
+	"A": Vector2(1.4, 3.0),
+	"F": Vector2(1.1, 1.4),
+	"G": Vector2(0.9, 1.1),
+	"K": Vector2(0.6, 0.9),
+	"M": Vector2(0.1, 0.6),
+}
+const SOLAR_RADIUS_KM := 696000.0
+
+
+# Sub-type digit (the "2" in "G2V", the "5.5" in "M5.5Ve") interpolates
+# within its class's own range — 0 is the class's hot/large edge, 9 the
+# cool/small edge, same convention real spectral typing uses.
+static func _spectral_sub_type(spectral_type: String) -> float:
+	var digits := ""
+	for i in range(1, spectral_type.length()):
+		var c := spectral_type[i]
+		if c.is_valid_int() or c == ".":
+			digits += c
+		else:
+			break
+	return clampf(digits.to_float(), 0.0, 9.0) if digits != "" else 5.0
+
+
+static func _spectral_class_letter(spectral_type: String) -> String:
+	return spectral_type.substr(0, 1).to_upper() if not spectral_type.is_empty() else "G"
+
+
+static func _kelvin_for_spectral_type(spectral_type: String) -> float:
+	var letter := _spectral_class_letter(spectral_type)
+	if not SPECTRAL_CLASS_KELVIN_RANGE.has(letter):
+		return 5778.0  # Sol fallback
+	var band: Vector2 = SPECTRAL_CLASS_KELVIN_RANGE[letter]
+	var t := 1.0 - (_spectral_sub_type(spectral_type) / 9.0)  # 0 digit -> hot/large edge
+	return lerpf(band.x, band.y, t)
+
+
+static func _real_radius_km_for_spectral_type(spectral_type: String) -> float:
+	var letter := _spectral_class_letter(spectral_type)
+	if not SPECTRAL_CLASS_SOLAR_RADIUS_RANGE.has(letter):
+		return SOLAR_RADIUS_KM
+	var band: Vector2 = SPECTRAL_CLASS_SOLAR_RADIUS_RANGE[letter]
+	var t := 1.0 - (_spectral_sub_type(spectral_type) / 9.0)
+	return lerpf(band.x, band.y, t) * SOLAR_RADIUS_KM
+
+
+static func _build_procedural_star_systems() -> void:
+	for star: NearbyStars.Entry in NearbyStars.all():
+		if _catalog.has(star.star_name):
+			continue  # already hand-curated (Proxima Centauri) — never overwrite
+		_build_procedural_system(star)
+
+
+static func _build_procedural_system(star: NearbyStars.Entry) -> void:
+	var kelvin := _kelvin_for_spectral_type(star.spectral_type)
+	var real_radius_km := _real_radius_km_for_spectral_type(star.spectral_type)
+
+	var star_entry := Entry.new()
+	star_entry.body_name = star.star_name
+	star_entry.texture_subdir = "none"  # never read — use_canonical_art is false below
+	star_entry.fallback_color = star.color
+	star_entry.atmo_color = star.color.lightened(0.15)
+	star_entry.radius_ratio = real_radius_km / 6371.0
+	star_entry.au_distance = 0.0
+	star_entry.atmosphere = 0.5
+	star_entry.atmo_falloff = 1.4
+	star_entry.self_luminous = true
+	# Dimmer/brighter than Sol's 1.5 in rough proportion to real temperature —
+	# hotter/bigger stars read brighter, cool M dwarfs read dim like
+	# Proxima's own hand-set 0.6.
+	star_entry.emission_energy = clampf(lerpf(0.5, 2.2, inverse_lerp(2300.0, 30000.0, kelvin)), 0.4, 2.2)
+	star_entry.body_type = "Star"
+	star_entry.real_radius_km = real_radius_km
+	star_entry.has_solid_surface = false
+	star_entry.spectral_type = star.spectral_type
+	star_entry.surface_temp_k = kelvin
+	# M dwarfs (real flare stars, same reasoning Proxima's own hand-set
+	# 0.75/0.6 already documents) roll turbulent/spotty; hotter classes roll
+	# calmer, toward Sol's own hand-set 0.4/0.15 — a class-based midpoint
+	# with a little seeded jitter so same-class stars (the 4 M dwarfs here)
+	# don't all read identically.
+	var activity_rng := RandomNumberGenerator.new()
+	activity_rng.seed = ("%s|activity" % star.star_name).hash()
+	var cool_fraction := inverse_lerp(10000.0, 2300.0, kelvin)  # 0 hot, 1 cool
+	star_entry.star_turbulence = clampf(lerpf(0.3, 0.75, cool_fraction) + activity_rng.randf_range(-0.1, 0.1), 0.2, 0.9)
+	star_entry.star_spot_activity = clampf(lerpf(0.1, 0.6, cool_fraction) + activity_rng.randf_range(-0.08, 0.08), 0.05, 0.75)
+	star_entry.star_system = star.star_name
+	star_entry.use_canonical_art = false
+	_catalog[star_entry.body_name] = star_entry
+
+	# Frost line scales with stellar temperature — hotter/bigger stars push
+	# the rock/ice boundary further out (real astronomy: Sol's own sits
+	# ~2.7 AU; a dim M dwarf's sits well under 1 AU, which is exactly why
+	# Proxima c's real 1.5 AU orbit already reads as ice-giant-cold despite
+	# being closer in absolute terms than Jupiter is to Sol). Anchored so
+	# Sol's own 5778K lands near that real ~2.7 AU figure.
+	var frost_line_au: float = maxf(2.7 * pow(kelvin / 5778.0, 2.0), 0.3)
+
+	var planet_rng := RandomNumberGenerator.new()
+	planet_rng.seed = ("%s|planets" % star.star_name).hash()
+	var planet_count := 1 + planet_rng.randi_range(0, 3)  # 1-4 — modest, not a full Sol-scale system
+	var au := planet_rng.randf_range(0.03, 0.12) * (kelvin / 5778.0)  # innermost distance, toward Proxima b's real 0.0485 AU for cool stars
+	for i in planet_count:
+		au *= planet_rng.randf_range(1.4, 2.2)  # geometric spacing, same rough shape as Proxima b -> c's own 0.0485 -> 1.5 AU jump
+		var planet := _build_procedural_planet(star.star_name, i, au, au < frost_line_au)
+		_catalog[planet.body_name] = planet
+		_build_procedural_moons(planet)
+
+
+# Letters start at "b" (exoplanet-designation convention Proxima's own
+# hand-authored "Proxima Centauri b"/"c" already follows) — "a" is
+# implicitly the star itself. Capped at 4 letters since planet_count above
+# never rolls higher.
+const PLANET_LETTERS := ["b", "c", "d", "e"]
+
+static func _build_procedural_planet(star_name: String, index: int, au: float, is_rocky: bool) -> Entry:
+	var letter: String = PLANET_LETTERS[index] if index < PLANET_LETTERS.size() else "b%d" % index
+	var p := Entry.new()
+	p.body_name = "%s %s" % [star_name, letter]
+	p.texture_subdir = "none"
+	p.au_distance = au
+	p.atmo_falloff = 1.4
+	p.star_system = star_name
+	p.use_canonical_art = false
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = ("%s|radius" % p.body_name).hash()
+	if is_rocky:
+		p.body_type = "Terrestrial Planet"
+		p.real_radius_km = rng.randf_range(5000.0, 9000.0)  # Proxima b's own real 7000 km sits mid-range
+		p.fallback_color = Color(rng.randf_range(0.4, 0.7), rng.randf_range(0.35, 0.6), rng.randf_range(0.3, 0.55))
+		p.atmo_color = p.fallback_color.lightened(0.2)
+		p.atmosphere = rng.randf_range(0.0, 0.4)
+		p.has_atmosphere = p.atmosphere > 0.05
+		p.surface_pressure_atm = rng.randf_range(0.1, 1.2) if p.has_atmosphere else 0.0
+		p.has_solid_surface = true
+		p.terrain_ruggedness = rng.randf_range(0.3, 0.9)
+		# Tidal-proximity rule Proxima b's own hand-authored entry already
+		# establishes — a moon this close to its star tends to crash in or
+		# get stripped away, so it never gets one.
+		p.moon_count = 0 if au < 0.1 else _seeded_int(p.body_name, "moon_count", 0, 2)
+	else:
+		p.body_type = "Ice Giant" if rng.randf() < 0.65 else "Gas Giant"  # weighted toward Proxima c's own classification — closer to the frost line skews smaller/icier
+		p.real_radius_km = rng.randf_range(9000.0, 70000.0)  # spans Proxima c's real 11500 up toward a Jupiter-scale outlier
+		p.fallback_color = Color(rng.randf_range(0.45, 0.7), rng.randf_range(0.5, 0.7), rng.randf_range(0.55, 0.8))
+		p.atmo_color = p.fallback_color.lightened(0.1)
+		p.atmosphere = rng.randf_range(0.2, 0.5)
+		p.has_atmosphere = true
+		p.has_solid_surface = false
+		p.gas_turbulence = rng.randf_range(0.1, 0.6)
+		p.gas_storminess = rng.randf_range(0.1, 0.6)
+		p.gas_band_contrast = rng.randf_range(0.1, 0.5)
+		p.moon_count = _seeded_int(p.body_name, "moon_count", 0, 3)
+	p.radius_ratio = p.real_radius_km / 6371.0
+	# Kepler's third law in AU/years (1 solar mass) — same physical relation
+	# SystemView's own ORBIT_SPEED / au^1.5 animation-speed scaling already
+	# assumes; this codebase doesn't model stellar mass, so this stays
+	# consistent with every other orbit in the game rather than more "correct."
+	p.orbital_period_days = 365.25 * pow(au, 1.5)
+	return p
+
+
+static func _build_procedural_moons(planet: Entry) -> void:
+	for i in planet.moon_count:
+		var moon_name := "%s %s" % [planet.body_name, _roman_numeral(i + 1)]
+		var rng := RandomNumberGenerator.new()
+		rng.seed = ("%s|moon|%d" % [planet.body_name, i]).hash()
+		var radius_km := rng.randf_range(150.0, 2600.0)  # spans Proxima's own two invented moons (310/620 km) up to a Ganymede-scale outlier
+		var distance_km := rng.randf_range(100000.0, 1200000.0)
+		var period_days := rng.randf_range(2.0, 30.0)
+		var m := _make_moon(moon_name, planet.body_name, radius_km, period_days, distance_km)
+		# _make_moon leaves star_system at Entry's own "Sol" class default —
+		# same fix-up Proxima's own hand-authored moons apply right above.
+		m.star_system = planet.star_system
+		_catalog[m.body_name] = m
+
+
+static func _seeded_int(name: String, salt: String, min_value: int, max_value: int) -> int:
+	return min_value + posmod(("%s|%s" % [name, salt]).hash(), max_value - min_value + 1)
+
+
+const ROMAN_NUMERALS := ["I", "II", "III", "IV", "V"]
+
+static func _roman_numeral(n: int) -> String:
+	return ROMAN_NUMERALS[n - 1] if n >= 1 and n <= ROMAN_NUMERALS.size() else str(n)

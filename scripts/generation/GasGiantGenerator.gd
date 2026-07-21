@@ -41,6 +41,7 @@ static func _build_body(params: GasGiantParams, rng: RandomNumberGenerator, pale
 	mat.set_shader_parameter("band_scale", params.band_scale)
 	mat.set_shader_parameter("turbulence", params.turbulence)
 	mat.set_shader_parameter("storminess", params.storminess)
+	mat.set_shader_parameter("storm_scale", params.storm_scale)
 	mat.set_shader_parameter("band_contrast", params.band_contrast)
 	mat.set_shader_parameter("color_a", palette["band_a"])
 	mat.set_shader_parameter("color_b", palette["band_b"])

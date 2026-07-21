@@ -13,4 +13,6 @@ var roughness: float = 0.5         # fractal gain — higher = craggier detail
 var ocean_level: float = 0.5       # 0 = dry world, 1 = water world
 var atmosphere: float = 0.35       # 0 = airless, 1 = thick haze
 var atmo_falloff: float = 1.5      # glow falloff exponent — higher hugs the limb, lower spreads outward
+var surface_detail: float = 0.5    # 0 = flat macro-only shading, 1 = strong per-pixel detail + normal bump
+var cloud_amount: float = 0.5      # 0 = clear; needs atmosphere > 0.02 to show any clouds
 var detail: int = 5                # icosphere subdivisions (3..6)
