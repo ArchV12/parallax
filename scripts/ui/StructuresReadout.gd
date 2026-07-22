@@ -34,6 +34,10 @@ func _ready() -> void:
 	add_child(_vbox)
 
 	PlayerState.location_changed.connect(_rebuild)
+	# Departure hides the list (it describes the place you're LEAVING); arrival's
+	# location_changed repopulates it. Both route through _rebuild, whose
+	# is_traveling guard is what actually does the hiding — see there.
+	PlayerState.travel_started.connect(_rebuild)
 	Buildings.structure_constructed.connect(func(_category_id: String, _body_id: String) -> void: _rebuild())
 	_rebuild()
 
@@ -65,6 +69,16 @@ func _category_label(category_id: String) -> String:
 func _rebuild() -> void:
 	for child in _vbox.get_children():
 		child.queue_free()
+
+	# In transit the readout would describe the place you LEFT, so stay hidden
+	# until arrival. Guarding here (not only on the travel_started signal) is
+	# what covers the common case where the Cockpit — and this node — are created
+	# mid-trip because GO was pressed from another view: _ready()'s own _rebuild()
+	# would otherwise repopulate the departure location's structures. is_traveling
+	# is cleared before arrival's location_changed fires, so the readout reshows.
+	if PlayerState.is_traveling:
+		visible = false
+		return
 
 	var body_id := PlayerState.location_id
 	for category_id: String in Buildings.category_ids():

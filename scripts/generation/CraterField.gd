@@ -19,15 +19,17 @@ extends RefCounted
 # before — that only runs once per body, never per vertex, so it was never
 # the hot path.
 
-# `size` is the MAXIMUM crater radius (as a fraction of body radius), not
-# the average — sizes follow a rough power law below it, like real impact
-# populations (our Moon: a couple of giant basins, thousands of small
-# craters). pow(u, 2.5) on a uniform sample skews hard toward small: the
-# median crater lands under a fifth of the max, and anything near the max
-# is rare. The 0.12 floor keeps the smallest craters actually visible
-# rather than spending the budget on sub-pixel pits. (Earlier version
-# rolled uniform 0.35-1.7x around an average — craters all came out
-# roughly the same middling size, which reads as artificial.)
+# `size` is the MAXIMUM crater radius (as a fraction of body radius) — a
+# CEILING on how big a crater can get, not the average. Sizes follow a steep
+# power law below it, like real impact populations (a rare giant basin or
+# two, overwhelmingly small craters). pow(u, 4.0) skews hard toward small:
+# the median crater lands around an eighth of the max and anything near the
+# ceiling is genuinely rare, so raising Max Crater Size widens the ceiling
+# WITHOUT flooding the surface with big craters. The 0.06 floor just keeps
+# the smallest from being sub-pixel pits that waste the count budget.
+# (History: a uniform 0.35-1.7x roll made every crater the same middling
+# size — artificial; a later pow(u, 2.5) was better but still let ~a quarter
+# of craters exceed half the max, reading as "a bunch of large craters.")
 static func make(rng: RandomNumberGenerator, density: float, size: float) -> Dictionary:
 	# Ceiling must stay == cratered_surface.gdshader's MAX_CRATERS (its
 	# uniform arrays are fixed-size). 400 because max density should read as
@@ -41,8 +43,17 @@ static func make(rng: RandomNumberGenerator, density: float, size: float) -> Dic
 		# independent normals, normalized) — plain random spherical
 		# coordinates would bunch craters near the poles.
 		var center := Vector3(rng.randfn(), rng.randfn(), rng.randfn()).normalized()
-		var size_frac := lerpf(0.12, 1.0, pow(rng.randf(), 2.5))
-		rolled.append({"center": center, "radius": size * size_frac})
+		var size_frac := lerpf(0.06, 1.0, pow(rng.randf(), 4.0))
+		# Freshness: 0 = ancient/eroded ghost, 1 = pristine sharp crater. Skewed
+		# hard toward OLD (pow(u, 1.8)) because a real surface is dominated by
+		# degraded craters with only a few fresh ones — the freshness value
+		# scales the whole profile (depth AND rim), so old craters read as faint
+		# soft depressions with no bright rim rather than crisp bowls. Big
+		# craters skew older still (lerp toward 0.4): the giant overlapping
+		# basins were exactly the ones reading as bright-rimmed "bubbles", and
+		# on real bodies the largest impacts are overwhelmingly the most ancient.
+		var fresh := pow(rng.randf(), 1.8) * lerpf(1.0, 0.4, size_frac)
+		rolled.append({"center": center, "radius": size * size_frac, "freshness": fresh})
 	# Biggest first: list order is impact order (height_at overwrites in
 	# order, later = younger), and on real bodies the giant impacts are
 	# overwhelmingly ancient — sorting descending means small young craters
@@ -52,12 +63,15 @@ static func make(rng: RandomNumberGenerator, density: float, size: float) -> Dic
 
 	var centers := PackedVector3Array()
 	var radii := PackedFloat32Array()
+	var freshness := PackedFloat32Array()
 	centers.resize(rolled.size())
 	radii.resize(rolled.size())
+	freshness.resize(rolled.size())
 	for i in rolled.size():
 		centers[i] = rolled[i]["center"]
 		radii[i] = rolled[i]["radius"]
-	return {"centers": centers, "radii": radii}
+		freshness[i] = rolled[i]["freshness"]
+	return {"centers": centers, "radii": radii, "freshness": freshness}
 
 
 # Height contribution (as a fraction of body radius) at a surface point.
@@ -79,8 +93,15 @@ static func make(rng: RandomNumberGenerator, density: float, size: float) -> Dic
 # Takes the two packed arrays directly rather than make()'s wrapping
 # Dictionary — callers pull those out ONCE before their vertex loop (see
 # MoonGenerator/AsteroidGenerator/CometGenerator), not once per vertex.
-static func height_at(unit: Vector3, centers: PackedVector3Array, radii: PackedFloat32Array, depth: float) -> float:
+# freshness (optional; must line up 1:1 with centers/radii when supplied)
+# scales each crater's whole profile so old craters are shallow and soft —
+# amp = lerp(0.25, 1.0, freshness). Callers that don't pass it (asteroid/comet)
+# get amp 1.0, i.e. the pre-freshness behavior unchanged. cratered_surface
+# .gdshader applies the identical amp so geometry and shading stay in sync.
+static func height_at(unit: Vector3, centers: PackedVector3Array, radii: PackedFloat32Array,
+		depth: float, freshness: PackedFloat32Array = PackedFloat32Array()) -> float:
 	var h := 0.0
+	var has_fresh := freshness.size() == centers.size()
 	for i in centers.size():
 		var radius := radii[i]
 		var max_reach := radius * 1.25
@@ -89,7 +110,10 @@ static func height_at(unit: Vector3, centers: PackedVector3Array, radii: PackedF
 			continue
 		var x := sqrt(d2) / radius
 		var influence := 1.0 - smoothstep(1.0, 1.25, x)
-		h = lerpf(h, _profile(x) * depth, influence)
+		var amp := 1.0
+		if has_fresh:
+			amp = lerpf(0.25, 1.0, freshness[i])
+		h = lerpf(h, _profile(x) * depth * amp, influence)
 	return h
 
 

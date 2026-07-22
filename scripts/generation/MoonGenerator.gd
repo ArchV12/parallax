@@ -48,11 +48,12 @@ static func _build_terrain(params: MoonParams, base_noise: FastNoiseLite,
 	# CraterField's own class comment on why that distinction matters.
 	var centers: PackedVector3Array = craters["centers"]
 	var radii: PackedFloat32Array = craters["radii"]
+	var freshness: PackedFloat32Array = craters["freshness"]
 
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for unit in verts:
-		var h := _height_at(unit, base_noise, centers, radii, params)
+		var h := _height_at(unit, base_noise, centers, radii, freshness, params)
 		st.add_vertex(unit * params.radius * (1.0 + h))
 	for idx in indices:
 		st.add_index(idx)
@@ -72,11 +73,13 @@ static func _build_material(craters: Dictionary, palette: Dictionary, rng: Rando
 	# entry here always fits.
 	var centers: PackedVector3Array = craters["centers"]
 	var radii: PackedFloat32Array = craters["radii"]
+	var freshness: PackedFloat32Array = craters["freshness"]
 
 	var mat := ShaderMaterial.new()
 	mat.shader = TERRAIN_SHADER
 	mat.set_shader_parameter("crater_centers", centers)
 	mat.set_shader_parameter("crater_radii", radii)
+	mat.set_shader_parameter("crater_freshness", freshness)
 	mat.set_shader_parameter("crater_count", centers.size())
 	# No crater_depth uniform — the shader shades in raw profile units so the
 	# palette always spans dark bowls to bright rims; crater_depth remains a
@@ -92,9 +95,10 @@ static func _build_material(craters: Dictionary, palette: Dictionary, rng: Rando
 
 
 static func _height_at(unit: Vector3, base_noise: FastNoiseLite,
-		centers: PackedVector3Array, radii: PackedFloat32Array, params: MoonParams) -> float:
+		centers: PackedVector3Array, radii: PackedFloat32Array,
+		freshness: PackedFloat32Array, params: MoonParams) -> float:
 	var h := base_noise.get_noise_3dv(unit) * params.surface_roughness
-	return h + CraterField.height_at(unit, centers, radii, params.crater_depth)
+	return h + CraterField.height_at(unit, centers, radii, params.crater_depth, freshness)
 
 
 # Seed-derived color scheme. Mostly desaturated grays (regolith), with an

@@ -25,6 +25,12 @@ shader_type spatial;
 
 uniform vec3 crater_centers[MAX_CRATERS];
 uniform float crater_radii[MAX_CRATERS];
+// Per-crater freshness (0 = ancient/eroded, 1 = pristine). Scales the whole
+// profile — the SAME amp CraterField.height_at() applies to geometry — so old
+// craters are faint soft depressions with no bright rim, and only fresh ones
+// get the crisp rim + highlight. This is the fix for the "bright-rimmed bubble
+// field" look where every crater read as equally new.
+uniform float crater_freshness[MAX_CRATERS];
 uniform int crater_count = 0;
 
 uniform vec4 color_dark : source_color = vec4(0.15, 0.14, 0.13, 1.0);
@@ -96,7 +102,11 @@ float crater_signal(vec3 dir) {
 		}
 		float x = sqrt(d2) / radius;
 		float influence = 1.0 - smoothstep(1.0, 1.25, x);
-		h = mix(h, crater_profile(x), influence);
+		// Identical amp to CraterField.height_at(): old craters shade faintly
+		// (small profile → palette stays near the flat mid, rim highlight below
+		// never fires), fresh ones get the full bowl-to-bright-rim range.
+		float amp = mix(0.25, 1.0, crater_freshness[i]);
+		h = mix(h, crater_profile(x) * amp, influence);
 	}
 	return h;
 }
